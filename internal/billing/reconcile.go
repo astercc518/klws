@@ -148,3 +148,20 @@ func (h *DriftHandler) HandleDrift(ctx context.Context, rep Report) error {
 	}
 	return nil
 }
+
+// RunNightlyReconciliation reconciles all tenants and handles each drift.
+// A single tenant's handler error does not abort the rest; returns the count
+// of drifting tenants and the first handler error encountered (if any).
+func RunNightlyReconciliation(ctx context.Context, repo *Repo, h *DriftHandler) (int, error) {
+	drifts, err := repo.ReconcileAll(ctx)
+	if err != nil {
+		return 0, fmt.Errorf("nightly reconcile: %w", err)
+	}
+	var firstErr error
+	for _, d := range drifts {
+		if err := h.HandleDrift(ctx, d); err != nil && firstErr == nil {
+			firstErr = err // record but keep going; one bad tenant must not block others
+		}
+	}
+	return len(drifts), firstErr
+}
