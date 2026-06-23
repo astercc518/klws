@@ -18,6 +18,15 @@ import (
 //
 // mediaSha=="" means text-only.
 func (w *SendWorker) ProcessSend(ctx context.Context, pl SendPayload, body, mediaSha, mime string, raw []byte) error {
+	// Idempotency guard: asynq delivers at-least-once; skip if already terminal.
+	var st string
+	if err := w.pool.QueryRow(ctx, `SELECT state::text FROM campaign_recipients WHERE id=$1`, pl.RecipientID).Scan(&st); err != nil {
+		return fmt.Errorf("load recipient state: %w", err)
+	}
+	if st == "sent" || st == "failed" {
+		return nil // terminal — already processed; at-least-once retry is a no-op
+	}
+
 	dec, err := w.gate.Admit(ctx, pl.JID, time.Now())
 	if err != nil {
 		return fmt.Errorf("admit: %w", err)
@@ -42,6 +51,7 @@ func (w *SendWorker) ProcessSend(ctx context.Context, pl SendPayload, body, medi
 	if mediaSha != "" {
 		media, err = w.resolveMedia(ctx, pl.JID, mediaSha, mime, raw)
 		if err != nil {
+			dec.Ticket.Release(ctx)
 			_ = w.billing.RequestRefund(ctx, pl.TenantID, pl.MessageID, "media: "+err.Error())
 			return w.markFailed(ctx, pl, err)
 		}

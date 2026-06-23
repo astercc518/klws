@@ -11,11 +11,13 @@ import (
 )
 
 type fakeSender struct {
-	err error
-	id  string
+	err   error
+	id    string
+	calls int
 }
 
 func (f *fakeSender) Send(_ context.Context, jid, phone, body string, _ *MediaHandle) (string, error) {
+	f.calls++
 	if f.err != nil {
 		return "", f.err
 	}
@@ -124,5 +126,52 @@ func TestProcessSend_AdmitDeniedRequeues(t *testing.T) {
 	w.pool.QueryRow(ctx, `SELECT count(*) FROM billing_charges WHERE message_id='m1'`).Scan(&n)
 	if n != 0 {
 		t.Fatalf("charge count=%d, want 0 (no hold on deny)", n)
+	}
+}
+
+func TestProcessSend_IdempotentOnRetry(t *testing.T) {
+	if testing.Short() {
+		t.Skip("integration")
+	}
+	w, ctx, _, br, fs := newWorker(t)
+	mature := time.Now().Add(-30 * 24 * time.Hour)
+	seedAccount(t, ctx, w.pool, "a@s.whatsapp.net", "US", mature, 100, 0)
+	br.Topup(ctx, 1, 1000, "seed")
+	cid := seedCampaign(t, ctx, w.pool, "hi")
+	rid := seedRecipient(t, ctx, w.pool, cid, "1555", "US")
+	pl := SendPayload{TenantID: 1, CampaignID: cid, RecipientID: rid, JID: "a@s.whatsapp.net", Phone: "1555", Country: "US", MessageID: "m1", Vars: map[string]any{"name": "Ada"}}
+
+	// First call: should succeed, mark sent, settle billing.
+	if err := w.ProcessSend(ctx, pl, "hi {{.name}}", "", "", nil); err != nil {
+		t.Fatalf("first call: %v", err)
+	}
+	var st string
+	w.pool.QueryRow(ctx, `SELECT state::text FROM campaign_recipients WHERE id=$1`, rid).Scan(&st)
+	if st != "sent" {
+		t.Fatalf("after first call: recip st=%q, want sent", st)
+	}
+	if fs.calls != 1 {
+		t.Fatalf("after first call: sender.calls=%d, want 1", fs.calls)
+	}
+	var chState string
+	w.pool.QueryRow(ctx, `SELECT state::text FROM billing_charges WHERE message_id='m1'`).Scan(&chState)
+	if chState != "settled" {
+		t.Fatalf("after first call: charge=%q, want settled", chState)
+	}
+
+	// Second call with same payload (simulated asynq retry): must be a no-op.
+	if err := w.ProcessSend(ctx, pl, "hi {{.name}}", "", "", nil); err != nil {
+		t.Fatalf("second call (retry): %v", err)
+	}
+	w.pool.QueryRow(ctx, `SELECT state::text FROM campaign_recipients WHERE id=$1`, rid).Scan(&st)
+	if st != "sent" {
+		t.Fatalf("after retry: recip st=%q, want sent", st)
+	}
+	if fs.calls != 1 {
+		t.Fatalf("after retry: sender.calls=%d, want still 1 (no duplicate send)", fs.calls)
+	}
+	w.pool.QueryRow(ctx, `SELECT state::text FROM billing_charges WHERE message_id='m1'`).Scan(&chState)
+	if chState != "settled" {
+		t.Fatalf("after retry: charge=%q, want settled (no new hold)", chState)
 	}
 }
