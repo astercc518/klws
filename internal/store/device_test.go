@@ -31,7 +31,10 @@ func TestGetDeviceStore_BadJID(t *testing.T) {
 		t.Skip("integration")
 	}
 	ctx := context.Background()
-	m, _ := newManager(ctx, Config{DSN: testDSN(t)}, waLog.Noop)
+	m, err := newManager(ctx, Config{DSN: testDSN(t)}, waLog.Noop)
+	if err != nil {
+		t.Fatalf("manager: %v", err)
+	}
 	defer m.Close()
 
 	if _, err := m.GetDeviceStore(ctx, "not-a-jid"); err == nil {
@@ -44,7 +47,10 @@ func TestNewDeviceStore_NonNil(t *testing.T) {
 		t.Skip("integration")
 	}
 	ctx := context.Background()
-	m, _ := newManager(ctx, Config{DSN: testDSN(t)}, waLog.Noop)
+	m, err := newManager(ctx, Config{DSN: testDSN(t)}, waLog.Noop)
+	if err != nil {
+		t.Fatalf("manager: %v", err)
+	}
 	defer m.Close()
 
 	if d := m.NewDeviceStore(ctx); d == nil {
