@@ -7,6 +7,7 @@ import (
 	"fmt"
 
 	"github.com/jackc/pgx/v5"
+	"go.mau.fi/whatsmeow"
 )
 
 var (
@@ -165,4 +166,17 @@ SELECT a.account_jid
 		jids = append(jids, jid)
 	}
 	return jids, rows.Err()
+}
+
+// ApplyProxy applies a bound proxy to a whatsmeow client. Must be called before
+// client.Connect(). Rejects an empty binding (SetProxyAddress("") would silently
+// UNSET the proxy, defeating per-account isolation).
+func ApplyProxy(client *whatsmeow.Client, b *ProxyBinding) error {
+	if b == nil || b.ProxyURL == "" {
+		return errors.New("store: empty proxy binding")
+	}
+	if err := client.SetProxyAddress(b.ProxyURL); err != nil {
+		return fmt.Errorf("apply proxy %s: %w", b.ProxyURL, err)
+	}
+	return nil
 }
