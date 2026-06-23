@@ -30,3 +30,19 @@ func TestConfig_withDefaults_keepsExplicit(t *testing.T) {
 		t.Fatalf("explicit MaxOpenConns overwritten: %d", c.MaxOpenConns)
 	}
 }
+
+func TestConfig_withDefaults_lockConns(t *testing.T) {
+	// Zero value should default to 300.
+	c := Config{DSN: "postgres://x"}
+	c.withDefaults()
+	if c.MaxLockConns != 300 {
+		t.Fatalf("MaxLockConns = %d, want 300", c.MaxLockConns)
+	}
+
+	// Explicit value must be preserved.
+	c2 := Config{DSN: "postgres://x", MaxLockConns: 200}
+	c2.withDefaults()
+	if c2.MaxLockConns != 200 {
+		t.Fatalf("explicit MaxLockConns overwritten: %d", c2.MaxLockConns)
+	}
+}

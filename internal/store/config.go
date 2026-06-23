@@ -11,6 +11,10 @@ type Config struct {
 	ConnMaxLifetime time.Duration
 	ConnMaxIdleTime time.Duration
 	NodeID          string
+	// MaxLockConns bounds the number of concurrently-held device advisory locks
+	// on this node. Each held lock pins one dedicated connection for its full
+	// session lifetime, so this value equals the per-node account ceiling.
+	MaxLockConns int32
 }
 
 func (c *Config) withDefaults() {
@@ -25,5 +29,8 @@ func (c *Config) withDefaults() {
 	}
 	if c.ConnMaxIdleTime == 0 {
 		c.ConnMaxIdleTime = 5 * time.Minute
+	}
+	if c.MaxLockConns == 0 {
+		c.MaxLockConns = 300
 	}
 }

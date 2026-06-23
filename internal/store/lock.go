@@ -28,7 +28,7 @@ func advisoryKey(accountJID string) int64 {
 func (m *Manager) AcquireDeviceLock(ctx context.Context, accountJID string) (*DeviceLock, error) {
 	key := advisoryKey(accountJID)
 
-	conn, err := m.bizPool.Acquire(ctx)
+	conn, err := m.lockPool.Acquire(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("acquire conn for lock: %w", err)
 	}
@@ -45,7 +45,11 @@ func (m *Manager) AcquireDeviceLock(ctx context.Context, accountJID string) (*De
 	return &DeviceLock{conn: conn, key: key}, nil
 }
 
-// Healthy 探测持锁连接是否仍存活(即锁是否仍归我持有)。
+// Healthy probes CONNECTION liveness only — it does NOT re-validate advisory-lock
+// ownership. If the pinned connection were transparently replaced, Ping could
+// succeed while this session no longer holds the lock. M9 fencing (guardSession)
+// MUST add real ownership re-validation (e.g. check pg_locks for this backend pid,
+// or a fencing epoch) before relying on Healthy to prevent double-open.
 func (l *DeviceLock) Healthy(ctx context.Context) bool {
 	if l == nil || l.conn == nil {
 		return false

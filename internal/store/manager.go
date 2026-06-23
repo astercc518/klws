@@ -19,6 +19,7 @@ type Manager struct {
 	cfg       Config
 	container *sqlstore.Container
 	bizPool   *pgxpool.Pool
+	lockPool  *pgxpool.Pool
 	sqlDB     *sql.DB
 	log       waLog.Logger
 }
@@ -82,7 +83,27 @@ func newManager(ctx context.Context, cfg Config, logger waLog.Logger) (*Manager,
 		return nil, fmt.Errorf("create biz pool: %w", err)
 	}
 
-	return &Manager{cfg: cfg, container: container, bizPool: bizPool, sqlDB: sqlDB, log: logger}, nil
+	lockPoolCfg, err := pgxpool.ParseConfig(cfg.DSN)
+	if err != nil {
+		bizPool.Close()
+		_ = sqlDB.Close()
+		return nil, fmt.Errorf("parse lock pool config: %w", err)
+	}
+	lockPoolCfg.MaxConns = cfg.MaxLockConns
+	lockPoolCfg.MinConns = 0
+	// Use a very large lifetime so pgxpool never lifetime-reaps a pinned lock connection.
+	// pgxpool treats MaxConnLifetime=0 as time.Now() (immediately expired), so we use
+	// a 100-year sentinel instead of 0 to mean "effectively unlimited".
+	lockPoolCfg.MaxConnLifetime = 100 * 365 * 24 * time.Hour
+
+	lockPool, err := pgxpool.NewWithConfig(ctx, lockPoolCfg)
+	if err != nil {
+		bizPool.Close()
+		_ = sqlDB.Close()
+		return nil, fmt.Errorf("create lock pool: %w", err)
+	}
+
+	return &Manager{cfg: cfg, container: container, bizPool: bizPool, lockPool: lockPool, sqlDB: sqlDB, log: logger}, nil
 }
 
 func (m *Manager) BizPool() *pgxpool.Pool { return m.bizPool }
@@ -90,6 +111,9 @@ func (m *Manager) BizPool() *pgxpool.Pool { return m.bizPool }
 func (m *Manager) Close() {
 	if m.bizPool != nil {
 		m.bizPool.Close()
+	}
+	if m.lockPool != nil {
+		m.lockPool.Close()
 	}
 	if m.sqlDB != nil {
 		_ = m.sqlDB.Close()
