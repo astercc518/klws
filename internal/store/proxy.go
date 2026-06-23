@@ -111,3 +111,58 @@ func (m *Manager) ReleaseProxy(ctx context.Context, accountJID string) error {
 		return releaseWithinTx(ctx, tx, accountJID)
 	})
 }
+
+// proxyFailureThreshold: consecutive failures before a proxy is taken offline.
+const proxyFailureThreshold = 5
+
+// ReportProxyFailure records one proxy-layer failure; auto-disables at threshold.
+// Returns whether the proxy is now considered dead.
+func (m *Manager) ReportProxyFailure(ctx context.Context, proxyID int64) (dead bool, err error) {
+	const sql = `
+UPDATE proxy_pool
+   SET failure_count = failure_count + 1,
+       is_alive = (failure_count + 1 < $2)
+ WHERE id = $1
+RETURNING NOT is_alive;`
+	if err = m.bizPool.QueryRow(ctx, sql, proxyID, proxyFailureThreshold).Scan(&dead); err != nil {
+		return false, fmt.Errorf("report proxy failure: %w", err)
+	}
+	return dead, nil
+}
+
+// ReportProxySuccess clears the failure count, revives the proxy, refreshes latency.
+func (m *Manager) ReportProxySuccess(ctx context.Context, proxyID int64, latencyMs int) error {
+	_, err := m.bizPool.Exec(ctx,
+		`UPDATE proxy_pool
+		    SET failure_count=0, is_alive=TRUE, latency_ms=$2, last_check_at=now()
+		  WHERE id=$1`, proxyID, latencyMs)
+	if err != nil {
+		return fmt.Errorf("report proxy success: %w", err)
+	}
+	return nil
+}
+
+// ListAccountsByDeadProxies returns active accounts bound to dead proxies, for rebind.
+func (m *Manager) ListAccountsByDeadProxies(ctx context.Context, tenantID int64, limit int) ([]string, error) {
+	const sql = `
+SELECT a.account_jid
+  FROM account_devices a
+  JOIN proxy_pool p ON p.id = a.proxy_id
+ WHERE a.tenant_id = $1 AND p.is_alive = FALSE AND a.ban_status = 'active'
+ LIMIT $2;`
+	rows, err := m.bizPool.Query(ctx, sql, tenantID, limit)
+	if err != nil {
+		return nil, fmt.Errorf("query dead-proxy accounts: %w", err)
+	}
+	defer rows.Close()
+
+	var jids []string
+	for rows.Next() {
+		var jid string
+		if err := rows.Scan(&jid); err != nil {
+			return nil, fmt.Errorf("scan jid: %w", err)
+		}
+		jids = append(jids, jid)
+	}
+	return jids, rows.Err()
+}
