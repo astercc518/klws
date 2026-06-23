@@ -118,3 +118,33 @@ func (r *Repo) ReconcileAll(ctx context.Context) ([]Report, error) {
 	}
 	return drifts, rows.Err()
 }
+
+// DriftHandler records drift, optionally locks the wallet to stop further
+// deductions, and fires a notification. It never fixes the books.
+type DriftHandler struct {
+	repo     *Repo
+	autoLock bool
+	notify   func(context.Context, Report)
+}
+
+func NewDriftHandler(repo *Repo, autoLock bool, notify func(context.Context, Report)) *DriftHandler {
+	return &DriftHandler{repo: repo, autoLock: autoLock, notify: notify}
+}
+
+// HandleDrift persists an unhealthy audit row, optionally locks the wallet, and
+// notifies. Returns an error only on a DB failure of the audit/lock writes.
+func (h *DriftHandler) HandleDrift(ctx context.Context, rep Report) error {
+	if err := persistRun(ctx, h.repo, rep); err != nil {
+		return err
+	}
+	if h.autoLock {
+		if _, err := h.repo.pool.Exec(ctx,
+			`UPDATE tenant_wallets SET locked=TRUE WHERE tenant_id=$1`, rep.TenantID); err != nil {
+			return fmt.Errorf("lock wallet: %w", err)
+		}
+	}
+	if h.notify != nil {
+		h.notify(ctx, rep) // hand off to humans; never auto-correct
+	}
+	return nil
+}

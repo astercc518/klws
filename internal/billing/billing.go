@@ -16,6 +16,7 @@ var (
 	ErrChargeConflict    = errors.New("billing: invalid charge state transition")
 	ErrRefundConflict    = errors.New("billing: refund already reviewed")
 	ErrNotFound          = errors.New("billing: record not found")
+	ErrWalletLocked      = errors.New("billing: wallet is locked (reconciliation drift)")
 )
 
 type Repo struct{ pool *pgxpool.Pool }
@@ -59,13 +60,17 @@ RETURNING id`,
 		}
 
 		var bal, frz int64
+		var locked bool
 		if err := tx.QueryRow(ctx,
-			`SELECT balance, frozen FROM tenant_wallets WHERE tenant_id=$1 FOR UPDATE`,
-			h.TenantID).Scan(&bal, &frz); err != nil {
+			`SELECT balance, frozen, locked FROM tenant_wallets WHERE tenant_id=$1 FOR UPDATE`,
+			h.TenantID).Scan(&bal, &frz, &locked); err != nil {
 			if errors.Is(err, pgx.ErrNoRows) {
 				return ErrNotFound
 			}
 			return fmt.Errorf("lock wallet: %w", err)
+		}
+		if locked {
+			return ErrWalletLocked // drift-locked wallet rejects new deductions
 		}
 		if bal < h.Amount {
 			return ErrInsufficientFunds // rollback also drops the charge insert
