@@ -21,7 +21,10 @@ func testDSN(t *testing.T) string {
 		postgres.WithUsername("test"),
 		postgres.WithPassword("test"),
 		testcontainers.WithWaitStrategy(
-			wait.ForListeningPort("5432/tcp").WithStartupTimeout(60*time.Second)),
+			wait.ForAll(
+				wait.ForListeningPort("5432/tcp"),
+				wait.ForLog("database system is ready to accept connections").WithOccurrence(2),
+			).WithStartupTimeout(60*time.Second)),
 	)
 	if err != nil {
 		t.Fatalf("start postgres: %v", err)

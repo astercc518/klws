@@ -27,7 +27,7 @@ func TestMigration_Idempotent(t *testing.T) {
 	}
 	var n int
 	if err := pool.QueryRow(ctx,
-		`SELECT count(*) FROM information_schema.tables WHERE table_name='account_devices'`).
+		`SELECT count(*) FROM information_schema.tables WHERE table_name='account_devices' AND table_schema='public'`).
 		Scan(&n); err != nil {
 		t.Fatalf("verify: %v", err)
 	}
