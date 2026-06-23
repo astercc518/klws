@@ -78,3 +78,43 @@ VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)`,
 	}
 	return nil
 }
+
+const reconcileAllSQL = `
+SELECT w.tenant_id, w.balance, w.frozen,
+       COALESCE(lb.sum_bal,0), COALESCE(lb.sum_frz,0), COALESCE(oc.frozen_charges,0)
+FROM tenant_wallets w
+LEFT JOIN (
+    SELECT tenant_id, SUM(delta_balance) sum_bal, SUM(delta_frozen) sum_frz
+      FROM wallet_ledger GROUP BY tenant_id
+) lb ON lb.tenant_id = w.tenant_id
+LEFT JOIN (
+    SELECT tenant_id, SUM(amount) frozen_charges
+      FROM billing_charges WHERE state IN ('held','refund_pending') GROUP BY tenant_id
+) oc ON oc.tenant_id = w.tenant_id
+WHERE w.balance <> COALESCE(lb.sum_bal,0)
+   OR w.frozen  <> COALESCE(lb.sum_frz,0)
+   OR w.frozen  <> COALESCE(oc.frozen_charges,0);`
+
+// ReconcileAll returns every drifting tenant in one pass. Empty slice = all healthy.
+// Does NOT persist per-tenant audit rows (DriftHandler records the drifting ones).
+func (r *Repo) ReconcileAll(ctx context.Context) ([]Report, error) {
+	rows, err := r.pool.Query(ctx, reconcileAllSQL)
+	if err != nil {
+		return nil, fmt.Errorf("reconcile all: %w", err)
+	}
+	defer rows.Close()
+
+	var drifts []Report
+	for rows.Next() {
+		var rep Report
+		if err := rows.Scan(&rep.TenantID, &rep.WalletBalance, &rep.WalletFrozen,
+			&rep.LedgerBalance, &rep.LedgerFrozen, &rep.ChargesFrozen); err != nil {
+			return nil, fmt.Errorf("scan drift: %w", err)
+		}
+		rep.DriftBalance = rep.WalletBalance - rep.LedgerBalance
+		rep.DriftFrozen = rep.WalletFrozen - rep.LedgerFrozen
+		rep.DriftCharges = rep.WalletFrozen - rep.ChargesFrozen
+		drifts = append(drifts, rep)
+	}
+	return drifts, rows.Err()
+}
