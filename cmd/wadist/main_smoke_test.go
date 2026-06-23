@@ -7,7 +7,6 @@ import (
 	"os"
 	"strings"
 	"testing"
-	"time"
 )
 
 // TestRun_BootsMetrics requires a live PG + Redis reachable via environment
@@ -37,5 +36,4 @@ func TestRun_BootsMetrics(t *testing.T) {
 	if resp.StatusCode != 200 || !strings.Contains(string(b), "wadist_") {
 		t.Fatalf("metrics not served: %d\nbody: %s", resp.StatusCode, b)
 	}
-	_ = time.Second
 }

@@ -1,7 +1,6 @@
 package metrics
 
 import (
-	"context"
 	"testing"
 	"time"
 
@@ -36,8 +35,7 @@ func TestDBCollector_Gauges(t *testing.T) {
 		t.Fatalf("nil provider should yield 0 active sessions, got %v", v)
 	}
 	// pending recipients gauge >= 1
-	if v := gaugeValue(t, reg, "wadist_recipients_state"); v < 0 {
+	if v := gaugeValue(t, reg, "wadist_recipients_state"); v < 1 {
 		t.Fatalf("unexpected recipients gauge %v", v)
 	}
-	_ = context.Background
 }

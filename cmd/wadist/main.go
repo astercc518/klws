@@ -101,6 +101,7 @@ func run(ctx context.Context, cfg *config.Config) (*metrics.Server, func(), erro
 	asynqClient := asynq.NewClient(asynq.RedisClientOpt{Addr: cfg.RedisAddr})
 	enqueuer := dispatch.NewAsynqEnqueuer(asynqClient, "default", 3)
 
+	// TODO(M8): wire the dispatch scheduling loop here (constructed now for metrics wiring).
 	_ = dispatch.NewDispatcher(pool, billingRepo, enqueuer, priceFor, 3*time.Second).WithMetrics(m)
 
 	worker := dispatch.NewSendWorker(pool, gate, billingRepo, placeholderSender{}, placeholderUploader{}).WithMetrics(m)
@@ -119,7 +120,7 @@ func run(ctx context.Context, cfg *config.Config) (*metrics.Server, func(), erro
 	if err := srv.Start(); err != nil {
 		asynqSrv.Shutdown()
 		_ = asynqClient.Close()
-		rdb.Close()
+		_ = rdb.Close()
 		mgr.Close()
 		flush()
 		return nil, nil, err
