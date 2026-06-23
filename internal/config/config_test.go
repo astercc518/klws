@@ -2,6 +2,18 @@ package config
 
 import "testing"
 
+func TestLoad_MetricsAddrDefault(t *testing.T) {
+	t.Setenv("WADIST_POSTGRES_DSN", "postgres://x")
+	t.Setenv("WADIST_METRICS_ADDR", "")
+	cfg, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.MetricsAddr != ":9090" {
+		t.Fatalf("want :9090, got %q", cfg.MetricsAddr)
+	}
+}
+
 func TestLoad_RequiresDSN(t *testing.T) {
 	t.Setenv("WADIST_POSTGRES_DSN", "")
 	if _, err := Load(); err == nil {
