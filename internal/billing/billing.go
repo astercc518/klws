@@ -150,3 +150,31 @@ RETURNING id, amount`, tenantID, messageID).Scan(&chargeID, &amount)
 			0, -amount, newBal, newFrz, "settle:"+messageID)
 	})
 }
+
+// RequestRefund moves a held charge to refund_pending and enqueues an admin
+// review. Funds STAY frozen — never returned here. Idempotent: charge_id UNIQUE
+// on refund_requests + the state guard prevent duplicates.
+func (r *Repo) RequestRefund(ctx context.Context, tenantID int64, messageID, reason string) error {
+	return pgx.BeginTxFunc(ctx, r.pool, pgx.TxOptions{}, func(tx pgx.Tx) error {
+		var chargeID, amount int64
+		err := tx.QueryRow(ctx, `
+UPDATE billing_charges SET state='refund_pending'
+ WHERE tenant_id=$1 AND message_id=$2 AND state='held'
+RETURNING id, amount`, tenantID, messageID).Scan(&chargeID, &amount)
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil // already processed → idempotent pass
+		}
+		if err != nil {
+			return fmt.Errorf("mark refund_pending: %w", err)
+		}
+		_, err = tx.Exec(ctx, `
+INSERT INTO refund_requests (charge_id, tenant_id, amount, reason, state)
+VALUES ($1,$2,$3,$4,'pending')
+ON CONFLICT (charge_id) DO NOTHING`,
+			chargeID, tenantID, amount, reason)
+		if err != nil {
+			return fmt.Errorf("enqueue refund: %w", err)
+		}
+		return nil // money stays frozen, awaiting admin review
+	})
+}
