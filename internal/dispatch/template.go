@@ -4,8 +4,10 @@ package dispatch
 import (
 	"context"
 	"fmt"
+	"math/rand/v2"
 	"strings"
 	"text/template"
+	"time"
 )
 
 // renderTemplate substitutes {{.var}} from vars. Missing keys render as zero (no error).
@@ -19,6 +21,12 @@ func renderTemplate(tmpl string, vars map[string]any) string {
 	var b strings.Builder
 	_ = t.Execute(&b, sv)
 	return b.String()
+}
+
+func jitter(base time.Duration) time.Duration {
+	if base <= 0 { return 0 }
+	span := int64(base * 4 / 5)
+	return base + time.Duration(rand.Int64N(span)-span/2)
 }
 
 // resolveMedia returns a reusable upload handle for (account, media). Cache hit
