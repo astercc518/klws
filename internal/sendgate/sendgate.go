@@ -6,6 +6,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"math/rand/v2"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -79,4 +80,63 @@ UPDATE account_devices
 		return fmt.Errorf("heal: %w", err)
 	}
 	return nil
+}
+
+// Decision is the gate verdict. On Allow, Ticket holds the consumed quota slot
+// (release it if a downstream step fails).
+type Decision struct {
+	Allow  bool
+	Reason string
+	Ticket *Ticket
+}
+
+// Admit is the pre-billing gate: ban state → quarantine → quota/pacing. Any
+// failed check denies WITHOUT consuming the (later) billing hold.
+func (g *SendGate) Admit(ctx context.Context, jid string, now time.Time) (Decision, error) {
+	var banStatus string
+	var registeredAt *time.Time
+	var health int
+	var quarantineTo *time.Time
+	err := g.pool.QueryRow(ctx, `
+SELECT ban_status::text, registered_at, health_score, quarantined_until
+  FROM account_devices WHERE account_jid = $1`, jid).
+		Scan(&banStatus, &registeredAt, &health, &quarantineTo)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return Decision{}, ErrAccountNotFound
+	}
+	if err != nil {
+		return Decision{}, fmt.Errorf("load account: %w", err)
+	}
+
+	if banStatus != "active" {
+		return Decision{Reason: "not_active"}, nil
+	}
+	if quarantineTo != nil && quarantineTo.After(now) {
+		return Decision{Reason: "quarantined"}, nil
+	}
+
+	reg := now
+	if registeredAt != nil {
+		reg = *registeredAt
+	}
+	quota := EffectiveQuota(reg, health, now)
+	ticket, reason, err := g.adm.Admit(ctx, jid, quota, jitteredGap(g.baseGap), now)
+	if err != nil {
+		return Decision{}, err
+	}
+	if ticket == nil {
+		return Decision{Reason: reason}, nil // daily_quota / pacing
+	}
+	return Decision{Allow: true, Reason: "ok", Ticket: ticket}, nil
+}
+
+// jitteredGap returns base ± up to 40% jitter, so the send cadence looks human
+// rather than like a fixed timer. base==0 disables pacing.
+func jitteredGap(base time.Duration) time.Duration {
+	if base <= 0 {
+		return 0
+	}
+	span := int64(base * 4 / 5) // ±40%
+	j := rand.Int64N(span) - span/2
+	return base + time.Duration(j)
 }
