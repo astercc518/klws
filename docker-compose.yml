@@ -1,0 +1,35 @@
+# Local development backing services. Not for production.
+services:
+  postgres:
+    image: postgres:16
+    environment:
+      POSTGRES_USER: app
+      POSTGRES_PASSWORD: app
+      POSTGRES_DB: wadist
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    # max_connections must cover advisory-lock connections (~one per active
+    # account) plus the business pool — see roadmap capacity model.
+    command: ["postgres", "-c", "max_connections=700"]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U app -d wadist"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  redis:
+    image: redis:7
+    # noeviction is mandatory: asynq task loss = lost (already-charged) messages.
+    command: ["redis-server", "--maxmemory-policy", "noeviction"]
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+volumes:
+  pgdata:

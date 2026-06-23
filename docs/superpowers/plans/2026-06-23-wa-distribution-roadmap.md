@@ -57,7 +57,7 @@ M0 项目骨架/基础设施
 
 ## 里程碑清单(每项 = 一份待展开的详细计划)
 
-- **M0 项目骨架** — go module、目录结构、`docker-compose.yml`(postgres:16 + redis:7)、迁移工具(golang-migrate)、`internal/config`、`internal/log`(waLog 适配 zap)、CI workflow 雏形、Makefile `gate` 目标。
+- **M0 项目骨架** ✅ — go module、`internal/config`(env→store.Config)、`internal/log`(zap 适配 waLog)、`docker-compose.yml`(postgres:16 max_connections=700 + redis:7 noeviction)、`scripts/migrate_twice.sh` + `check_metric_labels.sh`、`.github/workflows/release-gate.yml`、Makefile `gate` 目标。
 - **M1 存储/会话持久化** ✅ *已展开为详细计划* → `2026-06-23-m1-storage-session.md`
 - **M2 代理池/绑定** — `proxy_pool` schema、`BindProxy`(CTE + FOR UPDATE SKIP LOCKED)、`ReleaseProxy`、`ReportProxyFailure/Success`、`ApplyProxy`、死代理重绑。
 - **M3 计费/审核退款** — `tenant_wallets/billing_charges/wallet_ledger/refund_requests` schema、`Hold/Settle/RequestRefund/Approve/RejectRefund`、`moveWallet/insertLedger`、asynq 接线。
@@ -67,6 +67,7 @@ M0 项目骨架/基础设施
 - **M7 可观测性** — Prometheus `Metrics`(有界 label)、`PublishRegistryState`、`DBCollector`(TTL 缓存)、业务埋点、`/metrics` HTTP。
 - **M8 优雅停机** — `Registry`、`Session`、`Supervisor.Shutdown`(asynq 先停进料→断会话→关池)、信号接线、`SetLimit(32)` 限并发。
 - **M9 分布式接管** — `cluster_nodes`、`RunHeartbeat`、`DeviceLock.Healthy`+`guardSession`(fencing)、`RunTakeoverScanner`(SKIP LOCKED + asynq Unique)、`TakeoverHandler`、`StartAccountWithLock`、`deregisterNode`。
+  - ⚠️ **M1 遗留前置(必须先处理)**:`store.DeviceLock.Healthy` 当前仅做连接存活探测(`conn.Ping`),不校验 advisory lock 所有权。`guardSession` 必须补真正的所有权再校验(查 `pg_locks` 按本 backend pid,或 fencing epoch),否则连接被透明重连时 `Healthy` 会误报 true → 双开 → 封号(路线图风险#4)。
 - **M10 安全/合规** — `Cipher`(AES-256-GCM 信封+版本轮换)、RLS 策略+双角色+`WithTenant`、`tenant_keys`+crypto-shredding、PII 加密+盲索引、`suppression_list`、数据驻留路由、`audit_log`(只追加)。
 - **M11 容量/灰度** — 容量计算器 `Plan()`、postgresql/redis 配置基线(`max_connections≥A`、`maxmemory noeviction`)、k8s 滚动(`maxSurge:1/maxUnavailable:0`)、`preStop` drain、PDB、cohort 金丝雀。
 

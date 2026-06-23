@@ -1,0 +1,62 @@
+name: release-gate
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+jobs:
+  gate:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: app
+          POSTGRES_PASSWORD: app
+          POSTGRES_DB: wadist
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U app -d wadist"
+          --health-interval 5s --health-timeout 3s --health-retries 10
+      redis:
+        image: redis:7
+        ports: ["6379:6379"]
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s --health-retries 10
+    env:
+      TEST_DSN: postgres://app:app@localhost:5432/wadist?sslmode=disable
+      REDIS_ADDR: localhost:6379
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.22'
+          cache: true
+
+      - name: install psql client
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq postgresql-client
+
+      # --- static gates ---
+      - name: vet
+        run: go vet ./...
+      - name: staticcheck
+        run: go run honnef.co/go/tools/cmd/staticcheck@latest ./...
+      - name: high-cardinality label scan
+        run: ./scripts/check_metric_labels.sh
+      - name: migrations idempotent
+        run: ./scripts/migrate_twice.sh "$TEST_DSN"
+
+      # --- correctness gate (testcontainers spins its own ephemeral Postgres) ---
+      - name: unit + race
+        run: go test -race -count=1 ./...
+
+      # --- security gate ---
+      - name: govulncheck
+        run: go run golang.org/x/vuln/cmd/govulncheck@latest ./...
+
+      # Future milestone gates (uncomment as the suites land):
+      #   - billing invariant property test (M4)
+      #   - goroutine-leak shutdown test (M8)
+      #   - takeover chaos timing -count=30 (M9)
+      #   - memory baseline -tags memory_gate (M11)
