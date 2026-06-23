@@ -24,7 +24,7 @@ func (d *Dispatcher) dispatchBatch(ctx context.Context, campaignID int64, batch 
 		rows, err := tx.Query(ctx, `
 SELECT id, phone, country_code, vars
   FROM campaign_recipients
- WHERE campaign_id=$1 AND state='pending'
+ WHERE campaign_id=$1 AND state='pending' AND assigned_jid IS NULL
  FOR UPDATE SKIP LOCKED
  LIMIT $2`, campaignID, batch)
 		if err != nil {
