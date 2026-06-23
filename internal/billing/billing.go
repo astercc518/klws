@@ -126,3 +126,27 @@ ON CONFLICT (idem_key) DO NOTHING`,
 	}
 	return nil
 }
+
+// Settle marks a held charge settled and consumes the frozen amount (platform
+// revenue). Idempotent: a non-held charge is a silent no-op.
+func (r *Repo) Settle(ctx context.Context, tenantID int64, messageID string) error {
+	return pgx.BeginTxFunc(ctx, r.pool, pgx.TxOptions{}, func(tx pgx.Tx) error {
+		var chargeID, amount int64
+		err := tx.QueryRow(ctx, `
+UPDATE billing_charges SET state='settled'
+ WHERE tenant_id=$1 AND message_id=$2 AND state='held'
+RETURNING id, amount`, tenantID, messageID).Scan(&chargeID, &amount)
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil // already settled or not held → idempotent pass
+		}
+		if err != nil {
+			return fmt.Errorf("settle charge: %w", err)
+		}
+		newBal, newFrz, err := moveWallet(ctx, tx, tenantID, 0, -amount)
+		if err != nil {
+			return err
+		}
+		return insertLedger(ctx, tx, tenantID, chargeID, "settle",
+			0, -amount, newBal, newFrz, "settle:"+messageID)
+	})
+}
