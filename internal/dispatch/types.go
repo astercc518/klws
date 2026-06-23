@@ -10,6 +10,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/acme/wadist/internal/billing"
+	"github.com/acme/wadist/internal/metrics"
 	"github.com/acme/wadist/internal/sendgate"
 )
 
@@ -51,11 +52,14 @@ type Dispatcher struct {
 	queue    Enqueuer
 	priceFor func(country string) int64
 	baseGap  time.Duration
+	m        *metrics.Metrics
 }
 
 func NewDispatcher(pool *pgxpool.Pool, b *billing.Repo, q Enqueuer, priceFor func(string) int64, baseGap time.Duration) *Dispatcher {
 	return &Dispatcher{pool: pool, billing: b, queue: q, priceFor: priceFor, baseGap: baseGap}
 }
+
+func (d *Dispatcher) WithMetrics(m *metrics.Metrics) *Dispatcher { d.m = m; return d }
 
 // SendWorker executes a SendPayload: admit, hold, render, send, settle/refund.
 type SendWorker struct {
@@ -64,8 +68,11 @@ type SendWorker struct {
 	billing  *billing.Repo
 	sender   Sender
 	uploader Uploader
+	m        *metrics.Metrics
 }
 
 func NewSendWorker(pool *pgxpool.Pool, g *sendgate.SendGate, b *billing.Repo, s Sender, u Uploader) *SendWorker {
 	return &SendWorker{pool: pool, gate: g, billing: b, sender: s, uploader: u}
 }
+
+func (w *SendWorker) WithMetrics(m *metrics.Metrics) *SendWorker { w.m = m; return w }
