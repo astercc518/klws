@@ -178,3 +178,60 @@ ON CONFLICT (charge_id) DO NOTHING`,
 		return nil // money stays frozen, awaiting admin review
 	})
 }
+
+// ApproveRefund: admin approves; frozen→balance (funds returned).
+func (r *Repo) ApproveRefund(ctx context.Context, refundID, adminID int64, note string) error {
+	return r.reviewRefund(ctx, refundID, adminID, note, true)
+}
+
+// RejectRefund: admin rejects; frozen is consumed as revenue (no return).
+func (r *Repo) RejectRefund(ctx context.Context, refundID, adminID int64, note string) error {
+	return r.reviewRefund(ctx, refundID, adminID, note, false)
+}
+
+func (r *Repo) reviewRefund(ctx context.Context, refundID, adminID int64, note string, approve bool) error {
+	return pgx.BeginTxFunc(ctx, r.pool, pgx.TxOptions{}, func(tx pgx.Tx) error {
+		// only a pending refund can be adjudicated; lock it against concurrent reviewers
+		var chargeID, tenantID, amount int64
+		err := tx.QueryRow(ctx,
+			`SELECT charge_id, tenant_id, amount FROM refund_requests
+			  WHERE id=$1 AND state='pending' FOR UPDATE`, refundID).
+			Scan(&chargeID, &tenantID, &amount)
+		if errors.Is(err, pgx.ErrNoRows) {
+			return ErrRefundConflict
+		}
+		if err != nil {
+			return fmt.Errorf("lock refund: %w", err)
+		}
+
+		newState, chargeState, kind, idem := "rejected", "rejected", "reject", "reject:"
+		deltaBal, deltaFrz := int64(0), -amount // reject: consume frozen only
+		if approve {
+			newState, chargeState, kind, idem = "approved", "refunded", "refund", "refund:"
+			deltaBal, deltaFrz = amount, -amount // approve: frozen returns to balance
+		}
+
+		if _, err := tx.Exec(ctx, `
+UPDATE refund_requests SET state=$2, reviewed_by=$3, review_note=$4, reviewed_at=now()
+ WHERE id=$1`, refundID, newState, adminID, note); err != nil {
+			return fmt.Errorf("update refund: %w", err)
+		}
+
+		ct, err := tx.Exec(ctx,
+			`UPDATE billing_charges SET state=$2 WHERE id=$1 AND state='refund_pending'`,
+			chargeID, chargeState)
+		if err != nil {
+			return fmt.Errorf("settle charge state: %w", err)
+		}
+		if ct.RowsAffected() == 0 {
+			return ErrChargeConflict
+		}
+
+		newBal, newFrz, err := moveWallet(ctx, tx, tenantID, deltaBal, deltaFrz)
+		if err != nil {
+			return err
+		}
+		return insertLedger(ctx, tx, tenantID, chargeID, kind,
+			deltaBal, deltaFrz, newBal, newFrz, idem+fmt.Sprint(chargeID))
+	})
+}
