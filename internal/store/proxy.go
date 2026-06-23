@@ -104,3 +104,10 @@ func releaseWithinTx(ctx context.Context, tx pgx.Tx, accountJID string) error {
 	}
 	return nil
 }
+
+// ReleaseProxy returns the account's bound proxy. Idempotent.
+func (m *Manager) ReleaseProxy(ctx context.Context, accountJID string) error {
+	return pgx.BeginTxFunc(ctx, m.bizPool, pgx.TxOptions{}, func(tx pgx.Tx) error {
+		return releaseWithinTx(ctx, tx, accountJID)
+	})
+}
