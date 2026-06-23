@@ -16,6 +16,7 @@ var (
 	ErrChargeConflict    = errors.New("billing: invalid charge state transition")
 	ErrRefundConflict    = errors.New("billing: refund already reviewed")
 	ErrNotFound          = errors.New("billing: record not found")
+	ErrWalletLocked      = errors.New("billing: wallet is locked (reconciliation drift)")
 )
 
 type Repo struct{ pool *pgxpool.Pool }
@@ -59,13 +60,17 @@ RETURNING id`,
 		}
 
 		var bal, frz int64
+		var locked bool
 		if err := tx.QueryRow(ctx,
-			`SELECT balance, frozen FROM tenant_wallets WHERE tenant_id=$1 FOR UPDATE`,
-			h.TenantID).Scan(&bal, &frz); err != nil {
+			`SELECT balance, frozen, locked FROM tenant_wallets WHERE tenant_id=$1 FOR UPDATE`,
+			h.TenantID).Scan(&bal, &frz, &locked); err != nil {
 			if errors.Is(err, pgx.ErrNoRows) {
 				return ErrNotFound
 			}
 			return fmt.Errorf("lock wallet: %w", err)
+		}
+		if locked {
+			return ErrWalletLocked // drift-locked wallet rejects new deductions
 		}
 		if bal < h.Amount {
 			return ErrInsufficientFunds // rollback also drops the charge insert
@@ -187,6 +192,54 @@ func (r *Repo) ApproveRefund(ctx context.Context, refundID, adminID int64, note 
 // RejectRefund: admin rejects; frozen is consumed as revenue (no return).
 func (r *Repo) RejectRefund(ctx context.Context, refundID, adminID int64, note string) error {
 	return r.reviewRefund(ctx, refundID, adminID, note, false)
+}
+
+// Topup credits a tenant's balance and writes a 'topup' ledger row (charge_id
+// NULL) so the reconciliation invariant balance=Σledger.delta_balance holds.
+// Idempotent on ref (the payment reference): a replayed topup credits nothing.
+func (r *Repo) Topup(ctx context.Context, tenantID, amount int64, ref string) error {
+	if amount <= 0 {
+		return fmt.Errorf("billing: topup amount must be positive, got %d", amount)
+	}
+	return pgx.BeginTxFunc(ctx, r.pool, pgx.TxOptions{}, func(tx pgx.Tx) error {
+		if _, err := tx.Exec(ctx,
+			`INSERT INTO tenant_wallets (tenant_id) VALUES ($1) ON CONFLICT (tenant_id) DO NOTHING`,
+			tenantID); err != nil {
+			return fmt.Errorf("ensure wallet: %w", err)
+		}
+		var bal, frz int64
+		if err := tx.QueryRow(ctx,
+			`SELECT balance, frozen FROM tenant_wallets WHERE tenant_id=$1 FOR UPDATE`,
+			tenantID).Scan(&bal, &frz); err != nil {
+			return fmt.Errorf("lock wallet: %w", err)
+		}
+		// idempotency: this ref already applied?
+		var exists bool
+		if err := tx.QueryRow(ctx,
+			`SELECT EXISTS(SELECT 1 FROM wallet_ledger WHERE idem_key=$1)`,
+			"topup:"+ref).Scan(&exists); err != nil {
+			return fmt.Errorf("check topup idem: %w", err)
+		}
+		if exists {
+			return nil // already credited
+		}
+		newBal := bal + amount
+		if _, err := tx.Exec(ctx,
+			`UPDATE tenant_wallets SET balance=$2, version=version+1 WHERE tenant_id=$1`,
+			tenantID, newBal); err != nil {
+			return fmt.Errorf("credit wallet: %w", err)
+		}
+		_, err := tx.Exec(ctx, `
+INSERT INTO wallet_ledger
+  (tenant_id, charge_id, kind, delta_balance, delta_frozen, balance_after, frozen_after, idem_key)
+VALUES ($1, NULL, 'topup', $2, 0, $3, $4, $5)
+ON CONFLICT (idem_key) DO NOTHING`,
+			tenantID, amount, newBal, frz, "topup:"+ref)
+		if err != nil {
+			return fmt.Errorf("insert topup ledger: %w", err)
+		}
+		return nil
+	})
 }
 
 func (r *Repo) reviewRefund(ctx context.Context, refundID, adminID int64, note string, approve bool) error {
