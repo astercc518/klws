@@ -19,6 +19,7 @@ type Manager struct {
 	cfg       Config
 	container *sqlstore.Container
 	bizPool   *pgxpool.Pool
+	sqlDB     *sql.DB
 	log       waLog.Logger
 }
 
@@ -31,7 +32,6 @@ var (
 // Init 幂等初始化全局单例。
 func Init(ctx context.Context, cfg Config, logger waLog.Logger) (*Manager, error) {
 	mgrOnce.Do(func() {
-		cfg.withDefaults()
 		mgr, mgrErr = newManager(ctx, cfg, logger)
 	})
 	return mgr, mgrErr
@@ -58,7 +58,9 @@ func newManager(ctx context.Context, cfg Config, logger waLog.Logger) (*Manager,
 	}
 
 	container := sqlstore.NewWithDB(sqlDB, "postgres", logger)
-	if err := container.Upgrade(ctx); err != nil {
+	upgradeCtx, upgradeCancel := context.WithTimeout(ctx, 30*time.Second)
+	defer upgradeCancel()
+	if err := container.Upgrade(upgradeCtx); err != nil {
 		_ = sqlDB.Close()
 		return nil, fmt.Errorf("upgrade whatsmeow schema: %w", err)
 	}
@@ -80,7 +82,7 @@ func newManager(ctx context.Context, cfg Config, logger waLog.Logger) (*Manager,
 		return nil, fmt.Errorf("create biz pool: %w", err)
 	}
 
-	return &Manager{cfg: cfg, container: container, bizPool: bizPool, log: logger}, nil
+	return &Manager{cfg: cfg, container: container, bizPool: bizPool, sqlDB: sqlDB, log: logger}, nil
 }
 
 func (m *Manager) BizPool() *pgxpool.Pool { return m.bizPool }
@@ -88,5 +90,8 @@ func (m *Manager) BizPool() *pgxpool.Pool { return m.bizPool }
 func (m *Manager) Close() {
 	if m.bizPool != nil {
 		m.bizPool.Close()
+	}
+	if m.sqlDB != nil {
+		_ = m.sqlDB.Close()
 	}
 }
