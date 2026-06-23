@@ -108,6 +108,9 @@ func newManager(ctx context.Context, cfg Config, logger waLog.Logger) (*Manager,
 
 func (m *Manager) BizPool() *pgxpool.Pool { return m.bizPool }
 
+// Pool returns the business pgxpool. Alias used by the cmd/wadist wiring layer.
+func (m *Manager) Pool() *pgxpool.Pool { return m.bizPool }
+
 func (m *Manager) Close() {
 	if m.bizPool != nil {
 		m.bizPool.Close()
