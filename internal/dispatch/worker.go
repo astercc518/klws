@@ -60,13 +60,15 @@ func (w *SendWorker) ProcessSend(ctx context.Context, pl SendPayload, body, medi
 	waID, sendErr := w.sender.Send(ctx, pl.JID, pl.Phone, rendered, media)
 	if sendErr != nil {
 		if isBanSignal(sendErr) {
-			_ = w.gate.ApplyHealthSignal(ctx, pl.JID, "wa_warning", 6*time.Hour)
+			if hsErr := w.gate.ApplyHealthSignal(ctx, pl.JID, "wa_warning", 6*time.Hour); hsErr != nil {
+				sendErr = fmt.Errorf("%w; health-signal: %v", sendErr, hsErr)
+			}
 		} else {
 			_ = w.gate.ApplyHealthSignal(ctx, pl.JID, "undelivered", 0)
 		}
 		_ = w.billing.RequestRefund(ctx, pl.TenantID, pl.MessageID, sendErr.Error())
 		_ = w.markFailed(ctx, pl, sendErr)
-		return sendErr // surface for asynq retry
+		return sendErr
 	}
 
 	if err := w.billing.Settle(ctx, pl.TenantID, pl.MessageID); err != nil {
@@ -88,6 +90,11 @@ func (w *SendWorker) requeue(ctx context.Context, pl SendPayload, reason string)
 	if err != nil {
 		return fmt.Errorf("requeue recipient: %w", err)
 	}
+	if _, err := w.pool.Exec(ctx,
+		`UPDATE account_devices SET sent_today = GREATEST(0, sent_today - 1) WHERE account_jid = $1`,
+		pl.JID); err != nil {
+		return fmt.Errorf("decrement sent_today (requeue): %w", err)
+	}
 	return nil
 }
 
@@ -96,6 +103,11 @@ func (w *SendWorker) markFailed(ctx context.Context, pl SendPayload, cause error
 		`UPDATE campaign_recipients SET state='failed', last_error=$2 WHERE id=$1`,
 		pl.RecipientID, cause.Error()); err != nil {
 		return fmt.Errorf("mark failed: %w", err)
+	}
+	if _, err := w.pool.Exec(ctx,
+		`UPDATE account_devices SET sent_today = GREATEST(0, sent_today - 1) WHERE account_jid = $1`,
+		pl.JID); err != nil {
+		return fmt.Errorf("decrement sent_today (failed): %w", err)
 	}
 	_, _ = w.pool.Exec(ctx, `UPDATE campaigns SET failed=failed+1 WHERE id=$1`, pl.CampaignID)
 	return nil

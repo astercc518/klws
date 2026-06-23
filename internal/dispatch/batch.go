@@ -9,6 +9,8 @@ import (
 	"github.com/jackc/pgx/v5"
 )
 
+const maxAttempts = 30
+
 // dispatchBatch pulls up to `batch` pending recipients (SKIP LOCKED), assigns each
 // to the best account, bumps sent_today (approximate selection counter), marks the
 // recipient assigned with an idempotent message_id, and enqueues a send. Recipients
@@ -25,8 +27,9 @@ func (d *Dispatcher) dispatchBatch(ctx context.Context, campaignID int64, batch 
 SELECT id, phone, country_code, vars
   FROM campaign_recipients
  WHERE campaign_id=$1 AND state='pending' AND assigned_jid IS NULL
+   AND attempt < $3 -- cap denied-send churn; full backoff is future work
  FOR UPDATE SKIP LOCKED
- LIMIT $2`, campaignID, batch)
+ LIMIT $2`, campaignID, batch, maxAttempts)
 		if err != nil {
 			return fmt.Errorf("pull recipients: %w", err)
 		}

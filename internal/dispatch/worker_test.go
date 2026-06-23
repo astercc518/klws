@@ -175,3 +175,84 @@ func TestProcessSend_IdempotentOnRetry(t *testing.T) {
 		t.Fatalf("after retry: charge=%q, want settled (no new hold)", chState)
 	}
 }
+
+func TestProcessSend_SentTodayUnchangedOnSuccess(t *testing.T) {
+	if testing.Short() {
+		t.Skip("integration")
+	}
+	w, ctx, _, br, _ := newWorker(t)
+	mature := time.Now().Add(-30 * 24 * time.Hour)
+	seedAccount(t, ctx, w.pool, "a@s.whatsapp.net", "US", mature, 100, 0)
+	br.Topup(ctx, 1, 1000, "seed")
+	cid := seedCampaign(t, ctx, w.pool, "hi")
+	rid := seedRecipient(t, ctx, w.pool, cid, "1555", "US")
+	// Simulate dispatchBatch bump: sent_today=1
+	w.pool.Exec(ctx, `UPDATE account_devices SET sent_today=1 WHERE account_jid='a@s.whatsapp.net'`)
+	pl := SendPayload{TenantID: 1, CampaignID: cid, RecipientID: rid, JID: "a@s.whatsapp.net", Phone: "1555", Country: "US", MessageID: "m1", Vars: map[string]any{"name": "Ada"}}
+
+	if err := w.ProcessSend(ctx, pl, "hi {{.name}}", "", "", nil); err != nil {
+		t.Fatalf("process: %v", err)
+	}
+	var sent int
+	w.pool.QueryRow(ctx, `SELECT sent_today FROM account_devices WHERE account_jid='a@s.whatsapp.net'`).Scan(&sent)
+	if sent != 1 {
+		t.Fatalf("sent_today=%d after success, want 1 (bump preserved)", sent)
+	}
+}
+
+func TestProcessSend_SentTodayDecrementedOnAdmitDeny(t *testing.T) {
+	if testing.Short() {
+		t.Skip("integration")
+	}
+	w, ctx, _, _, _ := newWorker(t)
+	mature := time.Now().Add(-30 * 24 * time.Hour)
+	seedAccount(t, ctx, w.pool, "a@s.whatsapp.net", "US", mature, 100, 0)
+	// Quarantine the account to force Admit deny
+	w.pool.Exec(ctx, `UPDATE account_devices SET quarantined_until=now()+interval '1 hour' WHERE account_jid='a@s.whatsapp.net'`)
+	cid := seedCampaign(t, ctx, w.pool, "hi")
+	rid := seedRecipient(t, ctx, w.pool, cid, "1555", "US")
+	w.pool.Exec(ctx, `UPDATE campaign_recipients SET assigned_jid='a@s.whatsapp.net', state='pending' WHERE id=$1`, rid)
+	// Simulate dispatchBatch bump: sent_today=1
+	w.pool.Exec(ctx, `UPDATE account_devices SET sent_today=1 WHERE account_jid='a@s.whatsapp.net'`)
+	pl := SendPayload{TenantID: 1, CampaignID: cid, RecipientID: rid, JID: "a@s.whatsapp.net", Phone: "1555", Country: "US", MessageID: "m1", Vars: map[string]any{}}
+
+	if err := w.ProcessSend(ctx, pl, "hi", "", "", nil); err != nil {
+		t.Fatalf("process (deny should not error): %v", err)
+	}
+	var sent int
+	w.pool.QueryRow(ctx, `SELECT sent_today FROM account_devices WHERE account_jid='a@s.whatsapp.net'`).Scan(&sent)
+	if sent != 0 {
+		t.Fatalf("sent_today=%d after admit-deny, want 0 (bump reversed)", sent)
+	}
+}
+
+func TestProcessSend_SentTodayDecrementedOnSendFail(t *testing.T) {
+	if testing.Short() {
+		t.Skip("integration")
+	}
+	w, ctx, _, br, fs := newWorker(t)
+	fs.err = errors.New("wa_warning: blocked")
+	mature := time.Now().Add(-30 * 24 * time.Hour)
+	seedAccount(t, ctx, w.pool, "a@s.whatsapp.net", "US", mature, 100, 0)
+	br.Topup(ctx, 1, 1000, "seed")
+	cid := seedCampaign(t, ctx, w.pool, "hi")
+	rid := seedRecipient(t, ctx, w.pool, cid, "1555", "US")
+	// Simulate dispatchBatch bump: sent_today=1
+	w.pool.Exec(ctx, `UPDATE account_devices SET sent_today=1 WHERE account_jid='a@s.whatsapp.net'`)
+	pl := SendPayload{TenantID: 1, CampaignID: cid, RecipientID: rid, JID: "a@s.whatsapp.net", Phone: "1555", Country: "US", MessageID: "m1", Vars: map[string]any{}}
+
+	err := w.ProcessSend(ctx, pl, "hi", "", "", nil)
+	if err == nil {
+		t.Fatal("expected send error to surface for retry")
+	}
+	var st string
+	w.pool.QueryRow(ctx, `SELECT state::text FROM campaign_recipients WHERE id=$1`, rid).Scan(&st)
+	if st != "failed" {
+		t.Fatalf("recip st=%q, want failed", st)
+	}
+	var sent int
+	w.pool.QueryRow(ctx, `SELECT sent_today FROM account_devices WHERE account_jid='a@s.whatsapp.net'`).Scan(&sent)
+	if sent != 0 {
+		t.Fatalf("sent_today=%d after send-fail, want 0 (bump reversed)", sent)
+	}
+}
