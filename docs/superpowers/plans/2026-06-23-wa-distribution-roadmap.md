@@ -62,6 +62,7 @@ M0 项目骨架/基础设施
 - **M2 代理池/绑定** — `proxy_pool` schema、`BindProxy`(CTE + FOR UPDATE SKIP LOCKED)、`ReleaseProxy`、`ReportProxyFailure/Success`、`ApplyProxy`、死代理重绑。
 - **M3 计费/审核退款** — `tenant_wallets/billing_charges/wallet_ledger/refund_requests` schema、`Hold/Settle/RequestRefund/Approve/RejectRefund`、`moveWallet/insertLedger`、asynq 接线。
 - **M4 对账** — `reconciliation_runs`、`ReconcileTenant`(单语句单快照)、`ReconcileAll`(集合式)、`DriftHandler`(告警+可选锁钱包)、夜间 cron。
+  - ⚠️ **M3 遗留前置**:充值/开户余额必须写 `topup`/`adjust` 分录(`ledger_kind_t` 已预留),否则不变式 `balance=Σledger.delta_balance` 需额外的开户余额项。对账须含充值项。
 - **M5 防封号免疫** — warmup 配额曲线、`effective_quota`(Go+SQL 双份)、Redis 准入 Lua、`Admission/Ticket`、健康度评分+熔断、回血作业、`SendGate.Admit`。
 - **M6 分发编排** — `campaigns/campaign_recipients/campaign_templates/media_uploads` schema、健康度加权 `selectAccount`、`RunDispatcher/dispatchBatch`、媒体上传缓存、模板渲染、`SendWorker` 全链路接线。
 - **M7 可观测性** — Prometheus `Metrics`(有界 label)、`PublishRegistryState`、`DBCollector`(TTL 缓存)、业务埋点、`/metrics` HTTP。
