@@ -75,7 +75,7 @@ internal/          15 个包(见 docs/ARCHITECTURE.md §2)
 migrations/        0001–0008(全幂等,migrate_twice 验证)
 deploy/            k8s Deployment(滚动)+ PDB + 基线说明
 scripts/           check_metric_labels.sh / migrate_twice.sh
-docs/              ARCHITECTURE.md + superpowers/plans/(逐里程碑计划)
+docs/              ARCHITECTURE.md(架构)+ API.md(接口参考)+ superpowers/plans/
 .github/workflows/ release-gate.yml(含 chaos + memory + 幂等门禁)
 ```
 

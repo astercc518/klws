@@ -1,91 +1,125 @@
-# wadist k8s Deployment Baseline
+# wadist 部署与运维手册
 
-## Capacity Model (internal/capacity.Compute)
+k8s 滚动部署、容量规划、生产配置基线、发布/回滚/金丝雀 runbook、告警建议。清单见 [`deployment.yaml`](deployment.yaml)、[`pdb.yaml`](pdb.yaml);系统架构见 [`../docs/ARCHITECTURE.md`](../docs/ARCHITECTURE.md)。
 
-`capacity.Compute(Inputs{...})` returns a `Plan` with:
+---
 
-```
-accountsPerNode  = MaxLockConns           // one pinned advisory-lock conn per active account
-connsPerNode     = MaxLockConns + MaxOpenConns + MaxOpenConns   // lock + biz + sqlDB pools
-requiredMaxConnections = connsPerNode * nodes + HeadroomConns
-redisMemoryMB    = ceil((accounts*(dailyKeyBytes+pacingKeyBytes) + queueDepth*taskBytes) * 2 / 1MiB)
-```
-
-With the defaults deployed here (`MAX_LOCK_CONNS=300`, `MaxOpenConns=50`, `HeadroomConns=50`, `replicas=2`):
-
-| Parameter              | Value     |
-|------------------------|-----------|
-| accountsPerNode        | 300       |
-| connsPerNode           | 400       |
-| requiredMaxConnections | 850       |
-
-## PG max_connections Derivation
-
-`docker-compose.yml` sets `max_connections=700`. This covers:
-
-- 2 nodes × 400 conns/node = 800 conns at capacity + 50 headroom
-- 700 is the local dev baseline (single node); production multi-node sizing
-  must use `capacity.Compute` and set `max_connections` accordingly.
-
-## Redis --maxmemory Derivation
-
-`docker-compose.yml` sets `--maxmemory 512mb`. Derived from the capacity formula:
+## 1. 容量模型(`internal/capacity.Compute`)
 
 ```
-accounts=300, dailyKeyBytes=64, pacingKeyBytes=64, queueDepth=1000, taskBytes=512
-=> bytes = 300*(64+64) + 1000*512 = 38400 + 512000 = 550400
-=> redisMemoryMB = ceil(550400 * 2 / 1MiB) = ceil(1100800/1048576) = 2 MB
+accountsPerNode        = MaxLockConns                         // 每账号一条固定 advisory-lock 连接
+connsPerNode           = MaxLockConns + MaxOpenConns + MaxOpenConns   // lock + biz + sqlDB
+                         (+ 2×MaxOpenConns 若 app_tenant/app_system 用独立 DSN)
+nodesNeeded            = ceil(accounts / accountsPerNode)
+requiredMaxConnections = connsPerNode × nodesNeeded + HeadroomConns
+redisMemoryMB          = ceil((accounts×(dailyKeyBytes+pacingKeyBytes) + queueDepth×taskBytes) × 2 / 1MiB)
 ```
 
-The 512 MB baseline provides generous headroom for transient task payloads and
-Redis internal fragmentation. `--maxmemory-policy noeviction` is mandatory:
-asynq task loss = lost already-charged messages.
+### Sizing 示例(MaxLockConns=300、MaxOpenConns=50、headroom=50、单 DSN)
 
-## Rolling Update / PDB / preStop / Readiness
+| 账号规模 | 节点数 | 每节点连接 | PG `max_connections` ≥ | Redis(粗估) |
+|---|---|---|---|---|
+| 300 | 1 | 400 | 450 | 512 MB 基线 |
+| 600 | 2 | 400 | 850 | 512 MB |
+| 1,500 | 5 | 400 | 2,050 | 512 MB–1 GB |
+| 3,000 | 10 | 400 | 4,050 | 1 GB |
+| 10,000 | 34 | 400 | 13,650 | 2 GB |
 
-### Zero-downtime rolling update
+> 双 RLS DSN 时每节点连接 = 500(+2×50),`max_connections` 相应放大。大规模(>5 节点)建议用 **PgBouncer(transaction 池化)** 收敛业务池,但 **advisory-lock 池不可经事务池化**(锁随会话,必须直连),故 lockPool 连接数始终 = 单节点账号数,是 `max_connections` 的主导项。
 
-`maxUnavailable: 0` ensures at least `replicas` pods are Ready before the old
-pod is terminated. `maxSurge: 1` allows one extra pod to start ahead, so the
-transition is: start new → new passes /readyz → remove old.
+校验:`go test -tags memory_gate ./internal/capacity/`(每会话内存基线门禁)。
 
-### PodDisruptionBudget (pdb.yaml)
+---
 
-`minAvailable: 1` guarantees at least one replica survives voluntary
-disruptions (node drain, cluster upgrades). With `replicas: 2` this prevents
-both pods from being evicted simultaneously.
+## 2. 生产配置基线
 
-### preStop + terminationGracePeriodSeconds
+### PostgreSQL
 
-Shutdown sequence (all delays are pre-drain):
+| 参数 | 基线 | 依据 |
+|---|---|---|
+| `max_connections` | 由 `Compute` 算出(见上) | lockPool 主导;务必覆盖峰值节点数 |
+| `shared_buffers` | 物理内存 25% | 标准 |
+| `work_mem` | 16–32 MB | 对账/聚合查询;连接数高时取保守值 |
+| `idle_in_transaction_session_timeout` | **0(禁用)** | advisory-lock 连接长期持有事务外锁,**不可**被 idle 超时杀掉 |
+| `tcp_keepalives_*` | 启用 | 及时发现断连 → 锁释放 → 加速接管 |
 
-1. **k8s preStop sleep 5 s** — k8s runs the preStop hook *before* sending
-   SIGTERM. This 5 s window lets the endpoint controller propagate the removal
-   from Service endpoints so no new traffic is routed to this pod.
-2. **SIGTERM → app flips /readyz → 503** — on SIGTERM the app calls
-   `SetReady(false)`. The readiness probe (`failureThreshold: 1`,
-   `periodSeconds: 2`) detects this within ~2 s and k8s removes the pod from
-   endpoints (belt-and-suspenders with step 1). The app then sleeps
-   `PreStopDelay` (WADIST_PRESTOP_DELAY=5 s) to allow that propagation.
-3. **Supervisor.Shutdown drains** — in-flight asynq tasks are drained within
-   `WADIST_SHUTDOWN_TIMEOUT=30 s`. The M9 deregister hook fires here: any
-   accounts owned by this node are released and the takeover scanner on a
-   surviving/new pod re-acquires them via advisory-lock fencing, ensuring
-   account-session continuity.
+> `docker-compose.yml` 的 `max_connections=700` 仅为本地单节点开发基线(400<700),生产按 `Compute` 设定。
 
-Total pre-drain delay ≈ preStop(5 s) + PreStopDelay(5 s) = 10 s, well within
-`terminationGracePeriodSeconds: 45 >= 5 (preStop) + 5 (PreStopDelay) + 30 (shutdown) + 5 (margin)`.
+### Redis
 
-**Zero-downtime for this system** means *account-session continuity* via M9
-takeover, not HTTP request draining. Asynq work is queue-pulled (not
-HTTP-routed), so `/readyz` gates the metrics scrape endpoint and signals
-rolling-update readiness, while in-flight sends are drained by
-`Supervisor.Shutdown`.
+| 参数 | 基线 | 依据 |
+|---|---|---|
+| `--maxmemory` | 512 MB 起(按规模上调) | asynq 队列 + 准入 Lua 计数键 |
+| `--maxmemory-policy` | **`noeviction`(强制)** | asynq 任务被驱逐 = 已扣费消息丢失 |
+| 持久化 | AOF `appendfsync everysec` | 接管去重键/队列需跨重启存活 |
 
-### Readiness vs Liveness
+Redis 内存推导(单节点 300 账号):`300×(64+64) + 1000×512 = 550 KB ×2 ≈ 2 MB` 实际占用;512 MB 基线为瞬时载荷 + 碎片留充足余量。
 
-- `/readyz` (periodSeconds 2, failureThreshold 1): gates traffic and scrape
-  availability; flipped to 503 at the start of shutdown so k8s stops routing
-  and rolling updates see the pod as not-ready within ~2 s.
-- `/healthz` (periodSeconds 10, failureThreshold 3): triggers pod restart only
-  after 30 s of hard failure, avoiding restart loops during transient slowness.
+---
+
+## 3. 滚动更新(零中断)
+
+`maxUnavailable:0` + `maxSurge:1`:新 pod 就绪后旧 pod 才被终止。
+
+```bash
+# 部署/升级
+kubectl apply -f deploy/deployment.yaml -f deploy/pdb.yaml
+kubectl set image deployment/wadist wadist=wadist:<新tag>
+kubectl rollout status deployment/wadist --timeout=300s   # 观察逐 pod 就绪
+
+# 回滚(秒级)
+kubectl rollout undo deployment/wadist
+kubectl rollout history deployment/wadist
+```
+
+**停机时序**(每 pod,详见架构 §8):k8s preStop sleep 5s(端点传播窗口)→ SIGTERM → `/readyz`→503(~2s 摘端点)→ PreStopDelay 5s → `Supervisor.Shutdown` 排空在途发送 + `DeregisterNode` → 存活/新 pod 经 advisory-lock fencing 接管该 pod 账号。`terminationGracePeriodSeconds:45` ≥ 5+5+30+5。
+
+> **本系统"零中断" = 账号会话连续性(M9 接管)**,非 HTTP 请求排空——asynq 工作是队列拉取。滚动期间被迁移账号在 ≤(扫描周期 15s + 起号)内被接管。
+
+---
+
+## 4. 金丝雀发布
+
+cohort 为**观测维度**(`fnv64a(jid)%100<pct` 确定性分桶);灰度本身由 k8s 部署层完成,cohort label 用于**对比金丝雀 vs 稳定的发送质量**。
+
+```bash
+# 1. 给金丝雀负载设 10% cohort,新版本镜像
+kubectl set env deployment/wadist-canary WADIST_CANARY_PERCENT=10
+kubectl set image deployment/wadist-canary wadist=wadist:<新tag>
+
+# 2. 观察对比(Prometheus):金丝雀 cohort 的失败/封号率不劣于稳定
+#    sum(rate(wadist_cohort_sends_total{cohort="canary",outcome="sent"}[5m]))
+#      / sum(rate(wadist_cohort_sends_total{cohort="canary"}[5m]))
+#    对比 cohort="stable" 同比;若 canary send 成功率显著下降或 wa_warning 升高 → 回滚
+
+# 3. 放量或回滚
+kubectl set env deployment/wadist WADIST_CANARY_PERCENT=100   # 全量
+# 或 kubectl rollout undo ...
+```
+
+判停指标(canary 显著劣于 stable 即止):`wadist_cohort_sends_total{cohort,outcome}` 的 sent 占比、`outcome="send_failed"` 增速、`wadist_health_signals_total{signal="wa_warning"}`。
+
+---
+
+## 5. 告警建议(PromQL,基于真实指标)
+
+| 告警 | 表达式(示意) | 含义 |
+|---|---|---|
+| 账号容量逼近上限 | `wadist_active_sessions / on() WADIST_MAX_LOCK_CONNS > 0.9` | 单节点账号数接近 lockPool 上限,需扩节点 |
+| 封号信号激增 | `rate(wadist_health_signals_total{signal="wa_warning"}[5m]) > 0` 持续 | 触发隔离的封号警告上升 |
+| 准入拒绝率高 | `sum(rate(wadist_gate_decisions_total{allow="false"}[5m])) / sum(rate(wadist_gate_decisions_total[5m])) > 0.5` | 配额/pacing/隔离导致大量拒发 |
+| 发送失败率 | `sum(rate(wadist_send_outcomes_total{outcome=~"send_failed|settle_failed"}[5m])) > 0` | 投递/结算失败 |
+| 无容量积压 | `rate(wadist_dispatch_no_capacity_total[5m]) > 0` 持续 | 账号配额耗尽,recipient 滞留 pending |
+| 钱包被锁(对账漂移) | `wadist_wallet_locked > 0` | 对账发现不变式漂移,资金已锁 |
+| 退款审核积压 | `wadist_refunds_pending > <阈值>` | 失败退款待管理员审核堆积 |
+| 代理枯竭 | `wadist_proxy_slots_free < <阈值>` 或 `wadist_proxy_dead` 上升 | 可用代理不足 |
+| 账号健康恶化 | `wadist_accounts_health{bucket="at_risk"}` 上升 | 大量账号健康分逼近隔离阈值 |
+| 节点失联 | `up{job="wadist"}` 缺失 / `/healthz` 失败 | 进程或节点故障(接管应自动发生) |
+
+> 高基数护栏:指标按 `outcome/reason/state/cohort/bucket` 等有界维度聚合,**绝不含** jid/tenant_id/message_id/phone(`scripts/check_metric_labels.sh` 硬门禁)。租户级排障走日志/trace,不走指标。
+
+---
+
+## 6. 故障演练(混沌门禁)
+
+`make chaos`(`TestTakeoverChaos -count=5`)端到端验证:杀掉持锁节点的连接 → advisory 锁自动释放 → 对端扫描器入队 → handler 重抢锁 + 改写 owner_node。CI(`release-gate.yml`)每次跑。生产演练可 `kubectl delete pod <持锁pod> --grace-period=0`(模拟硬死)观察接管时延(应 ≤ 扫描周期 + 起号)。
