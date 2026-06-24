@@ -19,7 +19,10 @@ type AuditEntry struct {
 	Details      []byte // raw JSON; nil → NULL
 }
 
-// AuditWriter inserts rows into audit_log using a superuser pool.
+// AuditWriter inserts rows into audit_log. The pool must have SELECT+INSERT
+// on audit_log (app_system or superuser); it does not need to be literally
+// superuser, but must not be a role that only holds SELECT (e.g. app_tenant
+// without the explicit INSERT grant).
 type AuditWriter struct {
 	pool *pgxpool.Pool
 }

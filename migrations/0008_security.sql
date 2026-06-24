@@ -55,10 +55,12 @@ CREATE TABLE IF NOT EXISTS audit_log (
 );
 
 -- these two tables are created AFTER Task 2's GRANT ON ALL TABLES, so grant them
--- explicitly; then make audit_log append-only by revoking UPDATE/DELETE.
+-- explicitly; then make audit_log append-only and suppression_list non-deletable
+-- by revoking UPDATE/DELETE (compliance: tenants must not be able to un-suppress opt-outs).
 GRANT SELECT, INSERT ON suppression_list, audit_log TO app_tenant, app_system;
 GRANT SELECT, USAGE ON ALL SEQUENCES IN SCHEMA public TO app_tenant, app_system;
 REVOKE UPDATE, DELETE ON audit_log FROM app_tenant, app_system;
+REVOKE UPDATE, DELETE ON suppression_list FROM app_tenant, app_system;
 
 -- ── enable RLS + tenant-isolation policy on the 9 tenant-scoped tables ──
 DO $$

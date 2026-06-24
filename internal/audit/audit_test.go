@@ -142,6 +142,17 @@ func TestAuditLog_AppendOnlyRejected(t *testing.T) {
 	}
 	t.Cleanup(tenantPool.Close)
 
+	// Self-verification: confirm the role is genuinely non-superuser so the
+	// UPDATE/DELETE rejections below are real permission checks, not vacuous.
+	var isSuperuser string
+	if err := tenantPool.QueryRow(ctx, `SELECT current_setting('is_superuser')`).Scan(&isSuperuser); err != nil {
+		t.Fatalf("check is_superuser: %v", err)
+	}
+	if isSuperuser != "off" {
+		t.Fatalf("is_superuser=%q, want 'off' — role is unexpectedly superuser; permission checks would be vacuous", isSuperuser)
+	}
+	t.Logf("is_superuser=%q (confirmed non-superuser)", isSuperuser)
+
 	t.Run("UPDATE_rejected", func(t *testing.T) {
 		_, err := tenantPool.Exec(ctx, `UPDATE audit_log SET action='tampered'`)
 		if err == nil {
@@ -157,6 +168,66 @@ func TestAuditLog_AppendOnlyRejected(t *testing.T) {
 		}
 		t.Logf("DELETE correctly rejected: %v", err)
 	})
+}
+
+func TestSuppressionList_DeleteRejectedForAppTenant(t *testing.T) {
+	if testing.Short() {
+		t.Skip("integration")
+	}
+	ctx := context.Background()
+	superDSN := testDSN(t)
+	superPool, err := pgxpool.New(ctx, superDSN)
+	if err != nil {
+		t.Fatalf("super pool: %v", err)
+	}
+	t.Cleanup(superPool.Close)
+	applyMigrations(t, ctx, superPool)
+
+	// Seed a suppression row as superuser so there is something to try to DELETE.
+	if _, err := superPool.Exec(ctx, `
+		INSERT INTO suppression_list (tenant_id, phone_bidx, reason)
+		VALUES (1, '\xdeadbeef', 'opted-out')`); err != nil {
+		t.Fatalf("seed suppression_list: %v", err)
+	}
+
+	// Connect as app_tenant role.
+	tenantDSN := buildAppTenantDSN(t, superDSN)
+	tenantPool, err := pgxpool.New(ctx, tenantDSN)
+	if err != nil {
+		t.Fatalf("tenant pool: %v", err)
+	}
+	t.Cleanup(tenantPool.Close)
+
+	// Self-verification: confirm the role is genuinely non-superuser.
+	var isSuperuser string
+	if err := tenantPool.QueryRow(ctx, `SELECT current_setting('is_superuser')`).Scan(&isSuperuser); err != nil {
+		t.Fatalf("check is_superuser: %v", err)
+	}
+	if isSuperuser != "off" {
+		t.Fatalf("is_superuser=%q, want 'off' — role is unexpectedly superuser; permission check would be vacuous", isSuperuser)
+	}
+	t.Logf("is_superuser=%q (confirmed non-superuser)", isSuperuser)
+
+	// app_tenant must NOT be able to DELETE from suppression_list (compliance: opt-outs are permanent).
+	_, err = tenantPool.Exec(ctx, `DELETE FROM suppression_list`)
+	if err == nil {
+		t.Fatal("expected DELETE on suppression_list to be rejected for app_tenant, but it succeeded")
+	}
+	t.Logf("DELETE on suppression_list correctly rejected: %v", err)
+
+	// app_tenant must NOT be able to UPDATE suppression_list either.
+	_, err = tenantPool.Exec(ctx, `UPDATE suppression_list SET reason='tampered'`)
+	if err == nil {
+		t.Fatal("expected UPDATE on suppression_list to be rejected for app_tenant, but it succeeded")
+	}
+	t.Logf("UPDATE on suppression_list correctly rejected: %v", err)
+
+	// app_tenant CAN still SELECT and INSERT (non-destructive access is allowed).
+	var count int
+	if err := tenantPool.QueryRow(ctx, `SELECT count(*) FROM suppression_list`).Scan(&count); err != nil {
+		t.Fatalf("SELECT on suppression_list should be allowed for app_tenant: %v", err)
+	}
+	t.Logf("SELECT on suppression_list allowed, count=%d", count)
 }
 
 func TestAuditWriter_RecordNilDetails(t *testing.T) {

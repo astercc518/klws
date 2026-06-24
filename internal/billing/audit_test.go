@@ -1,10 +1,24 @@
 package billing
 
 import (
+	"context"
 	"testing"
+
+	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/acme/wadist/internal/audit"
 )
+
+// refundState returns the current state column of a refund_requests row.
+func refundState(t *testing.T, ctx context.Context, pool *pgxpool.Pool, rid int64) string {
+	t.Helper()
+	var state string
+	if err := pool.QueryRow(ctx,
+		`SELECT state FROM refund_requests WHERE id=$1`, rid).Scan(&state); err != nil {
+		t.Fatalf("refundState: %v", err)
+	}
+	return state
+}
 
 func TestApproveRefund_AuditRowWritten(t *testing.T) {
 	if testing.Short() {
@@ -124,3 +138,72 @@ func TestApproveRefund_AuditAtomicWithRefund(t *testing.T) {
 	}
 
 }
+
+// TestApproveRefund_AuditFailureRollsBackRefund proves that when the in-tx audit
+// INSERT fails (here: by dropping audit_log so the INSERT errors), the entire
+// transaction is rolled back — the refund_requests row stays 'pending' and the
+// charge state is unchanged.
+//
+// Poison strategy: DROP TABLE audit_log via the superuser pool right before
+// calling ApproveRefund. The audit INSERT inside reviewRefund's pgx.BeginTxFunc
+// then errors, causing BeginTxFunc to roll back the whole transaction. We
+// recreate audit_log afterwards to leave the schema intact.
+func TestApproveRefund_AuditFailureRollsBackRefund(t *testing.T) {
+	if testing.Short() {
+		t.Skip("integration")
+	}
+	r, ctx, pool := setupPendingRefund(t)
+	rid := pendingRefundID(t, ctx, r, 1)
+
+	aw := audit.NewAuditWriter(pool)
+	r.UseAudit(aw)
+
+	// Record charge state before the poisoned call.
+	chargeStateBefore := chargeState(t, ctx, r, 1, "m1")
+	if chargeStateBefore != "refund_pending" {
+		t.Fatalf("precondition: charge state=%q, want refund_pending", chargeStateBefore)
+	}
+	refundStateBefore := refundState(t, ctx, pool, rid)
+	if refundStateBefore != "pending" {
+		t.Fatalf("precondition: refund state=%q, want pending", refundStateBefore)
+	}
+
+	// Poison: drop audit_log so the in-tx INSERT into audit_log fails.
+	if _, err := pool.Exec(ctx, `DROP TABLE audit_log`); err != nil {
+		t.Fatalf("drop audit_log: %v", err)
+	}
+	// Restore at end of test so other subtests/teardown are unaffected.
+	t.Cleanup(func() {
+		pool.Exec(ctx, `
+			CREATE TABLE IF NOT EXISTS audit_log (
+				id            BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+				occurred_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
+				tenant_id     BIGINT,
+				actor_id      BIGINT,
+				action        TEXT NOT NULL,
+				resource_type TEXT,
+				resource_id   BIGINT,
+				details       JSONB
+			)`)
+	})
+
+	// (a) ApproveRefund must return an error.
+	err := r.ApproveRefund(ctx, rid, 42, "should rollback")
+	if err == nil {
+		t.Fatal("expected ApproveRefund to fail when audit_log is missing, but it succeeded")
+	}
+	t.Logf("ApproveRefund correctly returned error: %v", err)
+
+	// (b) refund_requests.state must still be 'pending' (rolled back, not 'approved').
+	refundStateAfter := refundState(t, ctx, pool, rid)
+	if refundStateAfter != "pending" {
+		t.Fatalf("refund state after failed audit = %q, want pending (rollback proof)", refundStateAfter)
+	}
+
+	// (c) charge state must be unchanged (still 'refund_pending').
+	chargeStateAfter := chargeState(t, ctx, r, 1, "m1")
+	if chargeStateAfter != "refund_pending" {
+		t.Fatalf("charge state after failed audit = %q, want refund_pending (rollback proof)", chargeStateAfter)
+	}
+}
+
