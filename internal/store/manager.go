@@ -38,6 +38,12 @@ func Init(ctx context.Context, cfg Config, logger waLog.Logger) (*Manager, error
 	return mgr, mgrErr
 }
 
+// NewManager constructs an independent Manager (not a singleton) for tests and
+// multi-instance scenarios. Callers are responsible for calling Close.
+func NewManager(ctx context.Context, cfg Config, logger waLog.Logger) (*Manager, error) {
+	return newManager(ctx, cfg, logger)
+}
+
 // newManager 构造一个独立 Manager(不走单例),供测试与多实例场景。
 func newManager(ctx context.Context, cfg Config, logger waLog.Logger) (*Manager, error) {
 	cfg.withDefaults()
