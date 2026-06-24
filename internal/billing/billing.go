@@ -14,6 +14,8 @@ import (
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
+
+	"github.com/acme/wadist/internal/audit"
 )
 
 var (
@@ -32,7 +34,8 @@ type TenantTxBeginner interface {
 
 type Repo struct {
 	pool *pgxpool.Pool
-	txb  TenantTxBeginner // nil → use r.pool.Begin (backward-compat)
+	txb  TenantTxBeginner  // nil → use r.pool.Begin (backward-compat)
+	aw   *audit.AuditWriter // nil → skip audit (zero regression for existing callers)
 }
 
 func NewRepo(pool *pgxpool.Pool) *Repo { return &Repo{pool: pool} }
@@ -41,6 +44,10 @@ func NewRepo(pool *pgxpool.Pool) *Repo { return &Repo{pool: pool} }
 // RLS-scoped transactions. Returns r for chaining. Existing callers that never
 // call this have txb=nil and behave identically to before.
 func (r *Repo) UseTenantRLS(b TenantTxBeginner) *Repo { r.txb = b; return r }
+
+// UseAudit injects an AuditWriter. When set, ApproveRefund/RejectRefund write
+// an audit row inside the same transaction as the business update. nil → no-op.
+func (r *Repo) UseAudit(aw *audit.AuditWriter) *Repo { r.aw = aw; return r }
 
 // beginTenantTx picks the correct tx source: RLS-scoped if txb is set, else superuser.
 func (r *Repo) beginTenantTx(ctx context.Context, tenantID int64) (pgx.Tx, error) {
@@ -337,7 +344,25 @@ UPDATE refund_requests SET state=$2, reviewed_by=$3, review_note=$4, reviewed_at
 		if err != nil {
 			return err
 		}
-		return insertLedger(ctx, tx, tenantID, chargeID, kind,
-			deltaBal, deltaFrz, newBal, newFrz, idem+fmt.Sprint(chargeID))
+		if err := insertLedger(ctx, tx, tenantID, chargeID, kind,
+			deltaBal, deltaFrz, newBal, newFrz, idem+fmt.Sprint(chargeID)); err != nil {
+			return err
+		}
+		if r.aw != nil {
+			action := "refund.reject"
+			if approve {
+				action = "refund.approve"
+			}
+			if err := r.aw.RecordTx(ctx, tx, audit.AuditEntry{
+				TenantID:     tenantID,
+				ActorID:      adminID,
+				Action:       action,
+				ResourceType: "refund_request",
+				ResourceID:   refundID,
+			}); err != nil {
+				return err
+			}
+		}
+		return nil
 	})
 }

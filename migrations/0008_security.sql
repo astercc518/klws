@@ -32,6 +32,34 @@ ALTER TABLE campaign_recipients ADD COLUMN IF NOT EXISTS phone_bidx BYTEA;
 CREATE UNIQUE INDEX IF NOT EXISTS idx_recip_phone_bidx ON campaign_recipients (campaign_id, phone_bidx)
   WHERE phone_bidx IS NOT NULL;
 
+-- ── suppression list (do-not-contact), matched by phone blind index ──
+CREATE TABLE IF NOT EXISTS suppression_list (
+    id         BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    tenant_id  BIGINT NOT NULL,
+    phone_bidx BYTEA  NOT NULL,
+    reason     TEXT,
+    added_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
+    UNIQUE (tenant_id, phone_bidx)
+);
+
+-- ── append-only audit log ──
+CREATE TABLE IF NOT EXISTS audit_log (
+    id            BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    occurred_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
+    tenant_id     BIGINT,
+    actor_id      BIGINT,
+    action        TEXT NOT NULL,
+    resource_type TEXT,
+    resource_id   BIGINT,
+    details       JSONB
+);
+
+-- these two tables are created AFTER Task 2's GRANT ON ALL TABLES, so grant them
+-- explicitly; then make audit_log append-only by revoking UPDATE/DELETE.
+GRANT SELECT, INSERT ON suppression_list, audit_log TO app_tenant, app_system;
+GRANT SELECT, USAGE ON ALL SEQUENCES IN SCHEMA public TO app_tenant, app_system;
+REVOKE UPDATE, DELETE ON audit_log FROM app_tenant, app_system;
+
 -- ── enable RLS + tenant-isolation policy on the 9 tenant-scoped tables ──
 DO $$
 DECLARE t text;
