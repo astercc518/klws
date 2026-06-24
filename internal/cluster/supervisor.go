@@ -116,11 +116,13 @@ func (s *Supervisor) Shutdown() {
 	// 3. sessions (bounded by ShutdownTimeout)
 	ctx, cancel := context.WithTimeout(context.Background(), s.opts.ShutdownTimeout)
 	s.reg.CloseAll(ctx)
+	cancel()
 	// 3a. after sessions detached (locks released), before store closes
 	if s.opts.AfterSessions != nil {
-		s.opts.AfterSessions(ctx)
+		afterCtx, afterCancel := context.WithTimeout(context.Background(), 5*time.Second)
+		s.opts.AfterSessions(afterCtx)
+		afterCancel()
 	}
-	cancel()
 	// 4. store
 	if s.opts.CloseStore != nil {
 		s.opts.CloseStore()

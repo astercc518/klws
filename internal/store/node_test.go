@@ -21,17 +21,6 @@ func readMigration0007(t *testing.T) string {
 	return string(b)
 }
 
-// applyMigrations0001And0007 applies 0001 then 0007 on the given pool.
-func applyMigrations0001And0007(t *testing.T, ctx context.Context, pool *pgxpool.Pool) {
-	t.Helper()
-	if _, err := pool.Exec(ctx, readMigration(t)); err != nil {
-		t.Fatalf("apply migration 0001: %v", err)
-	}
-	if _, err := pool.Exec(ctx, readMigration0007(t)); err != nil {
-		t.Fatalf("apply migration 0007: %v", err)
-	}
-}
-
 func TestMigration0007_Idempotent(t *testing.T) {
 	if testing.Short() {
 		t.Skip("integration")

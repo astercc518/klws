@@ -156,7 +156,11 @@ func run(ctx context.Context, cfg *config.Config) (*metrics.Server, func(), erro
 	node.RegisterTakeoverHandler(mux, orch)
 
 	// Kick off initial account startup with bounded concurrency.
-	jids, _ := mgr.ListActiveAccounts(ctx)
+	jids, err := mgr.ListActiveAccounts(ctx)
+	if err != nil {
+		log.Printf("warn: list active accounts at startup: %v — starting with zero accounts", err)
+		jids = nil
+	}
 	sup.Go(func(lctx context.Context) error {
 		return sup.StartAccounts(lctx, jids, orch.StartAccountWithLock)
 	})

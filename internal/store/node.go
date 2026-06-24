@@ -6,6 +6,8 @@ import (
 	"errors"
 	"fmt"
 	"time"
+
+	"github.com/jackc/pgx/v5"
 )
 
 // ErrProxyNotBound is returned by GetBoundProxy when the account has no cached proxy URL.
@@ -118,6 +120,9 @@ func (m *Manager) GetBoundProxy(ctx context.Context, accountJID string) (*ProxyB
 		`SELECT proxy_id, proxy_url_cache FROM account_devices WHERE account_jid=$1`,
 		accountJID).Scan(&proxyID, &proxyURL)
 	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, ErrProxyNotBound
+		}
 		return nil, fmt.Errorf("get bound proxy: %w", err)
 	}
 	if proxyURL == nil {
