@@ -100,6 +100,28 @@ func TestDeviceLock_Healthy_FalseAfterRelease(t *testing.T) {
 	}
 }
 
+func TestDeviceLock_Healthy_FalseAfterLockReleased_ConnStillAlive(t *testing.T) {
+	if testing.Short() {
+		t.Skip("integration")
+	}
+	m := newTestManager(t)
+	ctx := context.Background()
+	seedAccountDevice(t, ctx, m, "jid-h4")
+	lock, err := m.AcquireDeviceLock(ctx, "jid-h4")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer lock.Release(ctx)
+	// Manually release the advisory lock on the pinned conn, keeping the conn alive.
+	if _, err := lock.conn.Exec(ctx, "SELECT pg_advisory_unlock($1)", lock.key); err != nil {
+		t.Fatal(err)
+	}
+	// Conn is alive (Ping would pass) but the lock is gone — Healthy must detect this.
+	if lock.Healthy(ctx) {
+		t.Fatal("Healthy must be false: conn alive but advisory lock no longer held")
+	}
+}
+
 func TestAcquireDeviceLock_MutualExclusion(t *testing.T) {
 	if testing.Short() {
 		t.Skip("integration")
