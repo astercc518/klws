@@ -136,3 +136,53 @@ func TestDispatchBatch_ObservesAssigned(t *testing.T) {
 		t.Fatalf("expected batch histogram sample, got %d", c)
 	}
 }
+
+// cohortSendValue returns the counter value for wadist_cohort_sends_total{cohort=c, outcome=o}.
+func cohortSendValue(t *testing.T, reg *prometheus.Registry, cohort, outcome string) float64 {
+	t.Helper()
+	mfs, err := reg.Gather()
+	if err != nil {
+		t.Fatalf("gather: %v", err)
+	}
+	for _, mf := range mfs {
+		if mf.GetName() != "wadist_cohort_sends_total" {
+			continue
+		}
+		for _, m := range mf.GetMetric() {
+			if labelValue(m, "cohort") == cohort && labelValue(m, "outcome") == outcome {
+				return m.GetCounter().GetValue()
+			}
+		}
+	}
+	return 0
+}
+
+// TestProcessSend_RecordsCohortSend verifies that WithCanary(100) causes every
+// successful send to be recorded with cohort="canary" in wadist_cohort_sends_total.
+func TestProcessSend_RecordsCohortSend(t *testing.T) {
+	if testing.Short() {
+		t.Skip("integration")
+	}
+	w, ctx, _, br, _ := newWorker(t)
+	mature := time.Now().Add(-30 * 24 * time.Hour)
+	seedAccount(t, ctx, w.pool, "cohort@s.whatsapp.net", "US", mature, 100, 0)
+	br.Topup(ctx, 1, 1000, "seed")
+	cid := seedCampaign(t, ctx, w.pool, "hi")
+	rid := seedRecipient(t, ctx, w.pool, cid, "15557", "US")
+	pl := SendPayload{
+		TenantID: 1, CampaignID: cid, RecipientID: rid,
+		JID: "cohort@s.whatsapp.net", Phone: "15557", Country: "US",
+		MessageID: "m-cohort", Vars: map[string]any{"name": "Ada"},
+	}
+
+	reg := prometheus.NewRegistry()
+	m := metrics.New(reg)
+	w.WithMetrics(m).WithCanary(100) // pct=100 → every JID is canary
+
+	if err := w.ProcessSend(ctx, pl, "hi {{.name}}", "", "", nil); err != nil {
+		t.Fatalf("ProcessSend: %v", err)
+	}
+	if v := cohortSendValue(t, reg, "canary", "sent"); v < 1 {
+		t.Fatalf("expected wadist_cohort_sends_total{cohort=canary,outcome=sent}>=1, got %v", v)
+	}
+}

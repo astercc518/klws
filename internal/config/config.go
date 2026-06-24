@@ -36,6 +36,9 @@ type Config struct {
 	NodeRegion string // WADIST_NODE_REGION default "default"
 	// AsynqConcurrency is the number of concurrent Asynq workers (default 32).
 	AsynqConcurrency int // WADIST_ASYNQ_CONCURRENCY default 32
+	// CanaryPercent is the percentage (0..100) of JIDs assigned to the canary cohort.
+	// Out-of-range or unparseable values fall back to 0 (feature off).
+	CanaryPercent uint8 // WADIST_CANARY_PERCENT default 0
 	// PreStopDelay is the time to wait after /readyz → 503 before beginning
 	// supervisor shutdown, giving k8s time to remove the endpoint (default 5s).
 	PreStopDelay time.Duration // WADIST_PRESTOP_DELAY default 5s
@@ -99,6 +102,13 @@ func Load() (*Config, error) {
 	if v := getenv("WADIST_PRESTOP_DELAY", ""); v != "" {
 		if d, err := time.ParseDuration(v); err == nil && d > 0 {
 			cfg.PreStopDelay = d
+		}
+	}
+
+	cfg.CanaryPercent = 0
+	if v := getenv("WADIST_CANARY_PERCENT", ""); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n >= 0 && n <= 100 {
+			cfg.CanaryPercent = uint8(n)
 		}
 	}
 

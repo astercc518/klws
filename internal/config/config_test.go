@@ -190,3 +190,39 @@ func TestLoad_InvalidKeyLength_ReturnsError(t *testing.T) {
 		t.Fatal("expected error for 16-byte WADIST_MASTER_KEY")
 	}
 }
+
+func TestLoad_CanaryPercentDefault(t *testing.T) {
+	t.Setenv("WADIST_POSTGRES_DSN", "postgres://x")
+	t.Setenv("WADIST_CANARY_PERCENT", "")
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if cfg.CanaryPercent != 0 {
+		t.Fatalf("CanaryPercent default: got %d, want 0", cfg.CanaryPercent)
+	}
+}
+
+func TestLoad_CanaryPercentValid(t *testing.T) {
+	t.Setenv("WADIST_POSTGRES_DSN", "postgres://x")
+	t.Setenv("WADIST_CANARY_PERCENT", "25")
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if cfg.CanaryPercent != 25 {
+		t.Fatalf("CanaryPercent: got %d, want 25", cfg.CanaryPercent)
+	}
+}
+
+func TestLoad_CanaryPercentOutOfRange(t *testing.T) {
+	t.Setenv("WADIST_POSTGRES_DSN", "postgres://x")
+	t.Setenv("WADIST_CANARY_PERCENT", "150")
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if cfg.CanaryPercent != 0 {
+		t.Fatalf("CanaryPercent out-of-range should be 0, got %d", cfg.CanaryPercent)
+	}
+}

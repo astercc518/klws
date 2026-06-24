@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/acme/wadist/internal/billing"
+	"github.com/acme/wadist/internal/canary"
 )
 
 // ProcessSend runs one send end-to-end:
@@ -26,6 +27,7 @@ func (w *SendWorker) ProcessSend(ctx context.Context, pl SendPayload, body, medi
 	}
 	if st == "sent" || st == "failed" {
 		w.m.RecordSend("idempotent_skip")
+		w.m.RecordCohortSend(canary.Cohort(pl.JID, w.canaryPct), "idempotent_skip")
 		return nil // terminal — already processed; at-least-once retry is a no-op
 	}
 
@@ -36,6 +38,7 @@ func (w *SendWorker) ProcessSend(ctx context.Context, pl SendPayload, body, medi
 	if !dec.Allow {
 		w.m.RecordGate(false, dec.Reason)
 		w.m.RecordSend("gate_denied")
+		w.m.RecordCohortSend(canary.Cohort(pl.JID, w.canaryPct), "gate_denied")
 		return w.requeue(ctx, pl, dec.Reason) // back to pending, no charge
 	}
 	w.m.RecordGate(true, "ok")
@@ -49,6 +52,7 @@ func (w *SendWorker) ProcessSend(ctx context.Context, pl SendPayload, body, medi
 	}); err != nil {
 		w.m.RecordBilling("hold", holdOutcome(err))
 		w.m.RecordSend("hold_failed")
+		w.m.RecordCohortSend(canary.Cohort(pl.JID, w.canaryPct), "hold_failed")
 		dec.Ticket.Release(ctx)
 		return w.requeue(ctx, pl, "billing:"+err.Error())
 	}
@@ -62,6 +66,7 @@ func (w *SendWorker) ProcessSend(ctx context.Context, pl SendPayload, body, medi
 			dec.Ticket.Release(ctx)
 			_ = w.billing.RequestRefund(ctx, pl.TenantID, pl.MessageID, "media: "+err.Error())
 			w.m.RecordSend("media_failed")
+			w.m.RecordCohortSend(canary.Cohort(pl.JID, w.canaryPct), "media_failed")
 			return w.markFailed(ctx, pl, err)
 		}
 	}
@@ -79,16 +84,19 @@ func (w *SendWorker) ProcessSend(ctx context.Context, pl SendPayload, body, medi
 		_ = w.billing.RequestRefund(ctx, pl.TenantID, pl.MessageID, sendErr.Error())
 		_ = w.markFailed(ctx, pl, sendErr)
 		w.m.RecordSend("send_failed")
+		w.m.RecordCohortSend(canary.Cohort(pl.JID, w.canaryPct), "send_failed")
 		return sendErr
 	}
 
 	if err := w.billing.Settle(ctx, pl.TenantID, pl.MessageID); err != nil {
 		w.m.RecordBilling("settle", "error")
 		w.m.RecordSend("settle_failed")
+		w.m.RecordCohortSend(canary.Cohort(pl.JID, w.canaryPct), "settle_failed")
 		return fmt.Errorf("settle: %w", err) // retry-safe (Settle idempotent)
 	}
 	w.m.RecordBilling("settle", "ok")
 	w.m.RecordSend("sent")
+	w.m.RecordCohortSend(canary.Cohort(pl.JID, w.canaryPct), "sent")
 	_ = w.gate.ApplyHealthSignal(ctx, pl.JID, "delivered", 0)
 	return w.markSent(ctx, pl, waID)
 }
