@@ -155,6 +155,18 @@ func TestLoad_NodeRegionCustom(t *testing.T) {
 	}
 }
 
+func TestLoad_AsynqConcurrencyDefault(t *testing.T) {
+	t.Setenv("WADIST_POSTGRES_DSN", "postgres://x")
+	t.Setenv("WADIST_ASYNQ_CONCURRENCY", "")
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if cfg.AsynqConcurrency != 32 {
+		t.Fatalf("AsynqConcurrency default: got %d, want 32", cfg.AsynqConcurrency)
+	}
+}
+
 func TestLoad_InvalidKeyLength_ReturnsError(t *testing.T) {
 	// Encode only 16 bytes (wrong length).
 	short := base64.StdEncoding.EncodeToString(make([]byte, 16))

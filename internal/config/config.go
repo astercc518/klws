@@ -34,6 +34,8 @@ type Config struct {
 	AppSystemDSN string // WADIST_APP_SYSTEM_DSN — role app_system (BYPASSRLS)
 	// NodeRegion is the data-residency region for this node (M10 stub; M11 adds per-region pools).
 	NodeRegion string // WADIST_NODE_REGION default "default"
+	// AsynqConcurrency is the number of concurrent Asynq workers (default 32).
+	AsynqConcurrency int // WADIST_ASYNQ_CONCURRENCY default 32
 }
 
 // Load reads configuration from the environment. PostgresDSN is required;
@@ -84,6 +86,12 @@ func Load() (*Config, error) {
 	cfg.AppTenantDSN = getenv("WADIST_APP_TENANT_DSN", "")
 	cfg.AppSystemDSN = getenv("WADIST_APP_SYSTEM_DSN", "")
 	cfg.NodeRegion = getenv("WADIST_NODE_REGION", "default")
+	cfg.AsynqConcurrency = 32
+	if v := getenv("WADIST_ASYNQ_CONCURRENCY", ""); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			cfg.AsynqConcurrency = n
+		}
+	}
 
 	mk, err := decodeKey32("WADIST_MASTER_KEY")
 	if err != nil {
