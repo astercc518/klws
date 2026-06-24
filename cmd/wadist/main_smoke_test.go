@@ -17,6 +17,9 @@ func TestRun_BootsMetrics(t *testing.T) {
 	if testing.Short() || os.Getenv("WADIST_POSTGRES_DSN") == "" {
 		t.Skip("integration: set WADIST_POSTGRES_DSN")
 	}
+	// Keep stop() fast: default PreStopDelay is 5s, which slows the smoke test.
+	// 1ms is a legal positive value so the <=0→5s fallback doesn't apply.
+	t.Setenv("WADIST_PRESTOP_DELAY", "1ms")
 	cfg := loadForTest(t) // config.Load() with MetricsAddr set to 127.0.0.1:0
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()

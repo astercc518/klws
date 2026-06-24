@@ -36,6 +36,9 @@ type Config struct {
 	NodeRegion string // WADIST_NODE_REGION default "default"
 	// AsynqConcurrency is the number of concurrent Asynq workers (default 32).
 	AsynqConcurrency int // WADIST_ASYNQ_CONCURRENCY default 32
+	// PreStopDelay is the time to wait after /readyz → 503 before beginning
+	// supervisor shutdown, giving k8s time to remove the endpoint (default 5s).
+	PreStopDelay time.Duration // WADIST_PRESTOP_DELAY default 5s
 }
 
 // Load reads configuration from the environment. PostgresDSN is required;
@@ -90,6 +93,12 @@ func Load() (*Config, error) {
 	if v := getenv("WADIST_ASYNQ_CONCURRENCY", ""); v != "" {
 		if n, err := strconv.Atoi(v); err == nil && n > 0 {
 			cfg.AsynqConcurrency = n
+		}
+	}
+	cfg.PreStopDelay = 5 * time.Second
+	if v := getenv("WADIST_PRESTOP_DELAY", ""); v != "" {
+		if d, err := time.ParseDuration(v); err == nil && d > 0 {
+			cfg.PreStopDelay = d
 		}
 	}
 

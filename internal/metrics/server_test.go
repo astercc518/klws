@@ -33,6 +33,37 @@ func TestServer_Handler_MetricsAndHealthz(t *testing.T) {
 	}
 }
 
+func TestServer_Readyz_ReflectsState(t *testing.T) {
+	reg := prometheus.NewRegistry()
+	New(reg)
+	s := NewServer(":0", reg)
+
+	// default NOT ready → 503
+	rec := httptest.NewRecorder()
+	s.Handler().ServeHTTP(rec, httptest.NewRequest("GET", "/readyz", nil))
+	if rec.Code != 503 {
+		t.Fatalf("default readyz want 503, got %d", rec.Code)
+	}
+	s.SetReady(true)
+	rec = httptest.NewRecorder()
+	s.Handler().ServeHTTP(rec, httptest.NewRequest("GET", "/readyz", nil))
+	if rec.Code != 200 || !strings.Contains(rec.Body.String(), "ready") {
+		t.Fatalf("ready readyz want 200/ready, got %d %q", rec.Code, rec.Body.String())
+	}
+	s.SetReady(false)
+	rec = httptest.NewRecorder()
+	s.Handler().ServeHTTP(rec, httptest.NewRequest("GET", "/readyz", nil))
+	if rec.Code != 503 {
+		t.Fatalf("draining readyz want 503, got %d", rec.Code)
+	}
+	// /healthz stays 200 regardless of readiness
+	rec = httptest.NewRecorder()
+	s.Handler().ServeHTTP(rec, httptest.NewRequest("GET", "/healthz", nil))
+	if rec.Code != 200 {
+		t.Fatalf("healthz must stay 200, got %d", rec.Code)
+	}
+}
+
 func TestServer_StartShutdown(t *testing.T) {
 	reg := prometheus.NewRegistry()
 	New(reg)

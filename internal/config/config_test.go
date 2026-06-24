@@ -6,6 +6,18 @@ import (
 	"time"
 )
 
+func TestLoad_PreStopDelayDefault(t *testing.T) {
+	t.Setenv("WADIST_POSTGRES_DSN", "postgres://x")
+	t.Setenv("WADIST_PRESTOP_DELAY", "")
+	cfg, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.PreStopDelay != 5*time.Second {
+		t.Fatalf("PreStopDelay default: got %v, want 5s", cfg.PreStopDelay)
+	}
+}
+
 func TestLoad_TakeoverIntervalDefaults(t *testing.T) {
 	t.Setenv("WADIST_POSTGRES_DSN", "postgres://x")
 	t.Setenv("WADIST_HEARTBEAT_INTERVAL", "")
