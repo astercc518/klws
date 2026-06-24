@@ -24,6 +24,13 @@ GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO app_tenant, app_system;
 ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO app_tenant, app_system;
 -- audit_log is append-only even for these roles (see Task 4):
 -- (REVOKE UPDATE, DELETE ON audit_log added in Task 4 after the table exists)
+-- ── PII at-rest encryption columns (dual-write; plaintext kept until M11 contract) ──
+ALTER TABLE account_devices    ADD COLUMN IF NOT EXISTS phone_number_enc BYTEA;
+ALTER TABLE campaign_recipients ADD COLUMN IF NOT EXISTS phone_enc BYTEA;
+ALTER TABLE campaign_recipients ADD COLUMN IF NOT EXISTS phone_bidx BYTEA;
+-- blind-index unique for dedup (coexists with the legacy UNIQUE(campaign_id, phone) until contract):
+CREATE UNIQUE INDEX IF NOT EXISTS idx_recip_phone_bidx ON campaign_recipients (campaign_id, phone_bidx)
+  WHERE phone_bidx IS NOT NULL;
 
 -- ── enable RLS + tenant-isolation policy on the 9 tenant-scoped tables ──
 DO $$
