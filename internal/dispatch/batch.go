@@ -23,13 +23,33 @@ func (d *Dispatcher) dispatchBatch(ctx context.Context, campaignID int64, batch 
 	}
 	assigned := 0
 	err = pgx.BeginTxFunc(ctx, d.pool, pgx.TxOptions{}, func(tx pgx.Tx) error {
+		// Mark suppressed-but-pending recipients as 'skipped' so they leave the
+		// pending pool and are observable, before pulling recipients to dispatch.
+		if _, err := tx.Exec(ctx, `
+UPDATE campaign_recipients
+   SET state='skipped'
+ WHERE campaign_id=$1
+   AND state='pending'
+   AND assigned_jid IS NULL
+   AND phone_bidx IS NOT NULL
+   AND EXISTS (
+       SELECT 1 FROM suppression_list s
+        WHERE s.tenant_id=$2 AND s.phone_bidx = campaign_recipients.phone_bidx
+   )`, campaignID, tenantID); err != nil {
+			return fmt.Errorf("mark suppressed as skipped: %w", err)
+		}
+
 		rows, err := tx.Query(ctx, `
 SELECT id, phone, country_code, vars
   FROM campaign_recipients
  WHERE campaign_id=$1 AND state='pending' AND assigned_jid IS NULL
    AND attempt < $3 -- cap denied-send churn; full backoff is future work
+   AND NOT EXISTS (
+       SELECT 1 FROM suppression_list s
+        WHERE s.tenant_id=$4 AND s.phone_bidx = campaign_recipients.phone_bidx
+   )
  FOR UPDATE SKIP LOCKED
- LIMIT $2`, campaignID, batch, maxAttempts)
+ LIMIT $2`, campaignID, batch, maxAttempts, tenantID)
 		if err != nil {
 			return fmt.Errorf("pull recipients: %w", err)
 		}

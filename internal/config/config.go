@@ -3,6 +3,7 @@
 package config
 
 import (
+	"encoding/base64"
 	"fmt"
 	"os"
 	"strconv"
@@ -22,9 +23,17 @@ type Config struct {
 	ShutdownTimeout     time.Duration
 	MaxConcurrentStarts int
 	// Distributed takeover intervals.
-	HeartbeatInterval   time.Duration // how often this node upserts its heartbeat (default 10s)
-	NodeStaleness       time.Duration // stale threshold: nodes silent longer than this are dead (default 30s)
+	HeartbeatInterval    time.Duration // how often this node upserts its heartbeat (default 10s)
+	NodeStaleness        time.Duration // stale threshold: nodes silent longer than this are dead (default 30s)
 	TakeoverScanInterval time.Duration // how often the takeover loop runs (default 15s)
+	// Encryption keys (optional at startup; required when crypto operations are performed).
+	MasterKey     []byte // 32-byte KEK decoded from WADIST_MASTER_KEY (base64-std); nil if env unset.
+	BlindIndexKey []byte // 32-byte HMAC key decoded from WADIST_BLIND_INDEX_KEY (base64-std); nil if env unset.
+	// RLS role DSNs. Empty → falls back to PostgresDSN (single-DSN dev mode).
+	AppTenantDSN string // WADIST_APP_TENANT_DSN — role app_tenant (RLS enforced)
+	AppSystemDSN string // WADIST_APP_SYSTEM_DSN — role app_system (BYPASSRLS)
+	// NodeRegion is the data-residency region for this node (M10 stub; M11 adds per-region pools).
+	NodeRegion string // WADIST_NODE_REGION default "default"
 }
 
 // Load reads configuration from the environment. PostgresDSN is required;
@@ -72,6 +81,20 @@ func Load() (*Config, error) {
 			cfg.TakeoverScanInterval = d
 		}
 	}
+	cfg.AppTenantDSN = getenv("WADIST_APP_TENANT_DSN", "")
+	cfg.AppSystemDSN = getenv("WADIST_APP_SYSTEM_DSN", "")
+	cfg.NodeRegion = getenv("WADIST_NODE_REGION", "default")
+
+	mk, err := decodeKey32("WADIST_MASTER_KEY")
+	if err != nil {
+		return nil, err
+	}
+	cfg.MasterKey = mk
+	bik, err := decodeKey32("WADIST_BLIND_INDEX_KEY")
+	if err != nil {
+		return nil, err
+	}
+	cfg.BlindIndexKey = bik
 	return cfg, nil
 }
 
@@ -82,6 +105,8 @@ func (c *Config) Store() store.Config {
 		MaxOpenConns: c.MaxOpenConns,
 		MaxLockConns: c.MaxLockConns,
 		NodeID:       c.NodeID,
+		AppTenantDSN: c.AppTenantDSN,
+		AppSystemDSN: c.AppSystemDSN,
 	}
 }
 
@@ -109,4 +134,21 @@ func hostnameOr(def string) string {
 		return h
 	}
 	return def
+}
+
+// decodeKey32 reads an env var, base64-std-decodes it, and validates it is
+// exactly 32 bytes. Returns nil, nil when the env var is empty (keyless startup).
+func decodeKey32(envVar string) ([]byte, error) {
+	v := os.Getenv(envVar)
+	if v == "" {
+		return nil, nil
+	}
+	key, err := base64.StdEncoding.DecodeString(v)
+	if err != nil {
+		return nil, fmt.Errorf("config: %s: base64 decode: %w", envVar, err)
+	}
+	if len(key) != 32 {
+		return nil, fmt.Errorf("config: %s: must decode to exactly 32 bytes, got %d", envVar, len(key))
+	}
+	return key, nil
 }

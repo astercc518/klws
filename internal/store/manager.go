@@ -16,12 +16,14 @@ import (
 )
 
 type Manager struct {
-	cfg       Config
-	container *sqlstore.Container
-	bizPool   *pgxpool.Pool
-	lockPool  *pgxpool.Pool
-	sqlDB     *sql.DB
-	log       waLog.Logger
+	cfg        Config
+	container  *sqlstore.Container
+	bizPool    *pgxpool.Pool
+	lockPool   *pgxpool.Pool
+	tenantPool *pgxpool.Pool // RLS-constrained role app_tenant (or bizPool fallback)
+	systemPool *pgxpool.Pool // BYPASSRLS role app_system (or bizPool fallback)
+	sqlDB      *sql.DB
+	log        waLog.Logger
 }
 
 var (
@@ -110,7 +112,61 @@ func newManager(ctx context.Context, cfg Config, logger waLog.Logger) (*Manager,
 		return nil, fmt.Errorf("create lock pool: %w", err)
 	}
 
-	return &Manager{cfg: cfg, container: container, bizPool: bizPool, lockPool: lockPool, sqlDB: sqlDB, log: logger}, nil
+	// RLS role pools: if DSN is provided build a dedicated pool, else fall back to bizPool.
+	tenantPool := bizPool
+	if cfg.AppTenantDSN != "" {
+		tCfg, err := pgxpool.ParseConfig(cfg.AppTenantDSN)
+		if err != nil {
+			lockPool.Close()
+			bizPool.Close()
+			_ = sqlDB.Close()
+			return nil, fmt.Errorf("parse tenant pool config: %w", err)
+		}
+		tCfg.MaxConns = cfg.MaxOpenConns
+		tenantPool, err = pgxpool.NewWithConfig(ctx, tCfg)
+		if err != nil {
+			lockPool.Close()
+			bizPool.Close()
+			_ = sqlDB.Close()
+			return nil, fmt.Errorf("create tenant pool: %w", err)
+		}
+	}
+
+	systemPool := bizPool
+	if cfg.AppSystemDSN != "" {
+		sCfg, err := pgxpool.ParseConfig(cfg.AppSystemDSN)
+		if err != nil {
+			if tenantPool != bizPool {
+				tenantPool.Close()
+			}
+			lockPool.Close()
+			bizPool.Close()
+			_ = sqlDB.Close()
+			return nil, fmt.Errorf("parse system pool config: %w", err)
+		}
+		sCfg.MaxConns = cfg.MaxOpenConns
+		systemPool, err = pgxpool.NewWithConfig(ctx, sCfg)
+		if err != nil {
+			if tenantPool != bizPool {
+				tenantPool.Close()
+			}
+			lockPool.Close()
+			bizPool.Close()
+			_ = sqlDB.Close()
+			return nil, fmt.Errorf("create system pool: %w", err)
+		}
+	}
+
+	return &Manager{
+		cfg:        cfg,
+		container:  container,
+		bizPool:    bizPool,
+		lockPool:   lockPool,
+		tenantPool: tenantPool,
+		systemPool: systemPool,
+		sqlDB:      sqlDB,
+		log:        logger,
+	}, nil
 }
 
 func (m *Manager) BizPool() *pgxpool.Pool { return m.bizPool }
@@ -119,6 +175,13 @@ func (m *Manager) BizPool() *pgxpool.Pool { return m.bizPool }
 func (m *Manager) Pool() *pgxpool.Pool { return m.bizPool }
 
 func (m *Manager) Close() {
+	// Close RLS pools first if they are distinct from bizPool (pointer compare).
+	if m.tenantPool != nil && m.tenantPool != m.bizPool {
+		m.tenantPool.Close()
+	}
+	if m.systemPool != nil && m.systemPool != m.bizPool {
+		m.systemPool.Close()
+	}
 	if m.bizPool != nil {
 		m.bizPool.Close()
 	}

@@ -14,9 +14,11 @@ import (
 	"github.com/prometheus/client_golang/prometheus"
 	goredis "github.com/redis/go-redis/v9"
 
+	"github.com/acme/wadist/internal/audit"
 	"github.com/acme/wadist/internal/billing"
 	"github.com/acme/wadist/internal/cluster"
 	"github.com/acme/wadist/internal/config"
+	"github.com/acme/wadist/internal/crypto"
 	"github.com/acme/wadist/internal/dispatch"
 	walog "github.com/acme/wadist/internal/log"
 	"github.com/acme/wadist/internal/metrics"
@@ -90,13 +92,33 @@ func run(ctx context.Context, cfg *config.Config) (*metrics.Server, func(), erro
 
 	pool := mgr.Pool()
 
+	// Security wiring: Cipher + KeyRepo + AuditWriter + data-residency Router.
+	// When MasterKey is empty the node starts without encryption (dev/CI mode).
+	billingRepo := billing.NewRepo(pool)
+	if len(cfg.MasterKey) > 0 {
+		kr, err := crypto.NewKeyRepo(mgr.SystemPool(), cfg.MasterKey)
+		if err != nil {
+			mgr.Close()
+			flush()
+			return nil, nil, fmt.Errorf("crypto keyrepo: %w", err)
+		}
+		cipher := crypto.NewCipher(kr)
+		aw := audit.NewAuditWriter(mgr.SystemPool())
+		router := crypto.NewRouter(mgr.Pool())
+		router.Register(cfg.NodeRegion, mgr.Pool())
+		// Wire billing with RLS + audit.
+		billingRepo.UseTenantRLS(mgr).UseAudit(aw)
+		// TODO(PII import path): pass cipher/router to campaign import handler in M11.
+		log.Printf("security enabled (region=%s cipher=%T router=%T)", cfg.NodeRegion, cipher, router)
+	} else {
+		log.Printf("security disabled (no WADIST_MASTER_KEY)")
+	}
+
 	reg := cluster.NewRegistry()
 
 	promReg := prometheus.NewRegistry()
 	m := metrics.New(promReg)
 	promReg.MustRegister(metrics.NewDBCollector(pool, 10*time.Second, reg))
-
-	billingRepo := billing.NewRepo(pool)
 
 	rdb := goredis.NewClient(&goredis.Options{Addr: cfg.RedisAddr})
 	adm := sendgate.NewAdmission(rdb)
