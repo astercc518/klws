@@ -72,7 +72,7 @@ func TestRunTakeoverScanner_EnqueuesStale(t *testing.T) {
 	seedAccountDevice(t, ctx, m, "jid-stale")
 	m.ClaimAccount(ctx, "jid-stale", "dead")
 
-	o := NewOrchestrator(m, nil, nil, "node-scan", nil, time.Second)
+	o := NewOrchestrator(m, nil, nil, "node-scan", nil, time.Second, nil)
 	enq := NewTakeoverEnqueuer(client, 30*time.Second)
 	// Direct call to scanOnce — no ticker needed for the unit test
 	n, err := o.scanOnce(ctx, 30*time.Second, enq)
@@ -81,5 +81,35 @@ func TestRunTakeoverScanner_EnqueuesStale(t *testing.T) {
 	}
 	if n < 1 {
 		t.Fatalf("expected >=1 stale enqueued, got %d", n)
+	}
+}
+
+func TestScanOnce_EnqueuesUnowned(t *testing.T) {
+	if testing.Short() {
+		t.Skip("integration")
+	}
+	m := newTestManager(t)
+	ctx := context.Background()
+	redisAddr := startRedis(t)
+	client := asynq.NewClient(asynq.RedisClientOpt{Addr: redisAddr})
+	defer client.Close()
+
+	// Seed one owned (live) account — must NOT be picked up by unowned path.
+	m.BizPool().Exec(ctx, `INSERT INTO cluster_nodes (node_id, last_heartbeat_at) VALUES ('live', now())`)
+	seedAccountDevice(t, ctx, m, "jid-owned-scan")
+	m.ClaimAccount(ctx, "jid-owned-scan", "live")
+
+	// Seed one unowned active account (owner_node IS NULL).
+	seedAccountDevice(t, ctx, m, "jid-unowned-scan")
+
+	o := NewOrchestrator(m, nil, nil, "node-scan2", nil, time.Second, nil)
+	enq := NewTakeoverEnqueuer(client, 30*time.Second)
+	// staleness large enough that the live node is not stale — only unowned should be enqueued.
+	n, err := o.scanOnce(ctx, 10*time.Minute, enq)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n < 1 {
+		t.Fatalf("expected >=1 unowned enqueued, got %d", n)
 	}
 }

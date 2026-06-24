@@ -151,7 +151,9 @@ func TestClaimAccount(t *testing.T) {
 		t.Fatal(err)
 	}
 	var owner string
-	m.bizPool.QueryRow(ctx, `SELECT owner_node FROM account_devices WHERE account_jid='jid-c1'`).Scan(&owner)
+	if err := m.bizPool.QueryRow(ctx, `SELECT owner_node FROM account_devices WHERE account_jid='jid-c1'`).Scan(&owner); err != nil {
+		t.Fatal(err)
+	}
 	if owner != "node-x" {
 		t.Fatalf("owner_node=%q", owner)
 	}
@@ -184,6 +186,38 @@ func TestStaleOwnedAccounts(t *testing.T) {
 	}
 	if !found["jid-dead"] || found["jid-live"] {
 		t.Fatalf("stale detection wrong: %v", stale)
+	}
+}
+
+func TestListUnownedActiveAccounts(t *testing.T) {
+	if testing.Short() {
+		t.Skip("integration")
+	}
+	m := newTestManager(t)
+	ctx := context.Background()
+	if _, err := m.bizPool.Exec(ctx, readMigration0007(t)); err != nil {
+		t.Fatalf("apply migration 0007: %v", err)
+	}
+	// Seed an owned account (should NOT appear).
+	m.UpsertNodeHeartbeat(ctx, "live-node-u")
+	seedAccountDevice(t, ctx, m, "jid-owned-u")
+	m.ClaimAccount(ctx, "jid-owned-u", "live-node-u")
+	// Seed an unowned active account (should appear).
+	seedAccountDevice(t, ctx, m, "jid-unowned-u")
+
+	jids, err := m.ListUnownedActiveAccounts(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	found := map[string]bool{}
+	for _, j := range jids {
+		found[j] = true
+	}
+	if !found["jid-unowned-u"] {
+		t.Fatalf("expected jid-unowned-u in results, got %v", jids)
+	}
+	if found["jid-owned-u"] {
+		t.Fatalf("owned account jid-owned-u must not appear in unowned results, got %v", jids)
 	}
 }
 

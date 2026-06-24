@@ -138,7 +138,7 @@ func TestStartAccountWithLock_ClaimsAndRegisters(t *testing.T) {
 	factory := func(_ context.Context, jid string, lock cluster.DeviceLockHandle) (*cluster.Session, error) {
 		return cluster.NewSession(jid, &fakeConn{connected: true}, lock), nil
 	}
-	o := NewOrchestrator(m, reg, sup, "node-1", factory, time.Second)
+	o := NewOrchestrator(m, reg, sup, "node-1", factory, time.Second, nil)
 	sess, err := o.StartAccountWithLock(ctx, "jid-s1")
 	if err != nil || sess == nil {
 		t.Fatalf("start: sess=%v err=%v", sess, err)
@@ -174,7 +174,7 @@ func TestStartAccountWithLock_SkipsWhenLockedByPeer(t *testing.T) {
 		t.Fatal("factory must not be called when lock is held by a peer")
 		return nil, nil
 	}
-	o := NewOrchestrator(m, reg, sup, "node-2", factory, time.Second)
+	o := NewOrchestrator(m, reg, sup, "node-2", factory, time.Second, nil)
 	sess, err := o.StartAccountWithLock(ctx, "jid-s2")
 	if err != nil || sess != nil {
 		t.Fatalf("expected (nil,nil) skip, got sess=%v err=%v", sess, err)
@@ -190,7 +190,7 @@ func TestGuardSession_RemovesOnUnhealthy(t *testing.T) {
 	fl := &fakeLock{healthy: true}
 	sess := cluster.NewSession("jid-g", &fakeConn{connected: true}, fl)
 	reg.Add(sess)
-	o := NewOrchestrator(nil, reg, sup, "node-g", nil, 5*time.Millisecond)
+	o := NewOrchestrator(nil, reg, sup, "node-g", nil, 5*time.Millisecond, nil)
 	go o.guardSession(context.Background(), sess)
 	time.Sleep(20 * time.Millisecond)
 	fl.setHealthy(false) // simulate lost ownership

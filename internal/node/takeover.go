@@ -70,29 +70,39 @@ func (o *Orchestrator) RunHeartbeat(ctx context.Context, interval time.Duration)
 			return ctx.Err()
 		case <-t.C:
 			if err := o.mgr.UpsertNodeHeartbeat(ctx, o.nodeID); err != nil {
-				// transient — log-and-continue (next tick retries)
+				o.logger.Errorf("heartbeat: %v", err)
 			}
 		}
 	}
 }
 
 func (o *Orchestrator) scanOnce(ctx context.Context, staleness time.Duration, enq *TakeoverEnqueuer) (int, error) {
-	jids, err := o.mgr.StaleOwnedAccounts(ctx, staleness)
+	stale, err := o.mgr.StaleOwnedAccounts(ctx, staleness)
 	if err != nil {
 		return 0, fmt.Errorf("scan stale: %w", err)
 	}
+	unowned, err := o.mgr.ListUnownedActiveAccounts(ctx)
+	if err != nil {
+		return 0, fmt.Errorf("scan unowned: %w", err)
+	}
+
+	// Merge both sets; asynq.Unique deduplicates across nodes cluster-wide.
+	all := append(stale, unowned...)
 	n := 0
-	for _, jid := range jids {
+	var lastErr error
+	for _, jid := range all {
 		if err := enq.Enqueue(ctx, jid); err != nil {
-			return n, fmt.Errorf("enqueue takeover %s: %w", jid, err)
+			o.logger.Errorf("enqueue takeover %s: %v", jid, err)
+			lastErr = err
+			continue
 		}
 		n++
 	}
-	return n, nil
+	return n, lastErr
 }
 
 // RunTakeoverScanner is a managed loop: each tick, enqueue takeover for accounts
-// owned by stale nodes (deduped via Unique).
+// owned by stale nodes or with no owner (deduped via Unique).
 func (o *Orchestrator) RunTakeoverScanner(ctx context.Context, scanInterval, staleness time.Duration, enq *TakeoverEnqueuer) error {
 	t := time.NewTicker(scanInterval)
 	defer t.Stop()
@@ -102,7 +112,7 @@ func (o *Orchestrator) RunTakeoverScanner(ctx context.Context, scanInterval, sta
 			return ctx.Err()
 		case <-t.C:
 			if _, err := o.scanOnce(ctx, staleness, enq); err != nil {
-				// transient — log-and-continue
+				o.logger.Errorf("takeover scan: %v", err)
 			}
 		}
 	}

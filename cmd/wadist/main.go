@@ -150,7 +150,7 @@ func run(ctx context.Context, cfg *config.Config) (*metrics.Server, func(), erro
 		ShutdownTimeout: cfg.ShutdownTimeout,
 	})
 
-	orch := node.NewOrchestrator(mgr, reg, sup, cfg.NodeID, factory, cfg.HeartbeatInterval)
+	orch := node.NewOrchestrator(mgr, reg, sup, cfg.NodeID, factory, cfg.HeartbeatInterval, logger)
 
 	takeEnq := node.NewTakeoverEnqueuer(asynqClient, cfg.NodeStaleness)
 	node.RegisterTakeoverHandler(mux, orch)

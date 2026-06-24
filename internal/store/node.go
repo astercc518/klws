@@ -111,6 +111,26 @@ SELECT a.account_jid
 	return out, rows.Err()
 }
 
+// ListUnownedActiveAccounts returns active accounts with no owner_node set —
+// accounts that were deregistered gracefully and not yet re-adopted.
+func (m *Manager) ListUnownedActiveAccounts(ctx context.Context) ([]string, error) {
+	rows, err := m.bizPool.Query(ctx,
+		`SELECT account_jid FROM account_devices WHERE ban_status='active' AND owner_node IS NULL ORDER BY account_jid`)
+	if err != nil {
+		return nil, fmt.Errorf("list unowned active accounts: %w", err)
+	}
+	defer rows.Close()
+	var out []string
+	for rows.Next() {
+		var jid string
+		if err := rows.Scan(&jid); err != nil {
+			return nil, fmt.Errorf("scan unowned account: %w", err)
+		}
+		out = append(out, jid)
+	}
+	return out, rows.Err()
+}
+
 // GetBoundProxy reads the cached proxy binding for an account (for reconnect).
 // Returns ErrProxyNotBound if no proxy URL is cached.
 func (m *Manager) GetBoundProxy(ctx context.Context, accountJID string) (*ProxyBinding, error) {
