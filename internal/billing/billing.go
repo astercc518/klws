@@ -1,5 +1,10 @@
 // Package billing implements transactional pre-deduction, settlement, and
 // admin-reviewed refunds over a frozen-funds wallet model.
+//
+// TODO phased-retrofit: dispatch/sendgate/store-node/metrics-dbcollector still
+// run on the superuser pool and need RLS migration in later milestones.
+// Current milestone (M10 Task 2): Hold/Settle/RequestRefund support optional
+// TenantTxBeginner injection via UseTenantRLS; nil → falls back to r.pool.
 package billing
 
 import (
@@ -19,9 +24,31 @@ var (
 	ErrWalletLocked      = errors.New("billing: wallet is locked (reconciliation drift)")
 )
 
-type Repo struct{ pool *pgxpool.Pool }
+// TenantTxBeginner opens a per-tenant RLS-scoped transaction. Satisfied by
+// *store.Manager; nil disables RLS (existing tests, dev mode).
+type TenantTxBeginner interface {
+	WithTenant(ctx context.Context, tenantID int64) (pgx.Tx, error)
+}
+
+type Repo struct {
+	pool *pgxpool.Pool
+	txb  TenantTxBeginner // nil → use r.pool.Begin (backward-compat)
+}
 
 func NewRepo(pool *pgxpool.Pool) *Repo { return &Repo{pool: pool} }
+
+// UseTenantRLS injects a TenantTxBeginner so Hold/Settle/RequestRefund acquire
+// RLS-scoped transactions. Returns r for chaining. Existing callers that never
+// call this have txb=nil and behave identically to before.
+func (r *Repo) UseTenantRLS(b TenantTxBeginner) *Repo { r.txb = b; return r }
+
+// beginTenantTx picks the correct tx source: RLS-scoped if txb is set, else superuser.
+func (r *Repo) beginTenantTx(ctx context.Context, tenantID int64) (pgx.Tx, error) {
+	if r.txb != nil {
+		return r.txb.WithTenant(ctx, tenantID)
+	}
+	return r.pool.Begin(ctx)
+}
 
 type HoldRequest struct {
 	TenantID    int64
@@ -40,8 +67,12 @@ type Charge struct {
 // Idempotent on (TenantID, MessageID): a re-hold returns the existing charge
 // and moves no money.
 func (r *Repo) Hold(ctx context.Context, h HoldRequest) (*Charge, error) {
+	tx, err := r.beginTenantTx(ctx, h.TenantID)
+	if err != nil {
+		return nil, fmt.Errorf("hold begin tx: %w", err)
+	}
 	var out Charge
-	err := pgx.BeginTxFunc(ctx, r.pool, pgx.TxOptions{}, func(tx pgx.Tx) error {
+	err = func() error {
 		var chargeID int64
 		err := tx.QueryRow(ctx, `
 INSERT INTO billing_charges (tenant_id, account_jid, message_id, country_code, amount, state)
@@ -87,9 +118,13 @@ RETURNING id`,
 		}
 		out = Charge{ID: chargeID, State: "held"}
 		return nil
-	})
+	}()
 	if err != nil {
+		_ = tx.Rollback(ctx)
 		return nil, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return nil, fmt.Errorf("hold commit: %w", err)
 	}
 	return &out, nil
 }
@@ -135,7 +170,11 @@ ON CONFLICT (idem_key) DO NOTHING`,
 // Settle marks a held charge settled and consumes the frozen amount (platform
 // revenue). Idempotent: a non-held charge is a silent no-op.
 func (r *Repo) Settle(ctx context.Context, tenantID int64, messageID string) error {
-	return pgx.BeginTxFunc(ctx, r.pool, pgx.TxOptions{}, func(tx pgx.Tx) error {
+	tx, err := r.beginTenantTx(ctx, tenantID)
+	if err != nil {
+		return fmt.Errorf("settle begin tx: %w", err)
+	}
+	err = func() error {
 		var chargeID, amount int64
 		err := tx.QueryRow(ctx, `
 UPDATE billing_charges SET state='settled'
@@ -153,14 +192,23 @@ RETURNING id, amount`, tenantID, messageID).Scan(&chargeID, &amount)
 		}
 		return insertLedger(ctx, tx, tenantID, chargeID, "settle",
 			0, -amount, newBal, newFrz, "settle:"+messageID)
-	})
+	}()
+	if err != nil {
+		_ = tx.Rollback(ctx)
+		return err
+	}
+	return tx.Commit(ctx)
 }
 
 // RequestRefund moves a held charge to refund_pending and enqueues an admin
 // review. Funds STAY frozen — never returned here. Idempotent: charge_id UNIQUE
 // on refund_requests + the state guard prevent duplicates.
 func (r *Repo) RequestRefund(ctx context.Context, tenantID int64, messageID, reason string) error {
-	return pgx.BeginTxFunc(ctx, r.pool, pgx.TxOptions{}, func(tx pgx.Tx) error {
+	tx, err := r.beginTenantTx(ctx, tenantID)
+	if err != nil {
+		return fmt.Errorf("requestrefund begin tx: %w", err)
+	}
+	err = func() error {
 		var chargeID, amount int64
 		err := tx.QueryRow(ctx, `
 UPDATE billing_charges SET state='refund_pending'
@@ -181,7 +229,12 @@ ON CONFLICT (charge_id) DO NOTHING`,
 			return fmt.Errorf("enqueue refund: %w", err)
 		}
 		return nil // money stays frozen, awaiting admin review
-	})
+	}()
+	if err != nil {
+		_ = tx.Rollback(ctx)
+		return err
+	}
+	return tx.Commit(ctx)
 }
 
 // ApproveRefund: admin approves; frozen→balance (funds returned).

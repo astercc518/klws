@@ -29,6 +29,9 @@ type Config struct {
 	// Encryption keys (optional at startup; required when crypto operations are performed).
 	MasterKey     []byte // 32-byte KEK decoded from WADIST_MASTER_KEY (base64-std); nil if env unset.
 	BlindIndexKey []byte // 32-byte HMAC key decoded from WADIST_BLIND_INDEX_KEY (base64-std); nil if env unset.
+	// RLS role DSNs. Empty → falls back to PostgresDSN (single-DSN dev mode).
+	AppTenantDSN string // WADIST_APP_TENANT_DSN — role app_tenant (RLS enforced)
+	AppSystemDSN string // WADIST_APP_SYSTEM_DSN — role app_system (BYPASSRLS)
 }
 
 // Load reads configuration from the environment. PostgresDSN is required;
@@ -76,6 +79,9 @@ func Load() (*Config, error) {
 			cfg.TakeoverScanInterval = d
 		}
 	}
+	cfg.AppTenantDSN = getenv("WADIST_APP_TENANT_DSN", "")
+	cfg.AppSystemDSN = getenv("WADIST_APP_SYSTEM_DSN", "")
+
 	mk, err := decodeKey32("WADIST_MASTER_KEY")
 	if err != nil {
 		return nil, err
@@ -96,6 +102,8 @@ func (c *Config) Store() store.Config {
 		MaxOpenConns: c.MaxOpenConns,
 		MaxLockConns: c.MaxLockConns,
 		NodeID:       c.NodeID,
+		AppTenantDSN: c.AppTenantDSN,
+		AppSystemDSN: c.AppSystemDSN,
 	}
 }
 

@@ -15,6 +15,12 @@ type Config struct {
 	// on this node. Each held lock pins one dedicated connection for its full
 	// session lifetime, so this value equals the per-node account ceiling.
 	MaxLockConns int32
+	// AppTenantDSN is the DSN for the RLS-constrained app_tenant role.
+	// Empty → falls back to bizPool (single-DSN dev mode; RLS not enforced).
+	AppTenantDSN string
+	// AppSystemDSN is the DSN for the app_system role (BYPASSRLS).
+	// Empty → falls back to bizPool.
+	AppSystemDSN string
 }
 
 func (c *Config) withDefaults() {
