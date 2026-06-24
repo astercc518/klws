@@ -28,6 +28,7 @@ type Session struct {
 	jid    string
 	conn   Conn
 	lock   DeviceLockHandle
+	sender SessionSender
 	mu     sync.Mutex
 	closed bool
 }
