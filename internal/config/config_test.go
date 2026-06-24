@@ -5,6 +5,26 @@ import (
 	"time"
 )
 
+func TestLoad_TakeoverIntervalDefaults(t *testing.T) {
+	t.Setenv("WADIST_POSTGRES_DSN", "postgres://x")
+	t.Setenv("WADIST_HEARTBEAT_INTERVAL", "")
+	t.Setenv("WADIST_NODE_STALENESS", "")
+	t.Setenv("WADIST_TAKEOVER_SCAN_INTERVAL", "")
+	cfg, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.HeartbeatInterval != 10*time.Second {
+		t.Fatalf("HeartbeatInterval default: got %v, want 10s", cfg.HeartbeatInterval)
+	}
+	if cfg.NodeStaleness != 30*time.Second {
+		t.Fatalf("NodeStaleness default: got %v, want 30s", cfg.NodeStaleness)
+	}
+	if cfg.TakeoverScanInterval != 15*time.Second {
+		t.Fatalf("TakeoverScanInterval default: got %v, want 15s", cfg.TakeoverScanInterval)
+	}
+}
+
 func TestLoad_MetricsAddrDefault(t *testing.T) {
 	t.Setenv("WADIST_POSTGRES_DSN", "postgres://x")
 	t.Setenv("WADIST_METRICS_ADDR", "")

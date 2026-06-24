@@ -38,6 +38,13 @@ func Init(ctx context.Context, cfg Config, logger waLog.Logger) (*Manager, error
 	return mgr, mgrErr
 }
 
+// NewManager constructs a non-singleton Manager (its own pools). It exists for
+// tests and multi-instance scenarios; production entrypoints MUST use Init (the
+// singleton) to avoid opening duplicate connection pools.
+func NewManager(ctx context.Context, cfg Config, logger waLog.Logger) (*Manager, error) {
+	return newManager(ctx, cfg, logger)
+}
+
 // newManager 构造一个独立 Manager(不走单例),供测试与多实例场景。
 func newManager(ctx context.Context, cfg Config, logger waLog.Logger) (*Manager, error) {
 	cfg.withDefaults()

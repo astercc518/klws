@@ -4,6 +4,7 @@ package main
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log"
 	"os/signal"
 	"syscall"
@@ -19,6 +20,7 @@ import (
 	"github.com/acme/wadist/internal/dispatch"
 	walog "github.com/acme/wadist/internal/log"
 	"github.com/acme/wadist/internal/metrics"
+	"github.com/acme/wadist/internal/node"
 	"github.com/acme/wadist/internal/sendgate"
 	"github.com/acme/wadist/internal/store"
 )
@@ -78,6 +80,14 @@ func run(ctx context.Context, cfg *config.Config) (*metrics.Server, func(), erro
 		flush()
 		return nil, nil, err
 	}
+
+	// Register this node in the cluster.
+	if err := mgr.UpsertNodeHeartbeat(ctx, cfg.NodeID); err != nil {
+		mgr.Close()
+		flush()
+		return nil, nil, fmt.Errorf("upsert node heartbeat: %w", err)
+	}
+
 	pool := mgr.Pool()
 
 	reg := cluster.NewRegistry()
@@ -103,19 +113,56 @@ func run(ctx context.Context, cfg *config.Config) (*metrics.Server, func(), erro
 
 	asynqSrv := asynq.NewServer(
 		asynq.RedisClientOpt{Addr: cfg.RedisAddr},
-		asynq.Config{Concurrency: 32, ShutdownTimeout: cfg.ShutdownTimeout},
+		asynq.Config{Concurrency: 32, ShutdownTimeout: cfg.ShutdownTimeout, Queues: map[string]int{"default": 6, "takeover": 1}},
 	)
 	mux := asynq.NewServeMux()
 	dispatch.RegisterSendHandler(mux, worker, func(_ context.Context, _ int64) (string, string, string, []byte, error) {
 		return "", "", "", nil, errors.New("resolver: not wired (pre-M-send)")
 	})
 
+	// Build a real SessionFactory: acquire device store + optional proxy + whatsmeow conn.
+	factory := node.SessionFactory(func(fctx context.Context, jid string, lock cluster.DeviceLockHandle) (*cluster.Session, error) {
+		device, err := mgr.GetDeviceStore(fctx, jid)
+		if err != nil {
+			return nil, err
+		}
+		proxy, err := mgr.GetBoundProxy(fctx, jid)
+		var proxyBinding *store.ProxyBinding
+		if err == nil {
+			proxyBinding = proxy
+		} else if !errors.Is(err, store.ErrProxyNotBound) {
+			return nil, err
+		}
+		// proxy may be nil if no proxy is bound — that's acceptable
+		conn := cluster.NewWAConn(device, logger, proxyBinding)
+		if err := conn.Connect(fctx); err != nil {
+			return nil, err
+		}
+		return cluster.NewSession(jid, conn, lock), nil
+	})
+
 	sup := cluster.NewSupervisor(reg, cluster.SupervisorOpts{
 		StopIntake:      func() { asynqSrv.Shutdown() },
+		AfterSessions:   func(c context.Context) { _ = mgr.DeregisterNode(c, cfg.NodeID) },
 		CloseStore:      mgr.Close,
 		Flush:           flush,
 		Limit:           cfg.MaxConcurrentStarts,
 		ShutdownTimeout: cfg.ShutdownTimeout,
+	})
+
+	orch := node.NewOrchestrator(mgr, reg, sup, cfg.NodeID, factory, cfg.HeartbeatInterval, logger)
+
+	takeEnq := node.NewTakeoverEnqueuer(asynqClient, cfg.NodeStaleness)
+	node.RegisterTakeoverHandler(mux, orch)
+
+	// Kick off initial account startup with bounded concurrency.
+	jids, err := mgr.ListActiveAccounts(ctx)
+	if err != nil {
+		log.Printf("warn: list active accounts at startup: %v — starting with zero accounts", err)
+		jids = nil
+	}
+	sup.Go(func(lctx context.Context) error {
+		return sup.StartAccounts(lctx, jids, orch.StartAccountWithLock)
 	})
 
 	// Start the supervised dispatch loop: ticks every second, dispatches running
@@ -135,6 +182,12 @@ func run(ctx context.Context, cfg *config.Config) (*metrics.Server, func(), erro
 				}
 			}
 		}
+	})
+	sup.Go(func(lctx context.Context) error {
+		return orch.RunHeartbeat(lctx, cfg.HeartbeatInterval)
+	})
+	sup.Go(func(lctx context.Context) error {
+		return orch.RunTakeoverScanner(lctx, cfg.TakeoverScanInterval, cfg.NodeStaleness, takeEnq)
 	})
 
 	go func() { _ = asynqSrv.Run(mux) }()

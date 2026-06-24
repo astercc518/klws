@@ -45,16 +45,28 @@ func (m *Manager) AcquireDeviceLock(ctx context.Context, accountJID string) (*De
 	return &DeviceLock{conn: conn, key: key}, nil
 }
 
-// Healthy probes CONNECTION liveness only — it does NOT re-validate advisory-lock
-// ownership. If the pinned connection were transparently replaced, Ping could
-// succeed while this session no longer holds the lock. M9 fencing (guardSession)
-// MUST add real ownership re-validation (e.g. check pg_locks for this backend pid,
-// or a fencing epoch) before relying on Healthy to prevent double-open.
+// Healthy re-validates advisory-lock OWNERSHIP, not merely connection liveness.
+// It queries pg_locks ON the pinned connection for a granted advisory lock held
+// by THIS backend (pg_backend_pid()). Each DeviceLock pins its own dedicated
+// connection and acquires exactly one advisory lock, so the presence of any
+// granted advisory lock on this backend confirms we still own this account's
+// lock. If the connection was transparently replaced, pg_backend_pid() is a
+// different backend with no such lock -> false; if the connection is dead, the
+// query errors -> false. This is the fencing primitive guardSession relies on to
+// prevent double-open.
 func (l *DeviceLock) Healthy(ctx context.Context) bool {
 	if l == nil || l.conn == nil {
 		return false
 	}
-	return l.conn.Ping(ctx) == nil
+	var ok bool
+	err := l.conn.QueryRow(ctx, `
+SELECT EXISTS (
+  SELECT 1 FROM pg_locks
+  WHERE locktype = 'advisory'
+    AND pid = pg_backend_pid()
+    AND granted
+)`).Scan(&ok)
+	return err == nil && ok
 }
 
 // Release 释放锁并归还连接。进程崩溃时连接断开,Postgres 自动回收锁。
