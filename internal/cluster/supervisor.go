@@ -9,11 +9,12 @@ import (
 )
 
 type SupervisorOpts struct {
-	StopIntake      func()        // stop asynq intake (waits for in-flight handlers)
-	CloseStore      func()        // close store.Manager (pools + sqlDB)
-	Flush           func()        // flush logger
-	Limit           int           // max concurrent account starts
-	ShutdownTimeout time.Duration // bound for the disconnect/close phase
+	StopIntake      func()                    // stop asynq intake (waits for in-flight handlers)
+	CloseStore      func()                    // close store.Manager (pools + sqlDB)
+	Flush           func()                    // flush logger
+	AfterSessions   func(ctx context.Context) // called after sessions detached, before store closes
+	Limit           int                       // max concurrent account starts
+	ShutdownTimeout time.Duration             // bound for the disconnect/close phase
 }
 
 type managedLoop struct {
@@ -76,7 +77,9 @@ func (s *Supervisor) StartAccounts(ctx context.Context, jids []string, start fun
 			if err != nil {
 				return err
 			}
-			s.reg.Add(sess)
+			if sess != nil {
+				s.reg.Add(sess)
+			}
 			return nil
 		})
 	}
@@ -113,6 +116,10 @@ func (s *Supervisor) Shutdown() {
 	// 3. sessions (bounded by ShutdownTimeout)
 	ctx, cancel := context.WithTimeout(context.Background(), s.opts.ShutdownTimeout)
 	s.reg.CloseAll(ctx)
+	// 3a. after sessions detached (locks released), before store closes
+	if s.opts.AfterSessions != nil {
+		s.opts.AfterSessions(ctx)
+	}
 	cancel()
 	// 4. store
 	if s.opts.CloseStore != nil {

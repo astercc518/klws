@@ -20,6 +20,7 @@ func TestSupervisor_ShutdownOrder(t *testing.T) {
 
 	sup := NewSupervisor(reg, SupervisorOpts{
 		StopIntake:      func() { rec("intake") },
+		AfterSessions:   func(_ context.Context) { rec("deregister") },
 		CloseStore:      func() { rec("store") },
 		Flush:           func() { rec("flush") },
 		Limit:           4,
@@ -42,8 +43,8 @@ func TestSupervisor_ShutdownOrder(t *testing.T) {
 	}
 	mu.Lock()
 	defer mu.Unlock()
-	// 期望顺序：intake -> store -> flush（session 断开通过 conn.connected 验证，夹在 intake 与 store 之间）
-	if len(seq) != 3 || seq[0] != "intake" || seq[1] != "store" || seq[2] != "flush" {
+	// 期望顺序：intake -> deregister -> store -> flush（session 断开通过 conn.connected 验证，夹在 intake 与 store 之间）
+	if len(seq) != 4 || seq[0] != "intake" || seq[1] != "deregister" || seq[2] != "store" || seq[3] != "flush" {
 		t.Fatalf("shutdown order wrong: %v", seq)
 	}
 	if conn.connected {
@@ -99,6 +100,24 @@ func TestSupervisor_StartAccounts_RespectsLimit(t *testing.T) {
 	}
 	if reg.Len() != 40 {
 		t.Fatalf("expected 40 registered, got %d", reg.Len())
+	}
+}
+
+func TestSupervisor_StartAccounts_NilSessionSkipped(t *testing.T) {
+	reg := NewRegistry()
+	sup := NewSupervisor(reg, SupervisorOpts{
+		StopIntake: func() {}, CloseStore: func() {}, Flush: func() {},
+		Limit: 4, ShutdownTimeout: time.Second,
+	})
+	// start func returns (nil, nil) — peer holds the lock; must not panic or register
+	err := sup.StartAccounts(context.Background(), []string{"jid-nil"}, func(_ context.Context, jid string) (*Session, error) {
+		return nil, nil
+	})
+	if err != nil {
+		t.Fatalf("nil-session start must not error: %v", err)
+	}
+	if reg.Len() != 0 {
+		t.Fatalf("nil session must not be registered, got %d", reg.Len())
 	}
 }
 
