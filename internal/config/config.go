@@ -34,6 +34,14 @@ type Config struct {
 	AppSystemDSN string // WADIST_APP_SYSTEM_DSN — role app_system (BYPASSRLS)
 	// NodeRegion is the data-residency region for this node (M10 stub; M11 adds per-region pools).
 	NodeRegion string // WADIST_NODE_REGION default "default"
+	// AsynqConcurrency is the number of concurrent Asynq workers (default 32).
+	AsynqConcurrency int // WADIST_ASYNQ_CONCURRENCY default 32
+	// CanaryPercent is the percentage (0..100) of JIDs assigned to the canary cohort.
+	// Out-of-range or unparseable values fall back to 0 (feature off).
+	CanaryPercent uint8 // WADIST_CANARY_PERCENT default 0
+	// PreStopDelay is the time to wait after /readyz → 503 before beginning
+	// supervisor shutdown, giving k8s time to remove the endpoint (default 5s).
+	PreStopDelay time.Duration // WADIST_PRESTOP_DELAY default 5s
 }
 
 // Load reads configuration from the environment. PostgresDSN is required;
@@ -84,6 +92,25 @@ func Load() (*Config, error) {
 	cfg.AppTenantDSN = getenv("WADIST_APP_TENANT_DSN", "")
 	cfg.AppSystemDSN = getenv("WADIST_APP_SYSTEM_DSN", "")
 	cfg.NodeRegion = getenv("WADIST_NODE_REGION", "default")
+	cfg.AsynqConcurrency = 32
+	if v := getenv("WADIST_ASYNQ_CONCURRENCY", ""); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			cfg.AsynqConcurrency = n
+		}
+	}
+	cfg.PreStopDelay = 5 * time.Second
+	if v := getenv("WADIST_PRESTOP_DELAY", ""); v != "" {
+		if d, err := time.ParseDuration(v); err == nil && d > 0 {
+			cfg.PreStopDelay = d
+		}
+	}
+
+	cfg.CanaryPercent = 0
+	if v := getenv("WADIST_CANARY_PERCENT", ""); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n >= 0 && n <= 100 {
+			cfg.CanaryPercent = uint8(n)
+		}
+	}
 
 	mk, err := decodeKey32("WADIST_MASTER_KEY")
 	if err != nil {

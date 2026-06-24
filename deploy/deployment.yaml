@@ -1,0 +1,42 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: wadist
+spec:
+  replicas: 2
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
+  selector:
+    matchLabels: { app: wadist }
+  template:
+    metadata:
+      labels: { app: wadist }
+    spec:
+      terminationGracePeriodSeconds: 45   # >= PRESTOP_DELAY(5) + SHUTDOWN_TIMEOUT(30) + margin
+      containers:
+        - name: wadist
+          image: wadist:latest
+          ports:
+            - { name: metrics, containerPort: 9090 }
+          env:
+            - { name: WADIST_METRICS_ADDR,       value: ":9090" }
+            - { name: WADIST_PRESTOP_DELAY,       value: "5s" }
+            - { name: WADIST_SHUTDOWN_TIMEOUT,    value: "30s" }
+            - { name: WADIST_MAX_LOCK_CONNS,      value: "300" }
+          readinessProbe:
+            httpGet: { path: /readyz, port: metrics }
+            periodSeconds: 2
+            failureThreshold: 1
+          livenessProbe:
+            httpGet: { path: /healthz, port: metrics }
+            periodSeconds: 10
+            failureThreshold: 3
+          lifecycle:
+            preStop:
+              exec: { command: ["/bin/sh", "-c", "sleep 5"] }
+          resources:
+            requests: { cpu: "500m", memory: "512Mi" }
+            limits:   { cpu: "2",    memory: "1Gi" }

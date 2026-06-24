@@ -131,11 +131,11 @@ func run(ctx context.Context, cfg *config.Config) (*metrics.Server, func(), erro
 
 	// cluster.NewRoutingSender routes sends to live sessions; returns a clear
 	// error when no active session exists rather than silently succeeding.
-	worker := dispatch.NewSendWorker(pool, gate, billingRepo, cluster.NewRoutingSender(reg), placeholderUploader{}).WithMetrics(m)
+	worker := dispatch.NewSendWorker(pool, gate, billingRepo, cluster.NewRoutingSender(reg), placeholderUploader{}).WithMetrics(m).WithCanary(cfg.CanaryPercent)
 
 	asynqSrv := asynq.NewServer(
 		asynq.RedisClientOpt{Addr: cfg.RedisAddr},
-		asynq.Config{Concurrency: 32, ShutdownTimeout: cfg.ShutdownTimeout, Queues: map[string]int{"default": 6, "takeover": 1}},
+		asynq.Config{Concurrency: cfg.AsynqConcurrency, ShutdownTimeout: cfg.ShutdownTimeout, Queues: map[string]int{"default": 6, "takeover": 1}},
 	)
 	mux := asynq.NewServeMux()
 	dispatch.RegisterSendHandler(mux, worker, func(_ context.Context, _ int64) (string, string, string, []byte, error) {
@@ -223,14 +223,22 @@ func run(ctx context.Context, cfg *config.Config) (*metrics.Server, func(), erro
 		return nil, nil, err
 	}
 
-	// stop() delegates asynq intake, store close, and logger flush to the
-	// Supervisor (via StopIntake/CloseStore/Flush opts). It only adds the
-	// metrics HTTP server and redis/asynq client handles not owned by Supervisor.
+	// Node is fully booted: mark ready so /readyz returns 200.
+	srv.SetReady(true)
+
+	// stop() drain sequence for zero-downtime rolling deploy:
+	//   1. /readyz → 503 so k8s stops routing new traffic
+	//   2. sleep PreStopDelay to let k8s remove the endpoint
+	//   3. supervisor drains in-flight work, deregisters, closes store+logger
+	//   4. metrics HTTP server last (so scrapes still work during drain)
+	preStopDelay := cfg.PreStopDelay
 	stop := func() {
-		sup.Shutdown() // intake → loops → sessions → store → flush
+		srv.SetReady(false)          // /readyz → 503: k8s stops routing new work
+		time.Sleep(preStopDelay)     // give k8s time to remove the endpoint
+		sup.Shutdown()               // intake → loops → sessions → store → flush
 		sctx, c := context.WithTimeout(context.Background(), 5*time.Second)
 		defer c()
-		_ = srv.Shutdown(sctx) // metrics http (last, so scrapes still work during shutdown)
+		_ = srv.Shutdown(sctx)       // metrics http (last, so scrapes still work during shutdown)
 		_ = asynqClient.Close()
 		_ = rdb.Close()
 	}

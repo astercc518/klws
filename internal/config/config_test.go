@@ -6,6 +6,18 @@ import (
 	"time"
 )
 
+func TestLoad_PreStopDelayDefault(t *testing.T) {
+	t.Setenv("WADIST_POSTGRES_DSN", "postgres://x")
+	t.Setenv("WADIST_PRESTOP_DELAY", "")
+	cfg, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.PreStopDelay != 5*time.Second {
+		t.Fatalf("PreStopDelay default: got %v, want 5s", cfg.PreStopDelay)
+	}
+}
+
 func TestLoad_TakeoverIntervalDefaults(t *testing.T) {
 	t.Setenv("WADIST_POSTGRES_DSN", "postgres://x")
 	t.Setenv("WADIST_HEARTBEAT_INTERVAL", "")
@@ -155,6 +167,18 @@ func TestLoad_NodeRegionCustom(t *testing.T) {
 	}
 }
 
+func TestLoad_AsynqConcurrencyDefault(t *testing.T) {
+	t.Setenv("WADIST_POSTGRES_DSN", "postgres://x")
+	t.Setenv("WADIST_ASYNQ_CONCURRENCY", "")
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if cfg.AsynqConcurrency != 32 {
+		t.Fatalf("AsynqConcurrency default: got %d, want 32", cfg.AsynqConcurrency)
+	}
+}
+
 func TestLoad_InvalidKeyLength_ReturnsError(t *testing.T) {
 	// Encode only 16 bytes (wrong length).
 	short := base64.StdEncoding.EncodeToString(make([]byte, 16))
@@ -164,5 +188,41 @@ func TestLoad_InvalidKeyLength_ReturnsError(t *testing.T) {
 
 	if _, err := Load(); err == nil {
 		t.Fatal("expected error for 16-byte WADIST_MASTER_KEY")
+	}
+}
+
+func TestLoad_CanaryPercentDefault(t *testing.T) {
+	t.Setenv("WADIST_POSTGRES_DSN", "postgres://x")
+	t.Setenv("WADIST_CANARY_PERCENT", "")
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if cfg.CanaryPercent != 0 {
+		t.Fatalf("CanaryPercent default: got %d, want 0", cfg.CanaryPercent)
+	}
+}
+
+func TestLoad_CanaryPercentValid(t *testing.T) {
+	t.Setenv("WADIST_POSTGRES_DSN", "postgres://x")
+	t.Setenv("WADIST_CANARY_PERCENT", "25")
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if cfg.CanaryPercent != 25 {
+		t.Fatalf("CanaryPercent: got %d, want 25", cfg.CanaryPercent)
+	}
+}
+
+func TestLoad_CanaryPercentOutOfRange(t *testing.T) {
+	t.Setenv("WADIST_POSTGRES_DSN", "postgres://x")
+	t.Setenv("WADIST_CANARY_PERCENT", "150")
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if cfg.CanaryPercent != 0 {
+		t.Fatalf("CanaryPercent out-of-range should be 0, got %d", cfg.CanaryPercent)
 	}
 }

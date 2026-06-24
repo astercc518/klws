@@ -63,12 +63,13 @@ func (d *Dispatcher) WithMetrics(m *metrics.Metrics) *Dispatcher { d.m = m; retu
 
 // SendWorker executes a SendPayload: admit, hold, render, send, settle/refund.
 type SendWorker struct {
-	pool     *pgxpool.Pool
-	gate     *sendgate.SendGate
-	billing  *billing.Repo
-	sender   Sender
-	uploader Uploader
-	m        *metrics.Metrics
+	pool      *pgxpool.Pool
+	gate      *sendgate.SendGate
+	billing   *billing.Repo
+	sender    Sender
+	uploader  Uploader
+	m         *metrics.Metrics
+	canaryPct uint8
 }
 
 func NewSendWorker(pool *pgxpool.Pool, g *sendgate.SendGate, b *billing.Repo, s Sender, u Uploader) *SendWorker {
@@ -76,3 +77,7 @@ func NewSendWorker(pool *pgxpool.Pool, g *sendgate.SendGate, b *billing.Repo, s 
 }
 
 func (w *SendWorker) WithMetrics(m *metrics.Metrics) *SendWorker { w.m = m; return w }
+
+// WithCanary sets the canary rollout percentage (0..100) for cohort metric labelling.
+// Default 0 means all sends are labelled "stable". Does not change NewSendWorker signature.
+func (w *SendWorker) WithCanary(pct uint8) *SendWorker { w.canaryPct = pct; return w }

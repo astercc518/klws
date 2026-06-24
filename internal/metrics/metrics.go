@@ -23,6 +23,7 @@ type Metrics struct {
 	noCapacity    prometheus.Counter
 	proxyOps      *prometheus.CounterVec // labels: op, outcome
 	lockOps       *prometheus.CounterVec // label: outcome
+	cohortSends   *prometheus.CounterVec // labels: cohort, outcome
 }
 
 func New(reg *prometheus.Registry) *Metrics {
@@ -60,10 +61,14 @@ func New(reg *prometheus.Registry) *Metrics {
 		Name: "wadist_lock_ops_total",
 		Help: "Advisory device-lock acquisition outcomes.",
 	}, []string{"outcome"})
+	m.cohortSends = prometheus.NewCounterVec(prometheus.CounterOpts{
+		Name: "wadist_cohort_sends_total",
+		Help: "Send outcomes split by canary cohort (cohort: canary|stable).",
+	}, []string{"cohort", "outcome"})
 
 	reg.MustRegister(
 		m.sendOutcomes, m.gateDecisions, m.healthSignals, m.billingOps,
-		m.batchAssigned, m.noCapacity, m.proxyOps, m.lockOps,
+		m.batchAssigned, m.noCapacity, m.proxyOps, m.lockOps, m.cohortSends,
 	)
 	return m
 }
@@ -130,4 +135,11 @@ func (m *Metrics) RecordLock(outcome string) {
 		return
 	}
 	m.lockOps.WithLabelValues(outcome).Inc()
+}
+
+func (m *Metrics) RecordCohortSend(cohort, outcome string) {
+	if m == nil {
+		return
+	}
+	m.cohortSends.WithLabelValues(cohort, outcome).Inc()
 }

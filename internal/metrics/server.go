@@ -4,18 +4,20 @@ import (
 	"context"
 	"net"
 	"net/http"
+	"sync/atomic"
 	"time"
 
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 )
 
-// Server hosts /metrics (scoped to the injected registry) and /healthz.
+// Server hosts /metrics (scoped to the injected registry), /healthz, and /readyz.
 type Server struct {
-	addr string
-	reg  *prometheus.Registry
-	srv  *http.Server
-	ln   net.Listener
+	addr  string
+	reg   *prometheus.Registry
+	srv   *http.Server
+	ln    net.Listener
+	ready atomic.Bool // zero value false = NOT ready
 }
 
 func NewServer(addr string, reg *prometheus.Registry) *Server {
@@ -29,8 +31,21 @@ func (s *Server) Handler() http.Handler {
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write([]byte("ok"))
 	})
+	mux.HandleFunc("/readyz", func(w http.ResponseWriter, _ *http.Request) {
+		if s.ready.Load() {
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte("ready"))
+			return
+		}
+		w.WriteHeader(http.StatusServiceUnavailable)
+		_, _ = w.Write([]byte("draining"))
+	})
 	return mux
 }
+
+// SetReady marks the server as ready (true) or draining (false).
+// /readyz returns 200 when ready, 503 when draining.
+func (s *Server) SetReady(ready bool) { s.ready.Store(ready) }
 
 // Start binds the listener synchronously (so Addr() is valid on return) and
 // serves in a background goroutine.

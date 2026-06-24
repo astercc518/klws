@@ -32,6 +32,16 @@ func TestNew_RegistersAndRecords(t *testing.T) {
 	for _, mf := range mfs {
 		names[mf.GetName()] = true
 	}
+	// Exercise the new cohort metric.
+	m.RecordCohortSend("canary", "sent")
+	m.RecordCohortSend("stable", "send_failed")
+
+	mfs, _ = reg.Gather() // re-gather after new recordings
+	names = map[string]bool{}
+	for _, mf := range mfs {
+		names[mf.GetName()] = true
+	}
+
 	for _, want := range []string{
 		"wadist_send_outcomes_total",
 		"wadist_gate_decisions_total",
@@ -41,6 +51,7 @@ func TestNew_RegistersAndRecords(t *testing.T) {
 		"wadist_dispatch_no_capacity_total",
 		"wadist_proxy_ops_total",
 		"wadist_lock_ops_total",
+		"wadist_cohort_sends_total",
 	} {
 		if !names[want] {
 			t.Errorf("missing metric %q", want)
@@ -61,4 +72,5 @@ func TestNilSafe(t *testing.T) {
 	m.IncNoCapacity()
 	m.RecordProxy("release", "ok")
 	m.RecordLock("acquired")
+	m.RecordCohortSend("canary", "sent")
 }

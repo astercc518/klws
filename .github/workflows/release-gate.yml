@@ -31,7 +31,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
         with:
-          go-version: '1.22'
+          go-version: '1.26.4'
           cache: true
 
       - name: install psql client
@@ -58,5 +58,18 @@ jobs:
       # Future milestone gates (uncomment as the suites land):
       #   - billing invariant property test (M4)
       #   - goroutine-leak shutdown test (M8)
-      #   - takeover chaos timing -count=30 (M9)
-      #   - memory baseline -tags memory_gate (M11)
+
+      # --- M11 gates (activated) ---
+      # TestTakeoverChaos uses testcontainers internally (PG+Redis ephemeral
+      # containers). The workflow's service containers satisfy PG for migrate_twice
+      # but the chaos test starts its own containers for isolation. Requires
+      # Docker-in-CI (available on ubuntu-latest GitHub runners).
+      - name: takeover chaos (M11)
+        env:
+          TESTCONTAINERS_RYUK_DISABLED: "true"
+          TEST_DSN: postgres://app:app@localhost:5432/wadist?sslmode=disable
+          REDIS_ADDR: localhost:6379
+        run: go test -run TestTakeoverChaos -count=5 ./internal/node/
+
+      - name: memory baseline (M11)
+        run: go test -tags memory_gate -run TestMemoryBaseline ./internal/capacity/
