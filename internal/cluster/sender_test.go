@@ -14,7 +14,6 @@ type fakeSendConn struct {
 	fakeConn
 	sendErr error
 	id      string
-	gotJID  string
 }
 
 func TestRoutingSender_UnknownJID(t *testing.T) {

@@ -25,6 +25,8 @@ func NewWAConn(device *waproto.Device, logger waLog.Logger, proxy *store.ProxyBi
 
 var _ Conn = (*waConn)(nil)
 
+// Connect dials the WhatsApp websocket. ctx is intentionally unused because
+// whatsmeow's client.Connect() takes no context; the proxy is applied before dialling.
 func (c *waConn) Connect(_ context.Context) error {
 	if c.proxy != nil {
 		if err := store.ApplyProxy(c.client, c.proxy); err != nil {

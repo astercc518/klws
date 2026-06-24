@@ -103,7 +103,7 @@ func run(ctx context.Context, cfg *config.Config) (*metrics.Server, func(), erro
 
 	asynqSrv := asynq.NewServer(
 		asynq.RedisClientOpt{Addr: cfg.RedisAddr},
-		asynq.Config{Concurrency: 32},
+		asynq.Config{Concurrency: 32, ShutdownTimeout: cfg.ShutdownTimeout},
 	)
 	mux := asynq.NewServeMux()
 	dispatch.RegisterSendHandler(mux, worker, func(_ context.Context, _ int64) (string, string, string, []byte, error) {
@@ -154,8 +154,8 @@ func run(ctx context.Context, cfg *config.Config) (*metrics.Server, func(), erro
 	stop := func() {
 		sup.Shutdown() // intake → loops → sessions → store → flush
 		sctx, c := context.WithTimeout(context.Background(), 5*time.Second)
+		defer c()
 		_ = srv.Shutdown(sctx) // metrics http (last, so scrapes still work during shutdown)
-		c()
 		_ = asynqClient.Close()
 		_ = rdb.Close()
 	}

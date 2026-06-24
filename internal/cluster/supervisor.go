@@ -43,10 +43,18 @@ func NewSupervisor(reg *Registry, opts SupervisorOpts) *Supervisor {
 // Shutdown and is expected to return when ctx is done (fn owns its own ticker/
 // pacing). Shutdown cancels all such goroutines and waits for them to exit
 // before disconnecting sessions.
+//
+// Go is a no-op if Shutdown has already been called; a loop registered after
+// shutdown would be orphaned (its context never cancelled by Shutdown).
 func (s *Supervisor) Go(fn func(ctx context.Context) error) {
 	ctx, cancel := context.WithCancel(context.Background())
 	ml := &managedLoop{cancel: cancel, done: make(chan struct{})}
 	s.mu.Lock()
+	if s.done {
+		s.mu.Unlock()
+		cancel() // release the context resource
+		return
+	}
 	s.loops = append(s.loops, ml)
 	s.mu.Unlock()
 	go func() {
