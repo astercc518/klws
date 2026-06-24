@@ -57,19 +57,35 @@ both pods from being evicted simultaneously.
 
 ### preStop + terminationGracePeriodSeconds
 
-`lifecycle.preStop: sleep 5` (WADIST_PRESTOP_DELAY=5s) gives the k8s
-endpoint controller time to remove the pod from service endpoints before the
-process receives SIGTERM. This prevents new requests routing to a draining pod.
+Shutdown sequence (all delays are pre-drain):
 
-After preStop, the process has `WADIST_SHUTDOWN_TIMEOUT=30s` (M8 Supervisor)
-to drain active sessions and deregister from the cluster (M9 deregister hook).
+1. **k8s preStop sleep 5 s** — k8s runs the preStop hook *before* sending
+   SIGTERM. This 5 s window lets the endpoint controller propagate the removal
+   from Service endpoints so no new traffic is routed to this pod.
+2. **SIGTERM → app flips /readyz → 503** — on SIGTERM the app calls
+   `SetReady(false)`. The readiness probe (`failureThreshold: 1`,
+   `periodSeconds: 2`) detects this within ~2 s and k8s removes the pod from
+   endpoints (belt-and-suspenders with step 1). The app then sleeps
+   `PreStopDelay` (WADIST_PRESTOP_DELAY=5 s) to allow that propagation.
+3. **Supervisor.Shutdown drains** — in-flight asynq tasks are drained within
+   `WADIST_SHUTDOWN_TIMEOUT=30 s`. The M9 deregister hook fires here: any
+   accounts owned by this node are released and the takeover scanner on a
+   surviving/new pod re-acquires them via advisory-lock fencing, ensuring
+   account-session continuity.
 
-`terminationGracePeriodSeconds: 45 >= 5 (preStop) + 30 (shutdown) + 10 (margin)`
+Total pre-drain delay ≈ preStop(5 s) + PreStopDelay(5 s) = 10 s, well within
+`terminationGracePeriodSeconds: 45 >= 5 (preStop) + 5 (PreStopDelay) + 30 (shutdown) + 5 (margin)`.
+
+**Zero-downtime for this system** means *account-session continuity* via M9
+takeover, not HTTP request draining. Asynq work is queue-pulled (not
+HTTP-routed), so `/readyz` gates the metrics scrape endpoint and signals
+rolling-update readiness, while in-flight sends are drained by
+`Supervisor.Shutdown`.
 
 ### Readiness vs Liveness
 
-- `/readyz` (periodSeconds 2, failureThreshold 1): gates traffic; the server
-  marks itself not-ready at the start of shutdown so rolling updates stop
-  routing new traffic immediately.
+- `/readyz` (periodSeconds 2, failureThreshold 1): gates traffic and scrape
+  availability; flipped to 503 at the start of shutdown so k8s stops routing
+  and rolling updates see the pod as not-ready within ~2 s.
 - `/healthz` (periodSeconds 10, failureThreshold 3): triggers pod restart only
-  after 30s of hard failure, avoiding restart loops during transient slowness.
+  after 30 s of hard failure, avoiding restart loops during transient slowness.

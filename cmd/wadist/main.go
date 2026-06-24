@@ -131,11 +131,11 @@ func run(ctx context.Context, cfg *config.Config) (*metrics.Server, func(), erro
 
 	// cluster.NewRoutingSender routes sends to live sessions; returns a clear
 	// error when no active session exists rather than silently succeeding.
-	worker := dispatch.NewSendWorker(pool, gate, billingRepo, cluster.NewRoutingSender(reg), placeholderUploader{}).WithMetrics(m)
+	worker := dispatch.NewSendWorker(pool, gate, billingRepo, cluster.NewRoutingSender(reg), placeholderUploader{}).WithMetrics(m).WithCanary(cfg.CanaryPercent)
 
 	asynqSrv := asynq.NewServer(
 		asynq.RedisClientOpt{Addr: cfg.RedisAddr},
-		asynq.Config{Concurrency: 32, ShutdownTimeout: cfg.ShutdownTimeout, Queues: map[string]int{"default": 6, "takeover": 1}},
+		asynq.Config{Concurrency: cfg.AsynqConcurrency, ShutdownTimeout: cfg.ShutdownTimeout, Queues: map[string]int{"default": 6, "takeover": 1}},
 	)
 	mux := asynq.NewServeMux()
 	dispatch.RegisterSendHandler(mux, worker, func(_ context.Context, _ int64) (string, string, string, []byte, error) {
