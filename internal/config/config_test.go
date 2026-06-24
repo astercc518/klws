@@ -1,6 +1,7 @@
 package config
 
 import (
+	"encoding/base64"
 	"testing"
 	"time"
 )
@@ -84,5 +85,60 @@ func TestLoad_DefaultsAndStoreMapping(t *testing.T) {
 	sc := c.Store()
 	if sc.DSN != "postgres://x" || sc.NodeID != "node-7" || sc.MaxLockConns != 200 {
 		t.Fatalf("Store() mapping wrong: %+v", sc)
+	}
+}
+
+func TestLoad_DecodesKeys(t *testing.T) {
+	// 32 arbitrary bytes encoded as base64-std.
+	mk := make([]byte, 32)
+	for i := range mk {
+		mk[i] = byte(i + 1)
+	}
+	bik := make([]byte, 32)
+	for i := range bik {
+		bik[i] = byte(i + 33)
+	}
+	t.Setenv("WADIST_POSTGRES_DSN", "postgres://x")
+	t.Setenv("WADIST_MASTER_KEY", base64.StdEncoding.EncodeToString(mk))
+	t.Setenv("WADIST_BLIND_INDEX_KEY", base64.StdEncoding.EncodeToString(bik))
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if len(cfg.MasterKey) != 32 {
+		t.Fatalf("MasterKey: expected 32 bytes, got %d", len(cfg.MasterKey))
+	}
+	if len(cfg.BlindIndexKey) != 32 {
+		t.Fatalf("BlindIndexKey: expected 32 bytes, got %d", len(cfg.BlindIndexKey))
+	}
+}
+
+func TestLoad_EmptyKeyEnv_NilNoError(t *testing.T) {
+	t.Setenv("WADIST_POSTGRES_DSN", "postgres://x")
+	t.Setenv("WADIST_MASTER_KEY", "")
+	t.Setenv("WADIST_BLIND_INDEX_KEY", "")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load with empty key envs: %v", err)
+	}
+	if cfg.MasterKey != nil {
+		t.Fatalf("MasterKey should be nil when env is empty, got %v", cfg.MasterKey)
+	}
+	if cfg.BlindIndexKey != nil {
+		t.Fatalf("BlindIndexKey should be nil when env is empty, got %v", cfg.BlindIndexKey)
+	}
+}
+
+func TestLoad_InvalidKeyLength_ReturnsError(t *testing.T) {
+	// Encode only 16 bytes (wrong length).
+	short := base64.StdEncoding.EncodeToString(make([]byte, 16))
+	t.Setenv("WADIST_POSTGRES_DSN", "postgres://x")
+	t.Setenv("WADIST_MASTER_KEY", short)
+	t.Setenv("WADIST_BLIND_INDEX_KEY", "")
+
+	if _, err := Load(); err == nil {
+		t.Fatal("expected error for 16-byte WADIST_MASTER_KEY")
 	}
 }
