@@ -3,6 +3,7 @@ package dispatch
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -24,6 +25,7 @@ func (w *SendWorker) ProcessSend(ctx context.Context, pl SendPayload, body, medi
 		return fmt.Errorf("load recipient state: %w", err)
 	}
 	if st == "sent" || st == "failed" {
+		w.m.RecordSend("idempotent_skip")
 		return nil // terminal — already processed; at-least-once retry is a no-op
 	}
 
@@ -32,8 +34,11 @@ func (w *SendWorker) ProcessSend(ctx context.Context, pl SendPayload, body, medi
 		return fmt.Errorf("admit: %w", err)
 	}
 	if !dec.Allow {
+		w.m.RecordGate(false, dec.Reason)
+		w.m.RecordSend("gate_denied")
 		return w.requeue(ctx, pl, dec.Reason) // back to pending, no charge
 	}
+	w.m.RecordGate(true, "ok")
 
 	if _, err := w.billing.Hold(ctx, billing.HoldRequest{
 		TenantID:    pl.TenantID,
@@ -42,9 +47,12 @@ func (w *SendWorker) ProcessSend(ctx context.Context, pl SendPayload, body, medi
 		CountryCode: pl.Country,
 		Amount:      1, // unit price; real price injected at wiring layer
 	}); err != nil {
+		w.m.RecordBilling("hold", holdOutcome(err))
+		w.m.RecordSend("hold_failed")
 		dec.Ticket.Release(ctx)
 		return w.requeue(ctx, pl, "billing:"+err.Error())
 	}
+	w.m.RecordBilling("hold", "held")
 
 	rendered := renderTemplate(body, pl.Vars)
 	var media *MediaHandle
@@ -53,6 +61,7 @@ func (w *SendWorker) ProcessSend(ctx context.Context, pl SendPayload, body, medi
 		if err != nil {
 			dec.Ticket.Release(ctx)
 			_ = w.billing.RequestRefund(ctx, pl.TenantID, pl.MessageID, "media: "+err.Error())
+			w.m.RecordSend("media_failed")
 			return w.markFailed(ctx, pl, err)
 		}
 	}
@@ -63,19 +72,38 @@ func (w *SendWorker) ProcessSend(ctx context.Context, pl SendPayload, body, medi
 			if hsErr := w.gate.ApplyHealthSignal(ctx, pl.JID, "wa_warning", 6*time.Hour); hsErr != nil {
 				sendErr = fmt.Errorf("%w; health-signal: %v", sendErr, hsErr)
 			}
+			w.m.RecordHealthSignal("wa_warning")
 		} else {
 			_ = w.gate.ApplyHealthSignal(ctx, pl.JID, "undelivered", 0)
 		}
 		_ = w.billing.RequestRefund(ctx, pl.TenantID, pl.MessageID, sendErr.Error())
 		_ = w.markFailed(ctx, pl, sendErr)
+		w.m.RecordSend("send_failed")
 		return sendErr
 	}
 
 	if err := w.billing.Settle(ctx, pl.TenantID, pl.MessageID); err != nil {
+		w.m.RecordBilling("settle", "error")
+		w.m.RecordSend("settle_failed")
 		return fmt.Errorf("settle: %w", err) // retry-safe (Settle idempotent)
 	}
+	w.m.RecordBilling("settle", "ok")
+	w.m.RecordSend("sent")
 	_ = w.gate.ApplyHealthSignal(ctx, pl.JID, "delivered", 0)
 	return w.markSent(ctx, pl, waID)
+}
+
+func holdOutcome(err error) string {
+	switch {
+	case errors.Is(err, billing.ErrInsufficientFunds):
+		return "insufficient_funds"
+	case errors.Is(err, billing.ErrWalletLocked):
+		return "wallet_locked"
+	case errors.Is(err, billing.ErrNotFound):
+		return "not_found"
+	default:
+		return "error"
+	}
 }
 
 func isBanSignal(err error) bool {

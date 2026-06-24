@@ -53,6 +53,7 @@ SELECT id, phone, country_code, vars
 		for _, r := range rs {
 			jid, err := d.selectAccount(ctx, tx, tenantID, r.country)
 			if errors.Is(err, ErrNoCapacity) {
+				d.m.IncNoCapacity()
 				continue // leave pending
 			}
 			if err != nil {
@@ -86,6 +87,7 @@ SELECT id, phone, country_code, vars
 	if err != nil {
 		return 0, err
 	}
+	d.m.ObserveBatch(assigned)
 	return assigned, nil
 }
 

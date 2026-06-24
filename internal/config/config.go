@@ -17,6 +17,7 @@ type Config struct {
 	NodeID       string
 	MaxOpenConns int32 // business pool size
 	MaxLockConns int32 // dedicated advisory-lock pool size (per-node account ceiling)
+	MetricsAddr  string
 }
 
 // Load reads configuration from the environment. PostgresDSN is required;
@@ -32,6 +33,7 @@ func Load() (*Config, error) {
 		NodeID:       getenv("WADIST_NODE_ID", hostnameOr("node-unknown")),
 		MaxOpenConns: getenvInt32("WADIST_MAX_OPEN_CONNS", 50),
 		MaxLockConns: getenvInt32("WADIST_MAX_LOCK_CONNS", 300),
+		MetricsAddr:  getenv("WADIST_METRICS_ADDR", ":9090"),
 	}, nil
 }
 
