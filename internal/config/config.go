@@ -32,6 +32,8 @@ type Config struct {
 	// RLS role DSNs. Empty → falls back to PostgresDSN (single-DSN dev mode).
 	AppTenantDSN string // WADIST_APP_TENANT_DSN — role app_tenant (RLS enforced)
 	AppSystemDSN string // WADIST_APP_SYSTEM_DSN — role app_system (BYPASSRLS)
+	// NodeRegion is the data-residency region for this node (M10 stub; M11 adds per-region pools).
+	NodeRegion string // WADIST_NODE_REGION default "default"
 }
 
 // Load reads configuration from the environment. PostgresDSN is required;
@@ -81,6 +83,7 @@ func Load() (*Config, error) {
 	}
 	cfg.AppTenantDSN = getenv("WADIST_APP_TENANT_DSN", "")
 	cfg.AppSystemDSN = getenv("WADIST_APP_SYSTEM_DSN", "")
+	cfg.NodeRegion = getenv("WADIST_NODE_REGION", "default")
 
 	mk, err := decodeKey32("WADIST_MASTER_KEY")
 	if err != nil {

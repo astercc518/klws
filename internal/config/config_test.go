@@ -131,6 +131,30 @@ func TestLoad_EmptyKeyEnv_NilNoError(t *testing.T) {
 	}
 }
 
+func TestLoad_NodeRegionDefault(t *testing.T) {
+	t.Setenv("WADIST_POSTGRES_DSN", "postgres://x")
+	t.Setenv("WADIST_NODE_REGION", "")
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if cfg.NodeRegion != "default" {
+		t.Fatalf("NodeRegion default: got %q, want %q", cfg.NodeRegion, "default")
+	}
+}
+
+func TestLoad_NodeRegionCustom(t *testing.T) {
+	t.Setenv("WADIST_POSTGRES_DSN", "postgres://x")
+	t.Setenv("WADIST_NODE_REGION", "eu-west-1")
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if cfg.NodeRegion != "eu-west-1" {
+		t.Fatalf("NodeRegion: got %q, want %q", cfg.NodeRegion, "eu-west-1")
+	}
+}
+
 func TestLoad_InvalidKeyLength_ReturnsError(t *testing.T) {
 	// Encode only 16 bytes (wrong length).
 	short := base64.StdEncoding.EncodeToString(make([]byte, 16))
