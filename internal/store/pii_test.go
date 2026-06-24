@@ -274,3 +274,11 @@ func TestAddRecipientPII_BadBlindKey(t *testing.T) {
 		t.Fatal("expected error for blind key != 32 bytes, got nil")
 	}
 }
+
+func TestSetDevicePhonePII_NilCipher(t *testing.T) {
+	ctx, m, _, _ := setupPIITest(t)
+	err := m.SetDevicePhonePII(ctx, nil, 1, "testjid@s.whatsapp.net", "+14155550000")
+	if err == nil {
+		t.Fatal("expected error for nil Cipher, got nil")
+	}
+}

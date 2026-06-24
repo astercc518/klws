@@ -12,7 +12,8 @@ import (
 
 // KeyRepo manages per-tenant DEKs wrapped by the master KEK. The wrapped key is
 // itself an AES-256-GCM blob (nonce||ct) so the KEK never touches plaintext DEKs
-// at rest. Shred deletes a tenant's keys, making its ciphertext unrecoverable.
+// at rest. Shred deletes a tenant's keys, making its *_enc ciphertext (PII)
+// permanently unrecoverable — but see the WARNING on Shred for GDPR caveats.
 type KeyRepo struct {
 	pool *pgxpool.Pool
 	kek  []byte // 32 bytes
@@ -49,6 +50,7 @@ func (k *KeyRepo) unwrap(blob []byte) ([]byte, error) {
 	return gcm.Open(nil, blob[:ns], blob[ns:], nil)
 }
 
+// TODO(M11): audit key rotation/shred (destructive/compliance-sensitive) once wired to an admin endpoint.
 func (k *KeyRepo) CreateTenantKey(ctx context.Context, tenantID int64) (int32, error) {
 	dek := make([]byte, 32)
 	if _, err := rand.Read(dek); err != nil {
@@ -101,6 +103,12 @@ func (k *KeyRepo) GetDEK(ctx context.Context, tenantID int64, version int32) ([]
 	return k.unwrap(wrapped)
 }
 
+// Shred deletes a tenant's DEKs, making all *_enc ciphertext (PII) permanently
+// unrecoverable. WARNING: this ALONE does NOT satisfy GDPR right-to-erasure —
+// the plaintext phone / phone_number columns are RETAINED until the M11 contract
+// migration drops them. A complete erasure path MUST also purge those plaintext
+// columns. Do not wire Shred to a "delete my data" endpoint as-is.
+// TODO(M11): audit key rotation/shred (destructive/compliance-sensitive) once wired to an admin endpoint.
 func (k *KeyRepo) Shred(ctx context.Context, tenantID int64) error {
 	_, err := k.pool.Exec(ctx, `DELETE FROM tenant_keys WHERE tenant_id=$1`, tenantID)
 	if err != nil {

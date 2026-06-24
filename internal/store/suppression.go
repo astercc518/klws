@@ -11,6 +11,7 @@ import (
 // AddSuppression inserts a (tenant_id, phone_bidx) row into suppression_list.
 // blindKey must be exactly 32 bytes. On duplicate (tenant_id, phone_bidx) the
 // row is silently kept (ON CONFLICT DO NOTHING — idempotent).
+// TODO(M11): audit suppression add/remove.
 func (m *Manager) AddSuppression(ctx context.Context, blindKey []byte, tenantID int64, phone, reason string) error {
 	if len(blindKey) != 32 {
 		return fmt.Errorf("store: blindKey must be 32 bytes, got %d", len(blindKey))

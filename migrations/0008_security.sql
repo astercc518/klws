@@ -10,6 +10,11 @@ CREATE TABLE IF NOT EXISTS tenant_keys (
 );
 
 -- ── RLS roles (idempotent) ──
+-- DEV/CI-ONLY: the passwords below ('app_tenant_pw' / 'app_system_pw') are
+-- hardcoded for local development and CI. They MUST be rotated via
+--   ALTER ROLE app_tenant PASSWORD '...';
+--   ALTER ROLE app_system PASSWORD '...';
+-- out-of-band (NOT in a committed migration) before production deployment.
 DO $$ BEGIN
   IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname='app_tenant') THEN
     CREATE ROLE app_tenant NOSUPERUSER NOINHERIT LOGIN PASSWORD 'app_tenant_pw';
