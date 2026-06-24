@@ -2,7 +2,6 @@ package node
 
 import (
 	"context"
-	"errors"
 	"testing"
 	"time"
 
@@ -56,7 +55,6 @@ func TestTakeoverEnqueuer_Unique(t *testing.T) {
 	if err := enq.Enqueue(ctx, "jid-t1"); err != nil {
 		t.Fatalf("duplicate enqueue should be swallowed, got %v", err)
 	}
-	_ = errors.Is
 }
 
 func TestRunTakeoverScanner_EnqueuesStale(t *testing.T) {

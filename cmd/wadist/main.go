@@ -157,7 +157,9 @@ func run(ctx context.Context, cfg *config.Config) (*metrics.Server, func(), erro
 
 	// Kick off initial account startup with bounded concurrency.
 	jids, _ := mgr.ListActiveAccounts(ctx)
-	go func() { _ = sup.StartAccounts(ctx, jids, orch.StartAccountWithLock) }()
+	sup.Go(func(lctx context.Context) error {
+		return sup.StartAccounts(lctx, jids, orch.StartAccountWithLock)
+	})
 
 	// Start the supervised dispatch loop: ticks every second, dispatches running
 	// campaigns. Per-tick errors are logged but do not exit the loop (transient
