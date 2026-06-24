@@ -53,3 +53,11 @@ down: ## stop local services
 .PHONY: migrate-twice
 migrate-twice: ## apply migrations twice against $$DSN (idempotency check)
 	./scripts/migrate_twice.sh "$(DSN)"
+
+.PHONY: memory-gate
+memory-gate: ## run memory baseline gate (requires build tag memory_gate)
+	$(TEST_ENV) $(GO) test -tags memory_gate -run TestMemoryBaseline ./internal/capacity/
+
+.PHONY: chaos
+chaos: ## run takeover chaos test (requires Docker for testcontainers)
+	$(TEST_ENV) $(GO) test -run TestTakeoverChaos -count=5 ./internal/node/

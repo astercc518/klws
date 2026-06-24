@@ -22,7 +22,9 @@ services:
   redis:
     image: redis:7
     # noeviction is mandatory: asynq task loss = lost (already-charged) messages.
-    command: ["redis-server", "--maxmemory-policy", "noeviction"]
+    # 512mb covers capacity.Compute baseline (accounts*keyBytes*2 + queue*taskBytes*2)
+    # with generous headroom for fragmentation. See deploy/README.md for derivation.
+    command: ["redis-server", "--maxmemory", "512mb", "--maxmemory-policy", "noeviction"]
     ports:
       - "6379:6379"
     healthcheck:
