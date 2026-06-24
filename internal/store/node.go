@@ -10,11 +10,9 @@ import (
 // setting last_heartbeat_at to now(). Safe to call repeatedly.
 func (m *Manager) UpsertNodeHeartbeat(ctx context.Context, nodeID string) error {
 	_, err := m.bizPool.Exec(ctx, `
-INSERT INTO cluster_nodes (node_id, last_heartbeat_at, registered_at, updated_at)
-VALUES ($1, now(), now(), now())
-ON CONFLICT (node_id) DO UPDATE
-    SET last_heartbeat_at = now(),
-        updated_at        = now()
+INSERT INTO cluster_nodes (node_id, last_heartbeat_at)
+VALUES ($1, now())
+ON CONFLICT (node_id) DO UPDATE SET last_heartbeat_at = now()
 `, nodeID)
 	if err != nil {
 		return fmt.Errorf("upsert node heartbeat %q: %w", nodeID, err)

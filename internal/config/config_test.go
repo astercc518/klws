@@ -8,8 +8,8 @@ import (
 func TestLoad_TakeoverIntervalDefaults(t *testing.T) {
 	t.Setenv("WADIST_POSTGRES_DSN", "postgres://x")
 	t.Setenv("WADIST_HEARTBEAT_INTERVAL", "")
-	t.Setenv("WADIST_NODE_TIMEOUT", "")
-	t.Setenv("WADIST_TAKEOVER_INTERVAL", "")
+	t.Setenv("WADIST_NODE_STALENESS", "")
+	t.Setenv("WADIST_TAKEOVER_SCAN_INTERVAL", "")
 	cfg, err := Load()
 	if err != nil {
 		t.Fatal(err)
@@ -17,11 +17,11 @@ func TestLoad_TakeoverIntervalDefaults(t *testing.T) {
 	if cfg.HeartbeatInterval != 10*time.Second {
 		t.Fatalf("HeartbeatInterval default: got %v, want 10s", cfg.HeartbeatInterval)
 	}
-	if cfg.NodeTimeout != 30*time.Second {
-		t.Fatalf("NodeTimeout default: got %v, want 30s", cfg.NodeTimeout)
+	if cfg.NodeStaleness != 30*time.Second {
+		t.Fatalf("NodeStaleness default: got %v, want 30s", cfg.NodeStaleness)
 	}
-	if cfg.TakeoverInterval != 15*time.Second {
-		t.Fatalf("TakeoverInterval default: got %v, want 15s", cfg.TakeoverInterval)
+	if cfg.TakeoverScanInterval != 15*time.Second {
+		t.Fatalf("TakeoverScanInterval default: got %v, want 15s", cfg.TakeoverScanInterval)
 	}
 }
 

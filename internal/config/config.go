@@ -22,9 +22,9 @@ type Config struct {
 	ShutdownTimeout     time.Duration
 	MaxConcurrentStarts int
 	// Distributed takeover intervals.
-	HeartbeatInterval time.Duration // how often this node upserts its heartbeat (default 10s)
-	NodeTimeout       time.Duration // stale threshold: nodes silent longer than this are dead (default 30s)
-	TakeoverInterval  time.Duration // how often the takeover loop runs (default 15s)
+	HeartbeatInterval   time.Duration // how often this node upserts its heartbeat (default 10s)
+	NodeStaleness       time.Duration // stale threshold: nodes silent longer than this are dead (default 30s)
+	TakeoverScanInterval time.Duration // how often the takeover loop runs (default 15s)
 }
 
 // Load reads configuration from the environment. PostgresDSN is required;
@@ -60,16 +60,16 @@ func Load() (*Config, error) {
 			cfg.HeartbeatInterval = d
 		}
 	}
-	cfg.NodeTimeout = 30 * time.Second
-	if v := getenv("WADIST_NODE_TIMEOUT", ""); v != "" {
+	cfg.NodeStaleness = 30 * time.Second
+	if v := getenv("WADIST_NODE_STALENESS", ""); v != "" {
 		if d, err := time.ParseDuration(v); err == nil && d > 0 {
-			cfg.NodeTimeout = d
+			cfg.NodeStaleness = d
 		}
 	}
-	cfg.TakeoverInterval = 15 * time.Second
-	if v := getenv("WADIST_TAKEOVER_INTERVAL", ""); v != "" {
+	cfg.TakeoverScanInterval = 15 * time.Second
+	if v := getenv("WADIST_TAKEOVER_SCAN_INTERVAL", ""); v != "" {
 		if d, err := time.ParseDuration(v); err == nil && d > 0 {
-			cfg.TakeoverInterval = d
+			cfg.TakeoverScanInterval = d
 		}
 	}
 	return cfg, nil
