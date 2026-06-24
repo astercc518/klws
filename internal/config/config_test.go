@@ -1,6 +1,9 @@
 package config
 
-import "testing"
+import (
+	"testing"
+	"time"
+)
 
 func TestLoad_MetricsAddrDefault(t *testing.T) {
 	t.Setenv("WADIST_POSTGRES_DSN", "postgres://x")
@@ -11,6 +14,22 @@ func TestLoad_MetricsAddrDefault(t *testing.T) {
 	}
 	if cfg.MetricsAddr != ":9090" {
 		t.Fatalf("want :9090, got %q", cfg.MetricsAddr)
+	}
+}
+
+func TestLoad_ShutdownAndConcurrencyDefaults(t *testing.T) {
+	t.Setenv("WADIST_POSTGRES_DSN", "postgres://x")
+	t.Setenv("WADIST_SHUTDOWN_TIMEOUT", "")
+	t.Setenv("WADIST_MAX_CONCURRENT_STARTS", "")
+	cfg, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.ShutdownTimeout != 30*time.Second {
+		t.Fatalf("shutdown default: got %v", cfg.ShutdownTimeout)
+	}
+	if cfg.MaxConcurrentStarts != 32 {
+		t.Fatalf("starts default: got %d", cfg.MaxConcurrentStarts)
 	}
 }
 

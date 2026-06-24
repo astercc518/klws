@@ -1,6 +1,4 @@
-// Command wadist is the distribution node entrypoint. M7 scope: dependency
-// assembly, /metrics exposure, and the asynq send worker. Full graceful
-// shutdown (Supervisor, session draining, SetLimit) lands in M8.
+// Command wadist is the distribution node entrypoint.
 package main
 
 import (
@@ -16,6 +14,7 @@ import (
 	goredis "github.com/redis/go-redis/v9"
 
 	"github.com/acme/wadist/internal/billing"
+	"github.com/acme/wadist/internal/cluster"
 	"github.com/acme/wadist/internal/config"
 	"github.com/acme/wadist/internal/dispatch"
 	walog "github.com/acme/wadist/internal/log"
@@ -24,14 +23,7 @@ import (
 	"github.com/acme/wadist/internal/store"
 )
 
-// placeholderSender is a stub Sender until the whatsmeow adapter lands in M-send.
-type placeholderSender struct{}
-
-func (placeholderSender) Send(_ context.Context, _, _, _ string, _ *dispatch.MediaHandle) (string, error) {
-	return "", errors.New("sender: not wired (pre-M-send)")
-}
-
-// placeholderUploader is a stub Uploader until the whatsmeow adapter lands in M-send.
+// placeholderUploader is a stub Uploader until the whatsmeow media adapter lands in a later milestone.
 type placeholderUploader struct{}
 
 func (placeholderUploader) Upload(_ context.Context, _ string, _ []byte, _, _ string) (*dispatch.MediaHandle, error) {
@@ -88,9 +80,11 @@ func run(ctx context.Context, cfg *config.Config) (*metrics.Server, func(), erro
 	}
 	pool := mgr.Pool()
 
-	reg := prometheus.NewRegistry()
-	m := metrics.New(reg)
-	reg.MustRegister(metrics.NewDBCollector(pool, 10*time.Second, nil))
+	reg := cluster.NewRegistry()
+
+	promReg := prometheus.NewRegistry()
+	m := metrics.New(promReg)
+	promReg.MustRegister(metrics.NewDBCollector(pool, 10*time.Second, reg))
 
 	billingRepo := billing.NewRepo(pool)
 
@@ -101,40 +95,69 @@ func run(ctx context.Context, cfg *config.Config) (*metrics.Server, func(), erro
 	asynqClient := asynq.NewClient(asynq.RedisClientOpt{Addr: cfg.RedisAddr})
 	enqueuer := dispatch.NewAsynqEnqueuer(asynqClient, "default", 3)
 
-	// TODO(M8): wire the dispatch scheduling loop here (constructed now for metrics wiring).
-	_ = dispatch.NewDispatcher(pool, billingRepo, enqueuer, priceFor, 3*time.Second).WithMetrics(m)
+	dispatcher := dispatch.NewDispatcher(pool, billingRepo, enqueuer, priceFor, 3*time.Second).WithMetrics(m)
 
-	worker := dispatch.NewSendWorker(pool, gate, billingRepo, placeholderSender{}, placeholderUploader{}).WithMetrics(m)
+	// cluster.NewRoutingSender routes sends to live sessions; returns a clear
+	// error when no active session exists rather than silently succeeding.
+	worker := dispatch.NewSendWorker(pool, gate, billingRepo, cluster.NewRoutingSender(reg), placeholderUploader{}).WithMetrics(m)
 
 	asynqSrv := asynq.NewServer(
 		asynq.RedisClientOpt{Addr: cfg.RedisAddr},
-		asynq.Config{Concurrency: 32},
+		asynq.Config{Concurrency: 32, ShutdownTimeout: cfg.ShutdownTimeout},
 	)
 	mux := asynq.NewServeMux()
 	dispatch.RegisterSendHandler(mux, worker, func(_ context.Context, _ int64) (string, string, string, []byte, error) {
 		return "", "", "", nil, errors.New("resolver: not wired (pre-M-send)")
 	})
+
+	sup := cluster.NewSupervisor(reg, cluster.SupervisorOpts{
+		StopIntake:      func() { asynqSrv.Shutdown() },
+		CloseStore:      mgr.Close,
+		Flush:           flush,
+		Limit:           cfg.MaxConcurrentStarts,
+		ShutdownTimeout: cfg.ShutdownTimeout,
+	})
+
+	// Start the supervised dispatch loop: ticks every second, dispatches running
+	// campaigns. Per-tick errors are logged but do not exit the loop (transient
+	// DB errors recover on the next tick). The loop exits when lctx is cancelled.
+	sup.Go(func(lctx context.Context) error {
+		t := time.NewTicker(time.Second)
+		defer t.Stop()
+		for {
+			select {
+			case <-lctx.Done():
+				return lctx.Err()
+			case <-t.C:
+				if _, err := dispatcher.DispatchRunning(lctx, 100); err != nil {
+					log.Printf("dispatch loop: %v", err)
+					// log and continue — transient DB error; next tick retries
+				}
+			}
+		}
+	})
+
 	go func() { _ = asynqSrv.Run(mux) }()
 
-	srv := metrics.NewServer(cfg.MetricsAddr, reg)
+	srv := metrics.NewServer(cfg.MetricsAddr, promReg)
 	if err := srv.Start(); err != nil {
-		asynqSrv.Shutdown()
+		// Supervisor owns asynq/store/flush; call Shutdown then close redis/asynq client only.
+		sup.Shutdown()
 		_ = asynqClient.Close()
 		_ = rdb.Close()
-		mgr.Close()
-		flush()
 		return nil, nil, err
 	}
 
+	// stop() delegates asynq intake, store close, and logger flush to the
+	// Supervisor (via StopIntake/CloseStore/Flush opts). It only adds the
+	// metrics HTTP server and redis/asynq client handles not owned by Supervisor.
 	stop := func() {
+		sup.Shutdown() // intake → loops → sessions → store → flush
 		sctx, c := context.WithTimeout(context.Background(), 5*time.Second)
 		defer c()
-		_ = srv.Shutdown(sctx)
-		asynqSrv.Shutdown()
+		_ = srv.Shutdown(sctx) // metrics http (last, so scrapes still work during shutdown)
 		_ = asynqClient.Close()
 		_ = rdb.Close()
-		mgr.Close()
-		flush()
 	}
 	return srv, stop, nil
 }
@@ -154,6 +177,5 @@ func loadForTest(t interface {
 	return cfg
 }
 
-// ensure placeholders satisfy the dispatch interfaces at compile time.
-var _ dispatch.Sender = placeholderSender{}
+// ensure placeholderUploader satisfies the dispatch interface at compile time.
 var _ dispatch.Uploader = placeholderUploader{}
