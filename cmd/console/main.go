@@ -3,6 +3,7 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"log"
 	"os/signal"
 	"sync"
@@ -38,6 +39,9 @@ func run(ctx context.Context) (*console.Server, func(), error) {
 	baseCfg, err := config.Load() // requires WADIST_POSTGRES_DSN; provides Store()+RedisAddr
 	if err != nil {
 		return nil, nil, err
+	}
+	if baseCfg.AppTenantDSN == "" || baseCfg.AppSystemDSN == "" {
+		return nil, nil, fmt.Errorf("console: WADIST_APP_TENANT_DSN and WADIST_APP_SYSTEM_DSN are required (tenant RLS isolation must not fall back to the superuser pool)")
 	}
 	webCfg, err := console.LoadConfig()
 	if err != nil {
