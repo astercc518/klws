@@ -41,7 +41,10 @@ func TestUserRepoCustomerRequiresTenant(t *testing.T) {
 	ctx := context.Background()
 	mgr := newTestManager(t)
 	repo := NewUserRepo(mgr.SystemPool())
-	hash, _ := HashPassword("pw")
+	hash, err := HashPassword("pw")
+	if err != nil {
+		t.Fatalf("hash: %v", err)
+	}
 
 	// customer WITHOUT tenant violates the CHECK constraint.
 	if _, err := repo.Create(ctx, "c1@acme.test", hash, RoleCustomer, nil); err == nil {

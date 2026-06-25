@@ -29,6 +29,9 @@ type User struct {
 }
 
 var (
+	// ErrUserNotFound is reserved for future non-enumeration lookup paths
+	// (e.g. admin user management); Authenticate intentionally returns
+	// ErrInvalidCredentials instead, to avoid account enumeration.
 	ErrUserNotFound       = errors.New("console: user not found")
 	ErrInvalidCredentials = errors.New("console: invalid credentials")
 )
