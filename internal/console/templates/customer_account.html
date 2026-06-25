@@ -1,0 +1,15 @@
+{{define "content"}}
+<h1>账单与充值记录</h1>
+<p>可用余额:<strong>{{.Balance}}</strong> ｜ 冻结:<strong>{{.Frozen}}</strong></p>
+<table>
+  <thead><tr><th>时间</th><th>类型</th><th>Δ余额</th><th>Δ冻结</th><th>余额后</th></tr></thead>
+  <tbody>
+  {{range .Ledger}}
+    <tr><td>{{.CreatedAt}}</td><td>{{.Kind}}</td><td>{{.DeltaBalance}}</td><td>{{.DeltaFrozen}}</td><td>{{.BalanceAfter}}</td></tr>
+  {{else}}
+    <tr><td colspan="5">暂无流水</td></tr>
+  {{end}}
+  </tbody>
+</table>
+<p><a href="/">← 返回</a></p>
+{{end}}

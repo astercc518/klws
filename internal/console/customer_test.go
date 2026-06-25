@@ -64,4 +64,45 @@ func TestCustomerDashboardIsTenantScoped(t *testing.T) {
 	if !strings.Contains(body, "111") || strings.Contains(body, "222") {
 		t.Fatalf("RLS leak or missing balance: %s", body)
 	}
+	if !strings.Contains(body, "50") || strings.Contains(body, "99") {
+		t.Fatalf("RLS leak or missing campaign total: %s", body)
+	}
+}
+
+func TestCustomerAccountShowsOwnLedger(t *testing.T) {
+	ctx := context.Background()
+	mgr := newTestManager(t)
+	cfg := testConfig()
+	users := NewUserRepo(mgr.SystemPool())
+	sessions := NewSessionStore(newTestRedis(t), time.Hour)
+	srv, _ := NewServer(cfg, users, sessions, mgr)
+	ts := httptest.NewServer(srv.Handler())
+	defer ts.Close()
+
+	var tA int64
+	mustScan(t, mgr, ctx, `INSERT INTO tenants (name) VALUES ('A') RETURNING id`, &tA)
+	// a ledger row for tenant A (a topup-style credit)
+	mustExec(t, mgr, ctx, `INSERT INTO tenant_wallets (tenant_id, balance) VALUES ($1, 300)`, tA)
+	mustExec(t, mgr, ctx, `INSERT INTO wallet_ledger (tenant_id, kind, delta_balance, delta_frozen, balance_after, frozen_after, idem_key) VALUES ($1,'topup',300,0,300,0,'k-a-1')`, tA)
+
+	custA := loginAs(t, ts, users, sessions, cfg, "a@x.test", RoleCustomer, &tA)
+	resp, err := custA.Get(ts.URL + "/account")
+	if err != nil {
+		t.Fatal(err)
+	}
+	body := readAll(t, resp)
+	if resp.StatusCode != 200 || !strings.Contains(body, "topup") || !strings.Contains(body, "300") {
+		t.Fatalf("account page missing ledger: %d %s", resp.StatusCode, body)
+	}
+
+	// a staff (admin) hitting /account is forbidden (customer-only)
+	admin := loginAs(t, ts, users, sessions, cfg, "admin@x.test", RoleAdmin, nil)
+	r2, err := admin.Get(ts.URL + "/account")
+	if err != nil {
+		t.Fatal(err)
+	}
+	r2.Body.Close()
+	if r2.StatusCode != http.StatusForbidden {
+		t.Fatalf("admin /account: want 403, got %d", r2.StatusCode)
+	}
 }

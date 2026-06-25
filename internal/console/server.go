@@ -61,6 +61,8 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /login", s.requireCSRF(s.handleLoginSubmit))
 	mux.HandleFunc("POST /logout", s.requireAuth(s.requireCSRF(s.handleLogout)))
 	mux.HandleFunc("GET /{$}", s.requireAuth(s.handleDashboard))
+	custOnly := s.requireRole(RoleCustomer)
+	mux.HandleFunc("GET /account", s.requireAuth(custOnly(s.handleCustomerAccount)))
 	adminOnly := s.requireRole(RoleAdmin)
 	mux.HandleFunc("GET /admin", s.requireAuth(adminOnly(s.handleAdminTenants)))
 	mux.HandleFunc("GET /admin/tenant/{id}", s.requireAuth(adminOnly(s.handleAdminTenant)))
@@ -149,6 +151,26 @@ func (s *Server) handleDashboard(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	_ = render(w, t, map[string]any{"Role": string(data.Role), "CSRF": s.issueCSRFToken(w, r)})
+}
+
+func (s *Server) handleCustomerAccount(w http.ResponseWriter, r *http.Request) {
+	bal, frozen, err := s.customerBalance(r.Context())
+	if err != nil {
+		http.Error(w, "load balance", http.StatusInternalServerError)
+		return
+	}
+	ledger, err := s.customerLedger(r.Context(), 100)
+	if err != nil {
+		http.Error(w, "load ledger", http.StatusInternalServerError)
+		return
+	}
+	t, err := parsePage("customer_account.html")
+	if err != nil {
+		http.Error(w, "template error", http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	_ = render(w, t, map[string]any{"Balance": bal, "Frozen": frozen, "Ledger": ledger})
 }
 
 func (s *Server) handleLoginPage(w http.ResponseWriter, r *http.Request) {
