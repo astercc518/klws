@@ -2,6 +2,7 @@
 package console
 
 import (
+	"errors"
 	"net/http"
 	"strconv"
 )
@@ -43,8 +44,12 @@ func (s *Server) handleAdminTenant(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	tenant, err := s.tenants.Get(r.Context(), id)
-	if err != nil {
+	if errors.Is(err, ErrTenantNotFound) {
 		http.Error(w, "tenant not found", http.StatusNotFound)
+		return
+	}
+	if err != nil {
+		http.Error(w, "db error", http.StatusInternalServerError)
 		return
 	}
 	bal, frozen, err := s.billing.Balance(r.Context(), id)

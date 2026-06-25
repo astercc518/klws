@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -71,5 +72,50 @@ func TestAdminTenantsPageAndRBAC(t *testing.T) {
 	resp2.Body.Close()
 	if resp2.StatusCode != http.StatusForbidden {
 		t.Fatalf("customer /admin: want 403, got %d", resp2.StatusCode)
+	}
+}
+
+func TestAdminTenantDetailAndBadID(t *testing.T) {
+	ctx := context.Background()
+	mgr := newTestManager(t)
+	cfg := testConfig()
+	users := NewUserRepo(mgr.SystemPool())
+	sessions := NewSessionStore(newTestRedis(t), time.Hour)
+	bill := billing.NewRepo(mgr.SystemPool())
+	tenants := NewTenantRepo(mgr.SystemPool())
+	srv, _ := NewServer(cfg, users, sessions, mgr)
+	srv.WithBilling(bill).WithTenants(tenants)
+	ts := httptest.NewServer(srv.Handler())
+	defer ts.Close()
+
+	var tid int64
+	if err := mgr.SystemPool().QueryRow(ctx, `INSERT INTO tenants (name) VALUES ('Acme') RETURNING id`).Scan(&tid); err != nil {
+		t.Fatalf("seed tenant: %v", err)
+	}
+	// give the tenant a wallet + a ledger row via a topup so the detail page has content
+	if err := bill.Topup(ctx, tid, 250, "seed-ref"); err != nil {
+		t.Fatalf("topup: %v", err)
+	}
+
+	admin := loginAs(t, ts, users, sessions, cfg, "admin@x.test", RoleAdmin, nil)
+
+	// detail page shows balance + ledger
+	resp, err := admin.Get(ts.URL + "/admin/tenant/" + strconv.FormatInt(tid, 10))
+	if err != nil {
+		t.Fatal(err)
+	}
+	body := readAll(t, resp)
+	if resp.StatusCode != 200 || !strings.Contains(body, "250") {
+		t.Fatalf("detail page: status=%d body=%s", resp.StatusCode, body)
+	}
+
+	// non-integer id -> 400
+	resp2, err := admin.Get(ts.URL + "/admin/tenant/not-a-number")
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp2.Body.Close()
+	if resp2.StatusCode != http.StatusBadRequest {
+		t.Fatalf("bad id: want 400, got %d", resp2.StatusCode)
 	}
 }
