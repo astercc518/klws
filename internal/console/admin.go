@@ -74,7 +74,7 @@ func (s *Server) handleAdminTenant(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	_ = render(w, tpl, map[string]any{"Tenant": tenant, "Balance": bal, "Frozen": frozen, "Ledger": ledger, "Prices": prices})
+	_ = render(w, tpl, map[string]any{"Tenant": tenant, "Balance": bal, "Frozen": frozen, "Ledger": ledger, "Prices": prices, "CSRF": s.issueCSRFToken(w, r)})
 }
 
 func (s *Server) handleAdminRecharge(w http.ResponseWriter, r *http.Request) {

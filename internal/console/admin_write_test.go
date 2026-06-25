@@ -34,9 +34,12 @@ func TestAdminRechargeAndSetPrice(t *testing.T) {
 	}
 	admin := loginAs(t, ts, users, sessions, cfg, "admin@x.test", RoleAdmin, nil)
 
+	tenantPath := "/admin/tenant/" + strconv.FormatInt(tid, 10)
+
 	// recharge 500
-	resp, err := admin.PostForm(ts.URL+"/admin/tenant/"+strconv.FormatInt(tid, 10)+"/recharge",
-		url.Values{"amount": {"500"}, "ref": {"wire-001"}})
+	rechargeTok := csrfFor(t, admin, ts, tenantPath)
+	resp, err := admin.PostForm(ts.URL+tenantPath+"/recharge",
+		url.Values{"amount": {"500"}, "ref": {"wire-001"}, csrfFormField: {rechargeTok}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -50,8 +53,9 @@ func TestAdminRechargeAndSetPrice(t *testing.T) {
 	}
 
 	// set price US=7
-	resp2, err := admin.PostForm(ts.URL+"/admin/tenant/"+strconv.FormatInt(tid, 10)+"/pricing",
-		url.Values{"country": {"US"}, "unit_price": {"7"}})
+	priceTok := csrfFor(t, admin, ts, tenantPath)
+	resp2, err := admin.PostForm(ts.URL+tenantPath+"/pricing",
+		url.Values{"country": {"US"}, "unit_price": {"7"}, csrfFormField: {priceTok}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -83,10 +87,12 @@ func TestAdminWriteRoutesForbidNonAdmin(t *testing.T) {
 		t.Fatalf("seed tenant: %v", err)
 	}
 	idStr := strconv.FormatInt(tid, 10)
-	// a customer must be forbidden on both write routes
+	// a customer must be forbidden on both write routes (RBAC fires before CSRF)
 	cust := loginAs(t, ts, users, sessions, cfg, "cust@x.test", RoleCustomer, &tid)
 
-	resp, err := cust.PostForm(ts.URL+"/admin/tenant/"+idStr+"/recharge", url.Values{"amount": {"100"}, "ref": {"x"}})
+	// Get a CSRF token (from /login since customer can't access admin pages)
+	custTok := csrfFor(t, cust, ts, "/login")
+	resp, err := cust.PostForm(ts.URL+"/admin/tenant/"+idStr+"/recharge", url.Values{"amount": {"100"}, "ref": {"x"}, csrfFormField: {custTok}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -94,7 +100,8 @@ func TestAdminWriteRoutesForbidNonAdmin(t *testing.T) {
 	if resp.StatusCode != http.StatusForbidden {
 		t.Fatalf("customer recharge: want 403, got %d", resp.StatusCode)
 	}
-	resp2, err := cust.PostForm(ts.URL+"/admin/tenant/"+idStr+"/pricing", url.Values{"country": {"US"}, "unit_price": {"5"}})
+	custTok2 := csrfFor(t, cust, ts, "/login")
+	resp2, err := cust.PostForm(ts.URL+"/admin/tenant/"+idStr+"/pricing", url.Values{"country": {"US"}, "unit_price": {"5"}, csrfFormField: {custTok2}})
 	if err != nil {
 		t.Fatal(err)
 	}

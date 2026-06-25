@@ -1,5 +1,5 @@
 {{define "content"}}
 <h1>控制台</h1>
 <p>已登录:角色 <strong>{{.Role}}</strong></p>
-<form method="post" action="/logout"><button type="submit">登出</button></form>
+<form method="post" action="/logout"><input type="hidden" name="csrf" value="{{.CSRF}}"><button type="submit">登出</button></form>
 {{end}}
