@@ -4,10 +4,14 @@ package dispatch
 import (
 	"context"
 	"fmt"
+	"hash/fnv"
+	randv1 "math/rand" // math/rand v1: spintax.Expand takes *rand.Rand (v1); jitter below uses rand/v2
 	"math/rand/v2"
 	"strings"
 	"text/template"
 	"time"
+
+	"github.com/acme/wadist/internal/spintax"
 )
 
 // renderTemplate substitutes {{.var}} from vars. Missing keys render as zero (no error).
@@ -21,6 +25,16 @@ func renderTemplate(tmpl string, vars map[string]any) string {
 	var b strings.Builder
 	_ = t.Execute(&b, sv)
 	return b.String()
+}
+
+// renderBody expands spintax (deterministically seeded by `seed`, so a retry of
+// the same message re-renders identical copy) then substitutes {{.var}} values.
+func renderBody(tmpl string, vars map[string]any, seed string) string {
+	h := fnv.New64a()
+	_, _ = h.Write([]byte(seed))
+	r := randv1.New(randv1.NewSource(int64(h.Sum64()))) //nolint:gosec // not cryptographic; per-message copy variation
+	spun := spintax.Expand(tmpl, r)
+	return renderTemplate(spun, vars)
 }
 
 func jitter(base time.Duration) time.Duration {

@@ -58,7 +58,7 @@ func (w *SendWorker) ProcessSend(ctx context.Context, pl SendPayload, body, medi
 	}
 	w.m.RecordBilling("hold", "held")
 
-	rendered := renderTemplate(body, pl.Vars)
+	rendered := renderBody(body, pl.Vars, pl.MessageID)
 	var media *MediaHandle
 	if mediaSha != "" {
 		media, err = w.resolveMedia(ctx, pl.JID, mediaSha, mime, raw)
