@@ -72,7 +72,10 @@ func run(ctx context.Context) (*console.Server, func(), error) {
 		_ = rdb.Close()
 		return nil, nil, err
 	}
-	srv.WithBilling(bill).WithTenants(tenants).WithPricing(price)
+	srv.WithBilling(bill).WithTenants(tenants).WithPricing(price).WithBlindKey(baseCfg.BlindIndexKey)
+	if len(baseCfg.BlindIndexKey) == 0 {
+		log.Printf("console: WADIST_BLIND_INDEX_KEY not set — send endpoints will fail-closed (ErrSendNotConfigured)")
+	}
 	if err := srv.Start(); err != nil {
 		mgr.Close()
 		flush()
