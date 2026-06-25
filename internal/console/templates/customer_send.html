@@ -1,0 +1,14 @@
+{{define "content"}}
+<h1>新建群发任务</h1>
+{{if .Error}}<p class="error" role="alert">{{.Error}}</p>{{end}}
+<form method="post" action="/send">
+  <input type="hidden" name="csrf" value="{{.CSRF}}">
+  <label>目标国家(2位代码) <input name="country" maxlength="2" required></label>
+  <label>号码包(每行一个,支持逗号分隔)<textarea name="numbers" rows="8" required></textarea></label>
+  <label>文案(支持 Spintax,如 {你好|您好})<textarea name="body" rows="5" required></textarea></label>
+  <button type="submit">提交发送</button>
+</form>
+<h2>文案预览</h2>
+<button hx-post="/send/preview" hx-include="[name='body'],[name='csrf']" hx-target="#preview">预览</button>
+<ul id="preview"></ul>
+{{end}}
