@@ -3,6 +3,7 @@ package console
 
 import (
 	"errors"
+	"fmt"
 	"net/http"
 	"strconv"
 
@@ -73,12 +74,19 @@ func (s *Server) handleAdminTenant(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "template", http.StatusInternalServerError)
 		return
 	}
-	var salesUsers []SalesUser
-	if s.tenants != nil {
-		salesUsers, _ = s.tenants.ListSalesUsers(r.Context())
+	salesUsers, _ := s.tenants.ListSalesUsers(r.Context())
+	salesOwnerLabel := ""
+	if tenant.SalesOwnerID != nil {
+		salesOwnerLabel = fmt.Sprintf("#%d", *tenant.SalesOwnerID)
+		for _, u := range salesUsers {
+			if u.ID == *tenant.SalesOwnerID {
+				salesOwnerLabel = u.Email
+				break
+			}
+		}
 	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	_ = render(w, tpl, map[string]any{"Tenant": tenant, "Balance": bal, "Frozen": frozen, "Ledger": ledger, "Prices": prices, "SalesUsers": salesUsers, "CSRF": s.issueCSRFToken(w, r)})
+	_ = render(w, tpl, map[string]any{"Tenant": tenant, "Balance": bal, "Frozen": frozen, "Ledger": ledger, "Prices": prices, "SalesUsers": salesUsers, "SalesOwnerLabel": salesOwnerLabel, "CSRF": s.issueCSRFToken(w, r)})
 }
 
 func (s *Server) handleAdminRecharge(w http.ResponseWriter, r *http.Request) {
@@ -151,7 +159,11 @@ func (s *Server) handleAdminSetSalesOwner(w http.ResponseWriter, r *http.Request
 		return
 	}
 	if err := s.tenants.SetSalesOwner(r.Context(), id, salesUserID); err != nil {
-		http.Error(w, "set sales owner failed: "+err.Error(), http.StatusBadRequest)
+		if errors.Is(err, ErrNotSalesUser) {
+			http.Error(w, "set sales owner failed: "+err.Error(), http.StatusBadRequest)
+		} else {
+			http.Error(w, "set sales owner failed: "+err.Error(), http.StatusInternalServerError)
+		}
 		return
 	}
 	http.Redirect(w, r, "/admin/tenant/"+strconv.FormatInt(id, 10), http.StatusSeeOther)

@@ -30,6 +30,7 @@ type TenantRepo struct{ pool *pgxpool.Pool }
 func NewTenantRepo(pool *pgxpool.Pool) *TenantRepo { return &TenantRepo{pool: pool} }
 
 var ErrTenantNotFound = errors.New("console: tenant not found")
+var ErrNotSalesUser = errors.New("console: assigned user is not a sales user")
 
 func (r *TenantRepo) List(ctx context.Context) ([]TenantRow, error) {
 	rows, err := r.pool.Query(ctx, `SELECT id, name, status, sales_owner_id FROM tenants ORDER BY id`)
@@ -84,13 +85,13 @@ func (r *TenantRepo) SetSalesOwner(ctx context.Context, tenantID, salesUserID in
 	var role string
 	err := r.pool.QueryRow(ctx, `SELECT role FROM console_users WHERE id=$1`, salesUserID).Scan(&role)
 	if errors.Is(err, pgx.ErrNoRows) {
-		return fmt.Errorf("sales owner: user %d not found", salesUserID)
+		return fmt.Errorf("sales owner: user %d not found: %w", salesUserID, ErrNotSalesUser)
 	}
 	if err != nil {
 		return fmt.Errorf("sales owner: lookup user: %w", err)
 	}
 	if role != string(RoleSales) {
-		return fmt.Errorf("sales owner: user %d is not a sales user (role=%s)", salesUserID, role)
+		return fmt.Errorf("sales owner: user %d is not a sales user (role=%s): %w", salesUserID, role, ErrNotSalesUser)
 	}
 	if _, err := r.pool.Exec(ctx, `UPDATE tenants SET sales_owner_id=$1 WHERE id=$2`, salesUserID, tenantID); err != nil {
 		return fmt.Errorf("set sales owner: %w", err)

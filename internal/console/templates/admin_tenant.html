@@ -35,6 +35,6 @@
   </select>
   <button type="submit">保存销售归属</button>
 </form>
-<p>当前销售归属:{{if .Tenant.SalesOwnerID}}#{{.Tenant.SalesOwnerID}}{{else}}未分配{{end}}</p>
+<p>当前销售归属:{{if .SalesOwnerLabel}}{{.SalesOwnerLabel}}{{else}}未分配{{end}}</p>
 <p><a href="/admin">← 返回</a></p>
 {{end}}

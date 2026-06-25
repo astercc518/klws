@@ -3,6 +3,7 @@ package console
 
 import (
 	"context"
+	"errors"
 	"testing"
 )
 
@@ -32,9 +33,9 @@ func TestSetSalesOwner(t *testing.T) {
 	if err != nil || got.SalesOwnerID == nil || *got.SalesOwnerID != salesID {
 		t.Fatalf("owner not set: %+v err=%v", got, err)
 	}
-	// assigning a non-sales user (admin) → error
-	if err := repo.SetSalesOwner(ctx, tid, adminID); err == nil {
-		t.Fatalf("expected error assigning a non-sales user as owner")
+	// assigning a non-sales user (admin) → ErrNotSalesUser
+	if err := repo.SetSalesOwner(ctx, tid, adminID); !errors.Is(err, ErrNotSalesUser) {
+		t.Fatalf("expected ErrNotSalesUser assigning a non-sales user as owner, got: %v", err)
 	}
 	// list sales users includes our sales, not the admin
 	list, err := repo.ListSalesUsers(ctx)
