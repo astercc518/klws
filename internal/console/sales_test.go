@@ -3,6 +3,7 @@ package console
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"net/http/cookiejar"
 	"net/http/httptest"
@@ -168,6 +169,9 @@ func TestSalesTenantOwnershipGuard(t *testing.T) {
 	}
 	if pr2.StatusCode != http.StatusForbidden {
 		t.Fatalf("non-owned set-price: want 403, got %d", pr2.StatusCode)
+	}
+	if _, err := pricingRepoFor(t, mgr).GetPrice(ctx, tB, "US"); !errors.Is(err, pricing.ErrNoPrice) {
+		t.Fatalf("non-owned POST must store no price; GetPrice(tB) err = %v (want pricing.ErrNoPrice)", err)
 	}
 	_ = salesB
 }
