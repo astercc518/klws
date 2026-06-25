@@ -23,6 +23,7 @@ import (
 	walog "github.com/acme/wadist/internal/log"
 	"github.com/acme/wadist/internal/metrics"
 	"github.com/acme/wadist/internal/node"
+	"github.com/acme/wadist/internal/pricing"
 	"github.com/acme/wadist/internal/sendgate"
 	"github.com/acme/wadist/internal/store"
 )
@@ -131,7 +132,15 @@ func run(ctx context.Context, cfg *config.Config) (*metrics.Server, func(), erro
 
 	// cluster.NewRoutingSender routes sends to live sessions; returns a clear
 	// error when no active session exists rather than silently succeeding.
-	worker := dispatch.NewSendWorker(pool, gate, billingRepo, cluster.NewRoutingSender(reg), placeholderUploader{}).WithMetrics(m).WithCanary(cfg.CanaryPercent)
+	priceRepo := pricing.NewRepo(pool)
+	// priceFor falls back to the existing per-country default table when a tenant
+	// has no explicit price configured.
+	worker := dispatch.NewSendWorker(pool, gate, billingRepo, cluster.NewRoutingSender(reg), placeholderUploader{}).
+		WithMetrics(m).
+		WithCanary(cfg.CanaryPercent).
+		WithPricing(func(ctx context.Context, tenantID int64, country string) int64 {
+			return priceRepo.PriceFor(ctx, tenantID, country, priceFor(country))
+		})
 
 	asynqSrv := asynq.NewServer(
 		asynq.RedisClientOpt{Addr: cfg.RedisAddr},
