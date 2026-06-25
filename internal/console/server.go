@@ -23,6 +23,7 @@ type Server struct {
 	billing  *billing.Repo
 	tenants  *TenantRepo
 	pricing  *pricing.Repo
+	blindKey []byte
 	srv      *http.Server
 	ln       net.Listener
 	ready    atomic.Bool
