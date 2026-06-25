@@ -12,6 +12,12 @@ type SessionSender interface {
 	Send(ctx context.Context, phone, body string, media *dispatch.MediaHandle) (string, error)
 }
 
+// NewSessionWithSender builds a Session with an outbound sender wired (the real
+// factory passes the whatsmeow conn as both Conn and SessionSender).
+func NewSessionWithSender(jid string, conn Conn, lock DeviceLockHandle, sender SessionSender) *Session {
+	return newSessionWithSender(jid, conn, lock, sender)
+}
+
 // newSessionWithSender creates a Session with an optional send capability.
 // Production NewSession leaves sender nil.
 func newSessionWithSender(jid string, conn Conn, lock DeviceLockHandle, sender SessionSender) *Session {

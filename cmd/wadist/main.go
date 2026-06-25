@@ -175,7 +175,7 @@ func run(ctx context.Context, cfg *config.Config) (*metrics.Server, func(), erro
 		if err := conn.Connect(fctx); err != nil {
 			return nil, err
 		}
-		return cluster.NewSession(jid, conn, lock), nil
+		return cluster.NewSessionWithSender(jid, conn, lock, conn), nil
 	})
 
 	sup := cluster.NewSupervisor(reg, cluster.SupervisorOpts{
