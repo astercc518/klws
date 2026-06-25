@@ -49,6 +49,10 @@ func TestLoginLogoutFlow(t *testing.T) {
 		t.Fatalf("bad login status: %d", resp.StatusCode)
 	}
 	resp.Body.Close()
+	u, _ := url.Parse(ts.URL)
+	if cookies := jar.Cookies(u); len(cookies) != 0 {
+		t.Fatalf("bad login must not set a session cookie, got %v", cookies)
+	}
 
 	// Good credentials → 302 to / and a session cookie set.
 	resp, err = client.PostForm(ts.URL+"/login", url.Values{"email": {"admin@acme.test"}, "password": {"pw12345"}})
@@ -98,6 +102,19 @@ func TestRequireRoleForbidsWrongRole(t *testing.T) {
 	h(rec, req)
 	if rec.Code != http.StatusForbidden {
 		t.Fatalf("customer hitting admin-only route: want 403, got %d", rec.Code)
+	}
+}
+
+func TestRequireRoleForbidsMissingSession(t *testing.T) {
+	srv, _ := NewServer(testConfig(), nil, nil, nil)
+	h := srv.requireRole(RoleAdmin)(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	})
+	req := httptest.NewRequest("GET", "/x", nil) // no session in context
+	rec := httptest.NewRecorder()
+	h(rec, req)
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("missing session on role-gated route: want 403, got %d", rec.Code)
 	}
 }
 
