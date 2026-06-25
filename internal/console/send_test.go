@@ -76,4 +76,26 @@ func TestCreateCampaignRLSAndBalance(t *testing.T) {
 	if _, err := srv.createCampaign(cctx, "US", "x", many); !errors.Is(err, ErrInsufficientBalance) {
 		t.Fatalf("want ErrInsufficientBalance, got %v", err)
 	}
+
+	// balance-rejected attempt must have inserted nothing; only the first campaign exists
+	var nc int
+	mustScanPool(t, mgr, ctx, `SELECT count(*) FROM campaigns WHERE tenant_id=$1`, tid, &nc)
+	if nc != 1 {
+		t.Fatalf("balance-rejected attempt must create nothing; want 1 campaign, got %d", nc)
+	}
+}
+
+func TestCreateCampaignFailsClosedWithoutBlindKey(t *testing.T) {
+	ctx := context.Background()
+	mgr := newTestManager(t)
+	cfg := testConfig()
+	srv, _ := NewServer(cfg, NewUserRepo(mgr.SystemPool()), NewSessionStore(newTestRedis(t), time.Hour), mgr)
+	srv.WithPricing(pricingRepo(t, mgr)) // NOTE: no WithBlindKey
+
+	var tid int64
+	mustScan(t, mgr, ctx, `INSERT INTO tenants (name) VALUES ('A') RETURNING id`, &tid)
+	cctx := withCustomerSession(ctx, tid)
+	if _, err := srv.createCampaign(cctx, "US", "x", []string{"15550000001"}); !errors.Is(err, ErrSendNotConfigured) {
+		t.Fatalf("want ErrSendNotConfigured without blind key, got %v", err)
+	}
 }
