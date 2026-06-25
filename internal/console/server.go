@@ -72,6 +72,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /admin/tenant/{id}", s.requireAuth(adminOnly(s.handleAdminTenant)))
 	mux.HandleFunc("POST /admin/tenant/{id}/recharge", s.requireAuth(adminOnly(s.requireCSRF(s.handleAdminRecharge))))
 	mux.HandleFunc("POST /admin/tenant/{id}/pricing", s.requireAuth(adminOnly(s.requireCSRF(s.handleAdminSetPrice))))
+	mux.HandleFunc("POST /admin/tenant/{id}/sales-owner", s.requireAuth(adminOnly(s.requireCSRF(s.handleAdminSetSalesOwner))))
 	return mux
 }
 

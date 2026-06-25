@@ -73,8 +73,12 @@ func (s *Server) handleAdminTenant(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "template", http.StatusInternalServerError)
 		return
 	}
+	var salesUsers []SalesUser
+	if s.tenants != nil {
+		salesUsers, _ = s.tenants.ListSalesUsers(r.Context())
+	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	_ = render(w, tpl, map[string]any{"Tenant": tenant, "Balance": bal, "Frozen": frozen, "Ledger": ledger, "Prices": prices, "CSRF": s.issueCSRFToken(w, r)})
+	_ = render(w, tpl, map[string]any{"Tenant": tenant, "Balance": bal, "Frozen": frozen, "Ledger": ledger, "Prices": prices, "SalesUsers": salesUsers, "CSRF": s.issueCSRFToken(w, r)})
 }
 
 func (s *Server) handleAdminRecharge(w http.ResponseWriter, r *http.Request) {
@@ -126,6 +130,28 @@ func (s *Server) handleAdminSetPrice(w http.ResponseWriter, r *http.Request) {
 	}
 	if err := s.pricing.SetPrice(r.Context(), id, country, unit); err != nil {
 		http.Error(w, "set price failed: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+	http.Redirect(w, r, "/admin/tenant/"+strconv.FormatInt(id, 10), http.StatusSeeOther)
+}
+
+func (s *Server) handleAdminSetSalesOwner(w http.ResponseWriter, r *http.Request) {
+	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
+	if err != nil {
+		http.Error(w, "bad tenant id", http.StatusBadRequest)
+		return
+	}
+	salesUserID, err := strconv.ParseInt(r.FormValue("sales_user_id"), 10, 64)
+	if err != nil {
+		http.Error(w, "bad sales_user_id", http.StatusBadRequest)
+		return
+	}
+	if s.tenants == nil {
+		http.Error(w, "tenants not configured", http.StatusInternalServerError)
+		return
+	}
+	if err := s.tenants.SetSalesOwner(r.Context(), id, salesUserID); err != nil {
+		http.Error(w, "set sales owner failed: "+err.Error(), http.StatusBadRequest)
 		return
 	}
 	http.Redirect(w, r, "/admin/tenant/"+strconv.FormatInt(id, 10), http.StatusSeeOther)
