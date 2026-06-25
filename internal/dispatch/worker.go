@@ -48,7 +48,7 @@ func (w *SendWorker) ProcessSend(ctx context.Context, pl SendPayload, body, medi
 		AccountJID:  pl.JID,
 		MessageID:   pl.MessageID,
 		CountryCode: pl.Country,
-		Amount:      1, // unit price; real price injected at wiring layer
+		Amount:      w.amountFor(ctx, pl.TenantID, pl.Country),
 	}); err != nil {
 		w.m.RecordBilling("hold", holdOutcome(err))
 		w.m.RecordSend("hold_failed")

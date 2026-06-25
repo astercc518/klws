@@ -1,0 +1,12 @@
+{{define "content"}}
+<h1>租户管理</h1>
+<table>
+  <thead><tr><th>ID</th><th>名称</th><th>状态</th><th>余额</th><th>冻结</th><th></th></tr></thead>
+  <tbody>
+  {{range .Tenants}}
+    <tr><td>{{.ID}}</td><td>{{.Name}}</td><td>{{.Status}}</td><td>{{.Balance}}</td><td>{{.Frozen}}</td>
+        <td><a href="/admin/tenant/{{.ID}}">详情</a></td></tr>
+  {{end}}
+  </tbody>
+</table>
+{{end}}

@@ -11,6 +11,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -300,6 +301,57 @@ ON CONFLICT (idem_key) DO NOTHING`,
 		}
 		return nil
 	})
+}
+
+// Balance returns the tenant's available and frozen balances (minor units).
+// A missing wallet row reads as (0, 0, nil) — a tenant with no activity yet.
+func (r *Repo) Balance(ctx context.Context, tenantID int64) (balance, frozen int64, err error) {
+	err = r.pool.QueryRow(ctx,
+		`SELECT balance, frozen FROM tenant_wallets WHERE tenant_id=$1`, tenantID).
+		Scan(&balance, &frozen)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return 0, 0, nil
+	}
+	if err != nil {
+		return 0, 0, fmt.Errorf("read balance: %w", err)
+	}
+	return balance, frozen, nil
+}
+
+// LedgerEntry is one immutable wallet ledger row.
+type LedgerEntry struct {
+	ID           int64
+	ChargeID     *int64
+	Kind         string
+	DeltaBalance int64
+	DeltaFrozen  int64
+	BalanceAfter int64
+	FrozenAfter  int64
+	CreatedAt    time.Time
+}
+
+// Ledger returns a tenant's most-recent ledger entries (newest first). limit<=0 → 100.
+func (r *Repo) Ledger(ctx context.Context, tenantID int64, limit int) ([]LedgerEntry, error) {
+	if limit <= 0 {
+		limit = 100
+	}
+	rows, err := r.pool.Query(ctx,
+		`SELECT id, charge_id, kind, delta_balance, delta_frozen, balance_after, frozen_after, created_at
+		   FROM wallet_ledger WHERE tenant_id=$1 ORDER BY id DESC LIMIT $2`, tenantID, limit)
+	if err != nil {
+		return nil, fmt.Errorf("query ledger: %w", err)
+	}
+	defer rows.Close()
+	var out []LedgerEntry
+	for rows.Next() {
+		var e LedgerEntry
+		if err := rows.Scan(&e.ID, &e.ChargeID, &e.Kind, &e.DeltaBalance, &e.DeltaFrozen,
+			&e.BalanceAfter, &e.FrozenAfter, &e.CreatedAt); err != nil {
+			return nil, fmt.Errorf("scan ledger: %w", err)
+		}
+		out = append(out, e)
+	}
+	return out, rows.Err()
 }
 
 func (r *Repo) reviewRefund(ctx context.Context, refundID, adminID int64, note string, approve bool) error {

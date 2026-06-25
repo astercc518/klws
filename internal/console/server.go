@@ -8,6 +8,8 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/acme/wadist/internal/billing"
+	"github.com/acme/wadist/internal/pricing"
 	"github.com/acme/wadist/internal/store"
 )
 
@@ -18,10 +20,22 @@ type Server struct {
 	users    *UserRepo
 	sessions *SessionStore
 	mgr      *store.Manager
+	billing  *billing.Repo
+	tenants  *TenantRepo
+	pricing  *pricing.Repo
 	srv      *http.Server
 	ln       net.Listener
 	ready    atomic.Bool
 }
+
+// WithBilling wires a billing.Repo into the server (for admin handlers). Chainable.
+func (s *Server) WithBilling(b *billing.Repo) *Server { s.billing = b; return s }
+
+// WithTenants wires a TenantRepo into the server (for admin handlers). Chainable.
+func (s *Server) WithTenants(t *TenantRepo) *Server { s.tenants = t; return s }
+
+// WithPricing wires a pricing.Repo into the server (for admin handlers). Chainable.
+func (s *Server) WithPricing(p *pricing.Repo) *Server { s.pricing = p; return s }
 
 func NewServer(cfg Config, users *UserRepo, sessions *SessionStore, mgr *store.Manager) (*Server, error) {
 	return &Server{cfg: cfg, users: users, sessions: sessions, mgr: mgr}, nil
@@ -47,6 +61,11 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /login", s.handleLoginSubmit)
 	mux.HandleFunc("POST /logout", s.requireAuth(s.handleLogout))
 	mux.HandleFunc("GET /{$}", s.requireAuth(s.handleDashboard))
+	adminOnly := s.requireRole(RoleAdmin)
+	mux.HandleFunc("GET /admin", s.requireAuth(adminOnly(s.handleAdminTenants)))
+	mux.HandleFunc("GET /admin/tenant/{id}", s.requireAuth(adminOnly(s.handleAdminTenant)))
+	mux.HandleFunc("POST /admin/tenant/{id}/recharge", s.requireAuth(adminOnly(s.handleAdminRecharge)))
+	mux.HandleFunc("POST /admin/tenant/{id}/pricing", s.requireAuth(adminOnly(s.handleAdminSetPrice)))
 	return mux
 }
 

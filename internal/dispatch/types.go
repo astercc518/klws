@@ -70,6 +70,7 @@ type SendWorker struct {
 	uploader  Uploader
 	m         *metrics.Metrics
 	canaryPct uint8
+	priceFor  func(ctx context.Context, tenantID int64, country string) int64
 }
 
 func NewSendWorker(pool *pgxpool.Pool, g *sendgate.SendGate, b *billing.Repo, s Sender, u Uploader) *SendWorker {
@@ -81,3 +82,18 @@ func (w *SendWorker) WithMetrics(m *metrics.Metrics) *SendWorker { w.m = m; retu
 // WithCanary sets the canary rollout percentage (0..100) for cohort metric labelling.
 // Default 0 means all sends are labelled "stable". Does not change NewSendWorker signature.
 func (w *SendWorker) WithCanary(pct uint8) *SendWorker { w.canaryPct = pct; return w }
+
+// WithPricing injects the per-tenant×country unit-price lookup used at the charge
+// point. When unset, amountFor returns 1 (the pre-pricing default).
+func (w *SendWorker) WithPricing(fn func(ctx context.Context, tenantID int64, country string) int64) *SendWorker {
+	w.priceFor = fn
+	return w
+}
+
+// amountFor resolves the charge amount for a message; defaults to 1 minor unit.
+func (w *SendWorker) amountFor(ctx context.Context, tenantID int64, country string) int64 {
+	if w.priceFor == nil {
+		return 1
+	}
+	return w.priceFor(ctx, tenantID, country)
+}

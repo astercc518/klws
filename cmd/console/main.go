@@ -11,9 +11,11 @@ import (
 
 	goredis "github.com/redis/go-redis/v9"
 
+	"github.com/acme/wadist/internal/billing"
 	"github.com/acme/wadist/internal/config"
 	"github.com/acme/wadist/internal/console"
 	walog "github.com/acme/wadist/internal/log"
+	"github.com/acme/wadist/internal/pricing"
 	"github.com/acme/wadist/internal/store"
 )
 
@@ -56,6 +58,9 @@ func run(ctx context.Context) (*console.Server, func(), error) {
 	sessions := console.NewSessionStore(rdb, webCfg.SessionTTL)
 	users := console.NewUserRepo(mgr.SystemPool())
 
+	bill := billing.NewRepo(mgr.SystemPool())
+	price := pricing.NewRepo(mgr.SystemPool())
+	tenants := console.NewTenantRepo(mgr.SystemPool())
 	srv, err := console.NewServer(webCfg, users, sessions, mgr)
 	if err != nil {
 		mgr.Close()
@@ -63,6 +68,7 @@ func run(ctx context.Context) (*console.Server, func(), error) {
 		_ = rdb.Close()
 		return nil, nil, err
 	}
+	srv.WithBilling(bill).WithTenants(tenants).WithPricing(price)
 	if err := srv.Start(); err != nil {
 		mgr.Close()
 		flush()
