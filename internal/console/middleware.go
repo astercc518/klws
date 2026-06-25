@@ -3,7 +3,10 @@ package console
 
 import (
 	"context"
+	"errors"
 	"net/http"
+
+	"github.com/jackc/pgx/v5"
 )
 
 type ctxKey int
@@ -56,4 +59,16 @@ func (s *Server) requireRole(roles ...Role) func(http.HandlerFunc) http.HandlerF
 			next(w, r)
 		}
 	}
+}
+
+// withTenantTx begins an RLS-scoped transaction for the current customer session.
+// Callers (Module E handlers) use the returned tx for all tenant-scoped queries;
+// it sees only rows where tenant_id matches the session tenant. Rollback/commit
+// is the caller's responsibility.
+func (s *Server) withTenantTx(ctx context.Context) (pgx.Tx, error) {
+	data, ok := sessionFrom(ctx)
+	if !ok || data.Role != RoleCustomer || data.TenantID == nil {
+		return nil, errors.New("console: withTenantTx requires a customer session with a tenant")
+	}
+	return s.mgr.WithTenant(ctx, *data.TenantID)
 }

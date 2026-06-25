@@ -3,6 +3,7 @@ package console
 
 import (
 	"context"
+	"net/url"
 	"os"
 	"path/filepath"
 	"sort"
@@ -48,7 +49,8 @@ func newTestManager(t *testing.T) *store.Manager {
 	}
 	t.Cleanup(flush)
 
-	mgr, err := store.NewManager(ctx, store.Config{DSN: dsn, NodeID: "console-test"}, logger)
+	appTenantDSN := buildAppTenantDSN(t, dsn)
+	mgr, err := store.NewManager(ctx, store.Config{DSN: dsn, AppTenantDSN: appTenantDSN, NodeID: "console-test"}, logger)
 	if err != nil {
 		t.Fatalf("manager: %v", err)
 	}
@@ -80,3 +82,15 @@ func applyAllMigrations(t *testing.T, ctx context.Context, mgr *store.Manager) {
 }
 
 func ptrInt64(v int64) *int64 { return &v }
+
+// buildAppTenantDSN takes the superuser DSN and returns a DSN for the app_tenant role.
+// Mirrors the same helper in internal/store/rls_test.go.
+func buildAppTenantDSN(t *testing.T, superDSN string) string {
+	t.Helper()
+	u, err := url.Parse(superDSN)
+	if err != nil {
+		t.Fatalf("parse dsn: %v", err)
+	}
+	u.User = url.UserPassword("app_tenant", "app_tenant_pw")
+	return u.String()
+}
