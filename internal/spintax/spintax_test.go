@@ -51,3 +51,11 @@ func TestExpandEmptyOption(t *testing.T) {
 		t.Fatalf("empty-option expansion wrong: %q", got)
 	}
 }
+
+func TestExpandPreservesTemplateVarInsideOption(t *testing.T) {
+	r := rand.New(rand.NewSource(7))
+	got := Expand("{Hi {{.name}}|Hello}", r)
+	if got != "Hi {{.name}}" && got != "Hello" {
+		t.Fatalf("template var inside option corrupted: %q", got)
+	}
+}

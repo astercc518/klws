@@ -5,7 +5,7 @@ import (
 	"context"
 	"fmt"
 	"hash/fnv"
-	randv1 "math/rand"
+	randv1 "math/rand" // math/rand v1: spintax.Expand takes *rand.Rand (v1); jitter below uses rand/v2
 	"math/rand/v2"
 	"strings"
 	"text/template"

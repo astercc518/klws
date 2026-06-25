@@ -56,6 +56,11 @@ func expandGroup(s string, i int, r *rand.Rand) (string, int) {
 	for i < len(s) {
 		switch s[i] {
 		case '{':
+			if i+1 < len(s) && s[i+1] == '{' {
+				cur.WriteString("{{")
+				i += 2
+				continue
+			}
 			sub, next := expandGroup(s, i+1, r)
 			cur.WriteString(sub)
 			i = next
@@ -64,6 +69,11 @@ func expandGroup(s string, i int, r *rand.Rand) (string, int) {
 			cur.Reset()
 			i++
 		case '}':
+			if i+1 < len(s) && s[i+1] == '}' {
+				cur.WriteString("}}")
+				i += 2
+				continue
+			}
 			options = append(options, cur.String())
 			i++
 			if len(options) == 0 {
