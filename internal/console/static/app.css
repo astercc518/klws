@@ -1,0 +1,4 @@
+/* wadist console minimal styles */
+body{font-family:system-ui,sans-serif;margin:2rem;max-width:60rem}
+.error{color:#b00020}
+label{display:block;margin:.5rem 0}
