@@ -5,6 +5,7 @@ import (
 	"context"
 	"log"
 	"os/signal"
+	"sync"
 	"syscall"
 	"time"
 
@@ -69,14 +70,17 @@ func run(ctx context.Context) (*console.Server, func(), error) {
 		return nil, nil, err
 	}
 
+	var stopOnce sync.Once
 	stop := func() {
-		srv.SetReady(false)
-		sctx, c := context.WithTimeout(context.Background(), 5*time.Second)
-		defer c()
-		_ = srv.Shutdown(sctx)
-		mgr.Close()
-		flush()
-		_ = rdb.Close()
+		stopOnce.Do(func() {
+			srv.SetReady(false)
+			sctx, c := context.WithTimeout(context.Background(), 5*time.Second)
+			defer c()
+			_ = srv.Shutdown(sctx)
+			mgr.Close()
+			flush()
+			_ = rdb.Close()
+		})
 	}
 	return srv, stop, nil
 }
