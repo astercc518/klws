@@ -3,6 +3,9 @@ package console
 
 import (
 	"context"
+	"io"
+	"net/http"
+	"net/http/httptest"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -82,6 +85,30 @@ func applyAllMigrations(t *testing.T, ctx context.Context, mgr *store.Manager) {
 }
 
 func ptrInt64(v int64) *int64 { return &v }
+
+// csrfFor GETs path using client (which carries the cookie jar), reads the
+// rendered hidden CSRF field, and returns the token value. The cookie jar
+// automatically retains the Set-Cookie from the response for subsequent POSTs.
+func csrfFor(t *testing.T, client *http.Client, ts *httptest.Server, path string) string {
+	t.Helper()
+	resp, err := client.Get(ts.URL + path)
+	if err != nil {
+		t.Fatalf("csrf GET %s: %v", path, err)
+	}
+	defer resp.Body.Close()
+	b, _ := io.ReadAll(resp.Body)
+	s := string(b)
+	i := strings.Index(s, `name="csrf" value="`)
+	if i < 0 {
+		t.Fatalf("no csrf field in %s response", path)
+	}
+	rest := s[i+len(`name="csrf" value="`):]
+	tok := rest[:strings.IndexByte(rest, '"')]
+	if tok == "" {
+		t.Fatalf("csrfFor: empty csrf token extracted from %s", path)
+	}
+	return tok
+}
 
 // buildAppTenantDSN takes the superuser DSN and returns a DSN for the app_tenant role.
 // Mirrors the same helper in internal/store/rls_test.go.

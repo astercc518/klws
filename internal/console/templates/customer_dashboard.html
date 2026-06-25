@@ -1,0 +1,17 @@
+{{define "content"}}
+<h1>我的控制台</h1>
+<p>钱包余额:<strong>{{.Balance}}</strong> ｜ 冻结:<strong>{{.Frozen}}</strong></p>
+<p><a href="/account">账单与充值记录</a></p>
+<h2>我的群发任务</h2>
+<table>
+  <thead><tr><th>ID</th><th>状态</th><th>总数</th><th>成功</th><th>失败</th></tr></thead>
+  <tbody>
+  {{range .Campaigns}}
+    <tr><td>{{.ID}}</td><td>{{.State}}</td><td>{{.Total}}</td><td>{{.Sent}}</td><td>{{.Failed}}</td></tr>
+  {{else}}
+    <tr><td colspan="5">暂无任务</td></tr>
+  {{end}}
+  </tbody>
+</table>
+<form method="post" action="/logout"><input type="hidden" name="csrf" value="{{.CSRF}}"><button type="submit">登出</button></form>
+{{end}}

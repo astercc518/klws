@@ -41,7 +41,8 @@ func TestLoginLogoutFlow(t *testing.T) {
 	resp.Body.Close()
 
 	// Bad credentials → 200 with error, no cookie.
-	resp, err = client.PostForm(ts.URL+"/login", url.Values{"email": {"admin@acme.test"}, "password": {"wrong"}})
+	tok := csrfFor(t, client, ts, "/login")
+	resp, err = client.PostForm(ts.URL+"/login", url.Values{"email": {"admin@acme.test"}, "password": {"wrong"}, csrfFormField: {tok}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -49,13 +50,17 @@ func TestLoginLogoutFlow(t *testing.T) {
 		t.Fatalf("bad login status: %d", resp.StatusCode)
 	}
 	resp.Body.Close()
+	// CSRF cookie is set, but no session cookie must exist yet.
 	u, _ := url.Parse(ts.URL)
-	if cookies := jar.Cookies(u); len(cookies) != 0 {
-		t.Fatalf("bad login must not set a session cookie, got %v", cookies)
+	for _, c := range jar.Cookies(u) {
+		if c.Name == "wadist_session" {
+			t.Fatalf("bad login must not set a session cookie, got %v", jar.Cookies(u))
+		}
 	}
 
 	// Good credentials → 302 to / and a session cookie set.
-	resp, err = client.PostForm(ts.URL+"/login", url.Values{"email": {"admin@acme.test"}, "password": {"pw12345"}})
+	tok2 := csrfFor(t, client, ts, "/login")
+	resp, err = client.PostForm(ts.URL+"/login", url.Values{"email": {"admin@acme.test"}, "password": {"pw12345"}, csrfFormField: {tok2}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -75,7 +80,8 @@ func TestLoginLogoutFlow(t *testing.T) {
 	}
 
 	// Logout → 302 to /login; dashboard again unauthenticated.
-	resp, err = client.PostForm(ts.URL+"/logout", url.Values{})
+	logoutTok := csrfFor(t, client, ts, "/")
+	resp, err = client.PostForm(ts.URL+"/logout", url.Values{csrfFormField: {logoutTok}})
 	if err != nil {
 		t.Fatal(err)
 	}

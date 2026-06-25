@@ -58,14 +58,16 @@ func (s *Server) Handler() http.Handler {
 	})
 	mux.Handle("GET /static/", http.StripPrefix("/static/", http.FileServer(http.FS(mustStaticSub()))))
 	mux.HandleFunc("GET /login", s.handleLoginPage)
-	mux.HandleFunc("POST /login", s.handleLoginSubmit)
-	mux.HandleFunc("POST /logout", s.requireAuth(s.handleLogout))
+	mux.HandleFunc("POST /login", s.requireCSRF(s.handleLoginSubmit))
+	mux.HandleFunc("POST /logout", s.requireAuth(s.requireCSRF(s.handleLogout)))
 	mux.HandleFunc("GET /{$}", s.requireAuth(s.handleDashboard))
+	custOnly := s.requireRole(RoleCustomer)
+	mux.HandleFunc("GET /account", s.requireAuth(custOnly(s.handleCustomerAccount)))
 	adminOnly := s.requireRole(RoleAdmin)
 	mux.HandleFunc("GET /admin", s.requireAuth(adminOnly(s.handleAdminTenants)))
 	mux.HandleFunc("GET /admin/tenant/{id}", s.requireAuth(adminOnly(s.handleAdminTenant)))
-	mux.HandleFunc("POST /admin/tenant/{id}/recharge", s.requireAuth(adminOnly(s.handleAdminRecharge)))
-	mux.HandleFunc("POST /admin/tenant/{id}/pricing", s.requireAuth(adminOnly(s.handleAdminSetPrice)))
+	mux.HandleFunc("POST /admin/tenant/{id}/recharge", s.requireAuth(adminOnly(s.requireCSRF(s.handleAdminRecharge))))
+	mux.HandleFunc("POST /admin/tenant/{id}/pricing", s.requireAuth(adminOnly(s.requireCSRF(s.handleAdminSetPrice))))
 	return mux
 }
 
@@ -81,7 +83,7 @@ func (s *Server) handleLoginSubmit(w http.ResponseWriter, r *http.Request) {
 		}
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
 		w.WriteHeader(http.StatusOK)
-		_ = render(w, t, map[string]any{"Error": "邮箱或密码错误"})
+		_ = render(w, t, map[string]any{"Error": "邮箱或密码错误", "CSRF": s.issueCSRFToken(w, r)})
 		return
 	}
 	sid, err := s.sessions.Create(r.Context(), SessionData{UserID: user.ID, Role: user.Role, TenantID: user.TenantID})
@@ -121,23 +123,64 @@ func (s *Server) handleLogout(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleDashboard(w http.ResponseWriter, r *http.Request) {
 	data, _ := sessionFrom(r.Context())
+	if data.Role == RoleCustomer {
+		bal, frozen, err := s.customerBalance(r.Context())
+		if err != nil {
+			http.Error(w, "load balance", http.StatusInternalServerError)
+			return
+		}
+		camps, err := s.customerCampaigns(r.Context(), 50)
+		if err != nil {
+			http.Error(w, "load campaigns", http.StatusInternalServerError)
+			return
+		}
+		t, err := parsePage("customer_dashboard.html")
+		if err != nil {
+			http.Error(w, "template error", http.StatusInternalServerError)
+			return
+		}
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		_ = render(w, t, map[string]any{"Balance": bal, "Frozen": frozen, "Campaigns": camps, "CSRF": s.issueCSRFToken(w, r)})
+		return
+	}
+	// staff: existing dashboard
 	t, err := parsePage("dashboard.html")
 	if err != nil {
 		http.Error(w, "template error", http.StatusInternalServerError)
 		return
 	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	_ = render(w, t, map[string]any{"Role": string(data.Role)})
+	_ = render(w, t, map[string]any{"Role": string(data.Role), "CSRF": s.issueCSRFToken(w, r)})
 }
 
-func (s *Server) handleLoginPage(w http.ResponseWriter, _ *http.Request) {
+func (s *Server) handleCustomerAccount(w http.ResponseWriter, r *http.Request) {
+	bal, frozen, err := s.customerBalance(r.Context())
+	if err != nil {
+		http.Error(w, "load balance", http.StatusInternalServerError)
+		return
+	}
+	ledger, err := s.customerLedger(r.Context(), 100)
+	if err != nil {
+		http.Error(w, "load ledger", http.StatusInternalServerError)
+		return
+	}
+	t, err := parsePage("customer_account.html")
+	if err != nil {
+		http.Error(w, "template error", http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	_ = render(w, t, map[string]any{"Balance": bal, "Frozen": frozen, "Ledger": ledger})
+}
+
+func (s *Server) handleLoginPage(w http.ResponseWriter, r *http.Request) {
 	t, err := parsePage("login.html")
 	if err != nil {
 		http.Error(w, "template error", http.StatusInternalServerError)
 		return
 	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	_ = render(w, t, map[string]any{"Error": ""})
+	_ = render(w, t, map[string]any{"Error": "", "CSRF": s.issueCSRFToken(w, r)})
 }
 
 func (s *Server) Start() error {

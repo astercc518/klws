@@ -26,7 +26,8 @@ func loginAs(t *testing.T, ts *httptest.Server, repo *UserRepo, sessions *Sessio
 	}
 	jar, _ := newJar()
 	client := &http.Client{Jar: jar, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
-	resp, err := client.PostForm(ts.URL+"/login", url.Values{"email": {email}, "password": {"pw123456"}})
+	tok := csrfFor(t, client, ts, "/login")
+	resp, err := client.PostForm(ts.URL+"/login", url.Values{"email": {email}, "password": {"pw123456"}, csrfFormField: {tok}})
 	if err != nil {
 		t.Fatalf("login: %v", err)
 	}
