@@ -31,9 +31,9 @@ func TestWithTenantTxIsolatesRows(t *testing.T) {
 	if err != nil {
 		t.Fatalf("withTenantTx: %v", err)
 	}
-	defer tx.Rollback(ctx) //nolint:errcheck
+	defer tx.Rollback(cctx) //nolint:errcheck
 	var count int
-	if err := tx.QueryRow(ctx, `SELECT count(*) FROM account_devices`).Scan(&count); err != nil {
+	if err := tx.QueryRow(cctx, `SELECT count(*) FROM account_devices`).Scan(&count); err != nil {
 		t.Fatalf("count: %v", err)
 	}
 	if count != 1 {
@@ -53,6 +53,7 @@ func TestAppTenantCannotReadConsoleUsers(t *testing.T) {
 	ctx := context.Background()
 	mgr := newTestManager(t)
 
+	// Probe the app_tenant ROLE's REVOKE directly (pool-level), not via withTenantTx — no customer session needed.
 	tx, err := mgr.TenantPool().Begin(ctx)
 	if err != nil {
 		t.Fatalf("begin tenant tx: %v", err)
