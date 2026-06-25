@@ -93,6 +93,10 @@ func (s *Server) handleAdminRecharge(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "ref (payment reference) is required", http.StatusBadRequest)
 		return
 	}
+	if s.billing == nil {
+		http.Error(w, "billing not configured", http.StatusInternalServerError)
+		return
+	}
 	if err := s.billing.Topup(r.Context(), id, amount, ref); err != nil {
 		http.Error(w, "recharge failed: "+err.Error(), http.StatusInternalServerError)
 		return
@@ -114,6 +118,10 @@ func (s *Server) handleAdminSetPrice(w http.ResponseWriter, r *http.Request) {
 	unit, err := strconv.ParseInt(r.FormValue("unit_price"), 10, 64)
 	if err != nil || unit <= 0 {
 		http.Error(w, "unit_price must be a positive integer", http.StatusBadRequest)
+		return
+	}
+	if s.pricing == nil {
+		http.Error(w, "pricing not configured", http.StatusInternalServerError)
 		return
 	}
 	if err := s.pricing.SetPrice(r.Context(), id, country, unit); err != nil {
