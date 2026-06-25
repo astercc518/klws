@@ -61,3 +61,7 @@ memory-gate: ## run memory baseline gate (requires build tag memory_gate)
 .PHONY: chaos
 chaos: ## run takeover chaos test (requires Docker for testcontainers)
 	$(TEST_ENV) $(GO) test -run TestTakeoverChaos -count=5 ./internal/node/
+
+.PHONY: console-run
+console-run: ## run the management console (needs WADIST_POSTGRES_DSN, WADIST_CONSOLE_SESSION_KEY)
+	$(GO) run ./cmd/console
