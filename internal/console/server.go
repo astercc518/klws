@@ -121,6 +121,27 @@ func (s *Server) handleLogout(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleDashboard(w http.ResponseWriter, r *http.Request) {
 	data, _ := sessionFrom(r.Context())
+	if data.Role == RoleCustomer {
+		bal, frozen, err := s.customerBalance(r.Context())
+		if err != nil {
+			http.Error(w, "load balance", http.StatusInternalServerError)
+			return
+		}
+		camps, err := s.customerCampaigns(r.Context(), 50)
+		if err != nil {
+			http.Error(w, "load campaigns", http.StatusInternalServerError)
+			return
+		}
+		t, err := parsePage("customer_dashboard.html")
+		if err != nil {
+			http.Error(w, "template error", http.StatusInternalServerError)
+			return
+		}
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		_ = render(w, t, map[string]any{"Balance": bal, "Frozen": frozen, "Campaigns": camps, "CSRF": s.issueCSRFToken(w, r)})
+		return
+	}
+	// staff: existing dashboard
 	t, err := parsePage("dashboard.html")
 	if err != nil {
 		http.Error(w, "template error", http.StatusInternalServerError)
