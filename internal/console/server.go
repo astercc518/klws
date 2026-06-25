@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/acme/wadist/internal/billing"
+	"github.com/acme/wadist/internal/pricing"
 	"github.com/acme/wadist/internal/store"
 )
 
@@ -21,6 +22,7 @@ type Server struct {
 	mgr      *store.Manager
 	billing  *billing.Repo
 	tenants  *TenantRepo
+	pricing  *pricing.Repo
 	srv      *http.Server
 	ln       net.Listener
 	ready    atomic.Bool
@@ -31,6 +33,9 @@ func (s *Server) WithBilling(b *billing.Repo) *Server { s.billing = b; return s 
 
 // WithTenants wires a TenantRepo into the server (for admin handlers). Chainable.
 func (s *Server) WithTenants(t *TenantRepo) *Server { s.tenants = t; return s }
+
+// WithPricing wires a pricing.Repo into the server (for admin handlers). Chainable.
+func (s *Server) WithPricing(p *pricing.Repo) *Server { s.pricing = p; return s }
 
 func NewServer(cfg Config, users *UserRepo, sessions *SessionStore, mgr *store.Manager) (*Server, error) {
 	return &Server{cfg: cfg, users: users, sessions: sessions, mgr: mgr}, nil
@@ -59,6 +64,8 @@ func (s *Server) Handler() http.Handler {
 	adminOnly := s.requireRole(RoleAdmin)
 	mux.HandleFunc("GET /admin", s.requireAuth(adminOnly(s.handleAdminTenants)))
 	mux.HandleFunc("GET /admin/tenant/{id}", s.requireAuth(adminOnly(s.handleAdminTenant)))
+	mux.HandleFunc("POST /admin/tenant/{id}/recharge", s.requireAuth(adminOnly(s.handleAdminRecharge)))
+	mux.HandleFunc("POST /admin/tenant/{id}/pricing", s.requireAuth(adminOnly(s.handleAdminSetPrice)))
 	return mux
 }
 

@@ -10,5 +10,19 @@
   {{end}}
   </tbody>
 </table>
+<h2>充值(线下到账后入账)</h2>
+<form method="post" action="/admin/tenant/{{.Tenant.ID}}/recharge">
+  <label>金额(最小货币单位) <input type="number" name="amount" min="1" required></label>
+  <label>付款参考号 <input type="text" name="ref" required></label>
+  <button type="submit">确认充值</button>
+</form>
+
+<h2>定价(按国家设单价)</h2>
+<form method="post" action="/admin/tenant/{{.Tenant.ID}}/pricing">
+  <label>国家(2位代码) <input type="text" name="country" maxlength="2" required></label>
+  <label>单价(最小货币单位) <input type="number" name="unit_price" min="1" required></label>
+  <button type="submit">保存单价</button>
+</form>
+<ul>{{range .Prices}}<li>{{.Country}}: {{.UnitPrice}}</li>{{end}}</ul>
 <p><a href="/admin">← 返回</a></p>
 {{end}}

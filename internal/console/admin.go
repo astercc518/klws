@@ -5,6 +5,8 @@ import (
 	"errors"
 	"net/http"
 	"strconv"
+
+	"github.com/acme/wadist/internal/pricing"
 )
 
 type tenantBalanceRow struct {
@@ -62,11 +64,61 @@ func (s *Server) handleAdminTenant(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "load ledger", http.StatusInternalServerError)
 		return
 	}
+	var prices []pricing.Price
+	if s.pricing != nil {
+		prices, _ = s.pricing.ListForTenant(r.Context(), id)
+	}
 	tpl, err := parsePage("admin_tenant.html")
 	if err != nil {
 		http.Error(w, "template", http.StatusInternalServerError)
 		return
 	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	_ = render(w, tpl, map[string]any{"Tenant": tenant, "Balance": bal, "Frozen": frozen, "Ledger": ledger})
+	_ = render(w, tpl, map[string]any{"Tenant": tenant, "Balance": bal, "Frozen": frozen, "Ledger": ledger, "Prices": prices})
+}
+
+func (s *Server) handleAdminRecharge(w http.ResponseWriter, r *http.Request) {
+	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
+	if err != nil {
+		http.Error(w, "bad tenant id", http.StatusBadRequest)
+		return
+	}
+	amount, err := strconv.ParseInt(r.FormValue("amount"), 10, 64)
+	if err != nil || amount <= 0 {
+		http.Error(w, "amount must be a positive integer", http.StatusBadRequest)
+		return
+	}
+	ref := r.FormValue("ref")
+	if ref == "" {
+		http.Error(w, "ref (payment reference) is required", http.StatusBadRequest)
+		return
+	}
+	if err := s.billing.Topup(r.Context(), id, amount, ref); err != nil {
+		http.Error(w, "recharge failed: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+	http.Redirect(w, r, "/admin/tenant/"+strconv.FormatInt(id, 10), http.StatusSeeOther)
+}
+
+func (s *Server) handleAdminSetPrice(w http.ResponseWriter, r *http.Request) {
+	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
+	if err != nil {
+		http.Error(w, "bad tenant id", http.StatusBadRequest)
+		return
+	}
+	country := r.FormValue("country")
+	if len(country) != 2 {
+		http.Error(w, "country must be a 2-letter code", http.StatusBadRequest)
+		return
+	}
+	unit, err := strconv.ParseInt(r.FormValue("unit_price"), 10, 64)
+	if err != nil || unit <= 0 {
+		http.Error(w, "unit_price must be a positive integer", http.StatusBadRequest)
+		return
+	}
+	if err := s.pricing.SetPrice(r.Context(), id, country, unit); err != nil {
+		http.Error(w, "set price failed: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+	http.Redirect(w, r, "/admin/tenant/"+strconv.FormatInt(id, 10), http.StatusSeeOther)
 }
