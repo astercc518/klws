@@ -1,0 +1,9 @@
+{{define "content"}}
+<h1>wadist 控制台登录</h1>
+{{if .Error}}<p class="error" role="alert">{{.Error}}</p>{{end}}
+<form method="post" action="/login">
+  <label>邮箱 <input type="email" name="email" required autofocus></label>
+  <label>密码 <input type="password" name="password" required></label>
+  <button type="submit">登录</button>
+</form>
+{{end}}
