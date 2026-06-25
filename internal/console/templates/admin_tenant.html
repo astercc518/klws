@@ -1,0 +1,14 @@
+{{define "content"}}
+<h1>租户 #{{.Tenant.ID}} — {{.Tenant.Name}}</h1>
+<p>可用余额:<strong>{{.Balance}}</strong> ｜ 冻结:<strong>{{.Frozen}}</strong></p>
+<h2>流水(最近)</h2>
+<table>
+  <thead><tr><th>时间</th><th>类型</th><th>Δ余额</th><th>Δ冻结</th><th>余额后</th></tr></thead>
+  <tbody>
+  {{range .Ledger}}
+    <tr><td>{{.CreatedAt}}</td><td>{{.Kind}}</td><td>{{.DeltaBalance}}</td><td>{{.DeltaFrozen}}</td><td>{{.BalanceAfter}}</td></tr>
+  {{end}}
+  </tbody>
+</table>
+<p><a href="/admin">← 返回</a></p>
+{{end}}
