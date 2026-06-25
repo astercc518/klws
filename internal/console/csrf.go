@@ -40,6 +40,10 @@ func (s *Server) issueCSRFToken(w http.ResponseWriter, r *http.Request) string {
 // not match the cookie. Wrap every state-mutating POST handler with this.
 func (s *Server) requireCSRF(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodGet || r.Method == http.MethodHead || r.Method == http.MethodOptions {
+			next(w, r)
+			return
+		}
 		c, err := r.Cookie(csrfCookieName)
 		if err != nil || c.Value == "" {
 			http.Error(w, "missing CSRF cookie", http.StatusForbidden)

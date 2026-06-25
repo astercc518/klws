@@ -103,7 +103,11 @@ func csrfFor(t *testing.T, client *http.Client, ts *httptest.Server, path string
 		t.Fatalf("no csrf field in %s response", path)
 	}
 	rest := s[i+len(`name="csrf" value="`):]
-	return rest[:strings.IndexByte(rest, '"')]
+	tok := rest[:strings.IndexByte(rest, '"')]
+	if tok == "" {
+		t.Fatalf("csrfFor: empty csrf token extracted from %s", path)
+	}
+	return tok
 }
 
 // buildAppTenantDSN takes the superuser DSN and returns a DSN for the app_tenant role.

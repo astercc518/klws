@@ -53,4 +53,15 @@ func TestIssueCSRFTokenSetsCookieOnce(t *testing.T) {
 	if !strings.Contains(rec.Header().Get("Set-Cookie"), csrfCookieName) {
 		t.Fatalf("cookie not set: %q", rec.Header().Get("Set-Cookie"))
 	}
+
+	req2 := httptest.NewRequest("GET", "/login", nil)
+	req2.AddCookie(&http.Cookie{Name: csrfCookieName, Value: tok})
+	rec2 := httptest.NewRecorder()
+	tok2 := srv.issueCSRFToken(rec2, req2)
+	if tok2 != tok {
+		t.Fatalf("issueCSRFToken not idempotent: %q != %q", tok2, tok)
+	}
+	if rec2.Header().Get("Set-Cookie") != "" {
+		t.Fatalf("second call must not emit Set-Cookie, got %q", rec2.Header().Get("Set-Cookie"))
+	}
 }
