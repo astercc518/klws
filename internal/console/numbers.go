@@ -88,7 +88,7 @@ func (s *Server) filterSuppressed(ctx context.Context, phones []string) (kept []
 		bidx := crypto.BlindIndex(s.blindKey, p)
 		var exists bool
 		if err := tx.QueryRow(ctx,
-			`SELECT EXISTS(SELECT 1 FROM suppression_list WHERE phone_bidx=$1)`, bidx).Scan(&exists); err != nil {
+			`SELECT EXISTS(SELECT 1 FROM suppression_list WHERE tenant_id = current_setting('app.current_tenant_id', true)::bigint AND phone_bidx=$1)`, bidx).Scan(&exists); err != nil {
 			return nil, 0, fmt.Errorf("suppression check: %w", err)
 		}
 		if exists {

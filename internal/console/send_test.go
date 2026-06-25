@@ -99,3 +99,28 @@ func TestCreateCampaignFailsClosedWithoutBlindKey(t *testing.T) {
 		t.Fatalf("want ErrSendNotConfigured without blind key, got %v", err)
 	}
 }
+
+func TestCreateCampaignNoPriceConfigured(t *testing.T) {
+	ctx := context.Background()
+	mgr := newTestManager(t)
+	cfg := testConfig()
+	srv, _ := NewServer(cfg, NewUserRepo(mgr.SystemPool()), NewSessionStore(newTestRedis(t), time.Hour), mgr)
+	srv.WithPricing(pricingRepo(t, mgr)).WithBlindKey(make([]byte, 32))
+
+	var tid int64
+	mustScan(t, mgr, ctx, `INSERT INTO tenants (name) VALUES ('A') RETURNING id`, &tid)
+	// wallet funded but NO tenant_pricing row for DE
+	mustExec(t, mgr, ctx, `INSERT INTO tenant_wallets (tenant_id, balance) VALUES ($1, 1000)`, tid)
+
+	cctx := withCustomerSession(ctx, tid)
+	_, err := srv.createCampaign(cctx, "DE", "hello", []string{"4915112345678"})
+	if !errors.Is(err, ErrNoPriceConfigured) {
+		t.Fatalf("want ErrNoPriceConfigured, got %v", err)
+	}
+	// nothing created
+	var nc int
+	mustScanPool(t, mgr, ctx, `SELECT count(*) FROM campaigns WHERE tenant_id=$1`, tid, &nc)
+	if nc != 0 {
+		t.Fatalf("no-price path must create nothing; want 0 campaigns, got %d", nc)
+	}
+}

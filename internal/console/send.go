@@ -7,21 +7,11 @@ import (
 	"fmt"
 
 	"github.com/acme/wadist/internal/crypto"
+	"github.com/acme/wadist/internal/pricing"
 )
 
 var ErrInsufficientBalance = errors.New("console: insufficient balance for campaign")
-
-func (s *Server) estimateCost(ctx context.Context, country string, n int) int64 {
-	if n <= 0 {
-		return 0
-	}
-	data, ok := sessionFrom(ctx)
-	if !ok || data.TenantID == nil {
-		return 0
-	}
-	unit := s.pricing.PriceFor(ctx, *data.TenantID, country, 1)
-	return int64(n) * unit
-}
+var ErrNoPriceConfigured = errors.New("console: no unit price configured for this country")
 
 // createCampaign validates funds then atomically creates a running campaign with
 // its template + recipients, all tenant-scoped by RLS WITH CHECK. Recipients carry
@@ -39,7 +29,14 @@ func (s *Server) createCampaign(ctx context.Context, country, body string, phone
 	}
 	tenantID := *data.TenantID
 
-	estimate := s.estimateCost(ctx, country, len(phones))
+	unit, err := s.pricing.GetPrice(ctx, tenantID, country)
+	if errors.Is(err, pricing.ErrNoPrice) {
+		return 0, ErrNoPriceConfigured
+	}
+	if err != nil {
+		return 0, fmt.Errorf("console: get price: %w", err)
+	}
+	estimate := int64(len(phones)) * unit
 	bal, _, err := s.customerBalance(ctx)
 	if err != nil {
 		return 0, err

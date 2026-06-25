@@ -6,6 +6,7 @@ import (
 	"html"
 	"math/rand"
 	"net/http"
+	"strings"
 
 	"github.com/acme/wadist/internal/spintax"
 )
@@ -30,8 +31,24 @@ func (s *Server) handleSendPreview(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+func isValidCountryCode(c string) bool {
+	if len(c) != 2 {
+		return false
+	}
+	for _, r := range c {
+		if r < 'A' || r > 'Z' {
+			return false
+		}
+	}
+	return true
+}
+
 func (s *Server) handleSendSubmit(w http.ResponseWriter, r *http.Request) {
-	country := r.FormValue("country")
+	country := strings.ToUpper(strings.TrimSpace(r.FormValue("country")))
+	if !isValidCountryCode(country) {
+		s.renderSendError(w, r, "请填写有效的2位国家代码")
+		return
+	}
 	body := r.FormValue("body")
 	parsed := parseNumbers(r.FormValue("numbers"))
 	kept, _, err := s.filterSuppressed(r.Context(), parsed.Valid)
@@ -46,6 +63,10 @@ func (s *Server) handleSendSubmit(w http.ResponseWriter, r *http.Request) {
 	if _, err := s.createCampaign(r.Context(), country, body, kept); err != nil {
 		if errors.Is(err, ErrInsufficientBalance) {
 			s.renderSendError(w, r, "余额不足,请先充值")
+			return
+		}
+		if errors.Is(err, ErrNoPriceConfigured) {
+			s.renderSendError(w, r, "该国家尚未配置单价,请联系销售")
 			return
 		}
 		http.Error(w, "create campaign: "+err.Error(), http.StatusInternalServerError)
