@@ -147,8 +147,14 @@ func run(ctx context.Context, cfg *config.Config) (*metrics.Server, func(), erro
 		asynq.Config{Concurrency: cfg.AsynqConcurrency, ShutdownTimeout: cfg.ShutdownTimeout, Queues: map[string]int{"default": 6, "takeover": 1}},
 	)
 	mux := asynq.NewServeMux()
-	dispatch.RegisterSendHandler(mux, worker, func(_ context.Context, _ int64) (string, string, string, []byte, error) {
-		return "", "", "", nil, errors.New("resolver: not wired (pre-M-send)")
+	dispatch.RegisterSendHandler(mux, worker, func(ctx context.Context, campaignID int64) (string, string, string, []byte, error) {
+		body, mediaSha, mime, err := mgr.CampaignSendable(ctx, campaignID)
+		if err != nil {
+			return "", "", "", nil, err
+		}
+		// Media bytes are out of scope for Module A (text-first). mediaSha/mime
+		// are surfaced so the Send adapter can fail loud on media campaigns.
+		return body, mediaSha, mime, nil, nil
 	})
 
 	// Build a real SessionFactory: acquire device store + optional proxy + whatsmeow conn.
