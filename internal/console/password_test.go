@@ -1,7 +1,10 @@
 // internal/console/password_test.go
 package console
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 func TestHashAndVerifyPassword(t *testing.T) {
 	hash, err := HashPassword("correct horse battery staple")
@@ -10,6 +13,9 @@ func TestHashAndVerifyPassword(t *testing.T) {
 	}
 	if hash == "" || hash == "correct horse battery staple" {
 		t.Fatalf("hash must be non-empty and not plaintext, got %q", hash)
+	}
+	if !strings.HasPrefix(hash, "$argon2id$v=19$m=65536,t=1,p=4$") {
+		t.Fatalf("unexpected PHC format: %q", hash)
 	}
 	ok, err := VerifyPassword(hash, "correct horse battery staple")
 	if err != nil || !ok {

@@ -43,11 +43,14 @@ func VerifyPassword(encoded, plain string) (bool, error) {
 	if len(parts) != 6 || parts[1] != "argon2id" {
 		return false, errors.New("argon2: malformed hash")
 	}
-	var version, mem, time, threads int
+	var version, mem, iterations, threads int
 	if _, err := fmt.Sscanf(parts[2], "v=%d", &version); err != nil {
 		return false, fmt.Errorf("argon2: bad version: %w", err)
 	}
-	if _, err := fmt.Sscanf(parts[3], "m=%d,t=%d,p=%d", &mem, &time, &threads); err != nil {
+	if version != argon2.Version {
+		return false, fmt.Errorf("argon2: unsupported version %d", version)
+	}
+	if _, err := fmt.Sscanf(parts[3], "m=%d,t=%d,p=%d", &mem, &iterations, &threads); err != nil {
 		return false, fmt.Errorf("argon2: bad params: %w", err)
 	}
 	salt, err := base64.RawStdEncoding.DecodeString(parts[4])
@@ -58,6 +61,6 @@ func VerifyPassword(encoded, plain string) (bool, error) {
 	if err != nil {
 		return false, fmt.Errorf("argon2: bad hash: %w", err)
 	}
-	got := argon2.IDKey([]byte(plain), salt, uint32(time), uint32(mem), uint8(threads), uint32(len(want)))
+	got := argon2.IDKey([]byte(plain), salt, uint32(iterations), uint32(mem), uint8(threads), uint32(len(want)))
 	return subtle.ConstantTimeCompare(got, want) == 1, nil
 }
