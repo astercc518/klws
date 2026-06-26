@@ -67,11 +67,16 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /send", s.requireAuth(custOnly(s.handleSendPage)))
 	mux.HandleFunc("POST /send/preview", s.requireCSRF(s.requireAuth(custOnly(s.handleSendPreview))))
 	mux.HandleFunc("POST /send", s.requireCSRF(s.requireAuth(custOnly(s.handleSendSubmit))))
+	salesOnly := s.requireRole(RoleSales)
+	mux.HandleFunc("GET /sales", s.requireAuth(salesOnly(s.handleSalesDashboard)))
+	mux.HandleFunc("GET /sales/tenant/{id}", s.requireAuth(salesOnly(s.handleSalesTenant)))
+	mux.HandleFunc("POST /sales/tenant/{id}/pricing", s.requireCSRF(s.requireAuth(salesOnly(s.handleSalesSetPrice))))
 	adminOnly := s.requireRole(RoleAdmin)
 	mux.HandleFunc("GET /admin", s.requireAuth(adminOnly(s.handleAdminTenants)))
 	mux.HandleFunc("GET /admin/tenant/{id}", s.requireAuth(adminOnly(s.handleAdminTenant)))
 	mux.HandleFunc("POST /admin/tenant/{id}/recharge", s.requireAuth(adminOnly(s.requireCSRF(s.handleAdminRecharge))))
 	mux.HandleFunc("POST /admin/tenant/{id}/pricing", s.requireAuth(adminOnly(s.requireCSRF(s.handleAdminSetPrice))))
+	mux.HandleFunc("POST /admin/tenant/{id}/sales-owner", s.requireAuth(adminOnly(s.requireCSRF(s.handleAdminSetSalesOwner))))
 	return mux
 }
 

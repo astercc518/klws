@@ -1,0 +1,14 @@
+{{define "content"}}
+<h1>销售控制台 — 我的客户</h1>
+<table>
+  <thead><tr><th>ID</th><th>名称</th><th>状态</th><th>余额</th><th>冻结</th><th></th></tr></thead>
+  <tbody>
+  {{range .Customers}}
+    <tr><td>{{.ID}}</td><td>{{.Name}}</td><td>{{.Status}}</td><td>{{.Balance}}</td><td>{{.Frozen}}</td>
+        <td><a href="/sales/tenant/{{.ID}}">详情/定价</a></td></tr>
+  {{else}}
+    <tr><td colspan="6">名下暂无客户</td></tr>
+  {{end}}
+  </tbody>
+</table>
+{{end}}
