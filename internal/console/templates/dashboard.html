@@ -1,5 +1,9 @@
 {{define "content"}}
 <h1>控制台</h1>
 <p>已登录:角色 <strong>{{.Role}}</strong></p>
+<nav>
+  {{if eq .Role "admin"}}<a href="/admin">租户管理</a>{{end}}
+  {{if eq .Role "sales"}}<a href="/sales">销售面板</a>{{end}}
+</nav>
 <form method="post" action="/logout"><input type="hidden" name="csrf" value="{{.CSRF}}"><button type="submit">登出</button></form>
 {{end}}
