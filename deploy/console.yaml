@@ -1,0 +1,99 @@
+# wadist 管理控制台(cmd/console)生产清单 —— Deployment + Service + Ingress + PDB。
+#
+# 架构:Cloudflare 边缘 ──HTTPS(公共证书)──▶ Ingress(本清单,装 Origin 证书终止 TLS)
+#       ──HTTP──▶ console Service ──▶ console Pod(:8080)
+#
+# 前置:
+#   1. 镜像 wadist-console:latest 由 cmd/console 构建(仓库暂无 Dockerfile,需自备)。
+#   2. 应用密钥 Secret `wadist-console-secrets`、TLS Secret `klws-cc-tls`
+#      见 console-secrets.example.yaml(切勿把真实私钥提交进仓库)。
+#   3. 控制台账号无注册/创建 UI,首个管理员须直接写库 —— 见 console-secrets.example.yaml 末尾的 bootstrap 步骤。
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: wadist-console
+  labels: { app: wadist-console }
+spec:
+  replicas: 2                       # 会话存于 Redis(共享),可水平扩展
+  strategy:
+    type: RollingUpdate
+    rollingUpdate: { maxSurge: 1, maxUnavailable: 0 }
+  selector:
+    matchLabels: { app: wadist-console }
+  template:
+    metadata:
+      labels: { app: wadist-console }
+    spec:
+      terminationGracePeriodSeconds: 30   # >= preStop(5) + 优雅关停(5s) + 余量
+      containers:
+        - name: console
+          image: wadist-console:latest
+          ports:
+            - { name: http, containerPort: 8080 }
+          env:
+            # —— 非敏感配置(明文)——
+            - { name: WADIST_CONSOLE_ADDR,         value: ":8080" }
+            - { name: WADIST_CONSOLE_COOKIE_SECURE, value: "true" }   # 生产强制 Secure cookie(经 HTTPS)
+            - { name: WADIST_REDIS_ADDR,           value: "redis:6379" }
+          envFrom:
+            # —— 敏感配置(3 个 DSN + 会话/主/盲索引密钥)——
+            - secretRef: { name: wadist-console-secrets }
+          readinessProbe:
+            httpGet: { path: /readyz, port: http }
+            periodSeconds: 2
+            failureThreshold: 1
+          livenessProbe:
+            httpGet: { path: /healthz, port: http }
+            periodSeconds: 10
+            failureThreshold: 3
+          lifecycle:
+            preStop:
+              exec: { command: ["/bin/sh", "-c", "sleep 5"] }   # 给 Service 摘除端点留时间
+          resources:
+            requests: { cpu: "250m", memory: "256Mi" }
+            limits:   { cpu: "1",    memory: "512Mi" }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: wadist-console
+  labels: { app: wadist-console }
+spec:
+  type: ClusterIP
+  selector: { app: wadist-console }
+  ports:
+    - { name: http, port: 80, targetPort: http }
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: wadist-console
+  annotations:
+    # 经 Cloudflare 时建议用 Full(strict);Ingress 用 Origin 证书在源站终止 TLS。
+    nginx.ingress.kubernetes.io/ssl-redirect: "true"
+    # Cloudflare 在前,真实客户端 IP 在 CF-Connecting-IP 头(按需在 nginx-ingress ConfigMap 配 use-forwarded-headers)。
+spec:
+  ingressClassName: nginx
+  tls:
+    - hosts: [klws.cc]
+      secretName: klws-cc-tls           # kubernetes.io/tls,装 Cloudflare Origin 证书
+  rules:
+    - host: klws.cc
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: wadist-console
+                port: { name: http }
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: wadist-console-pdb
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels: { app: wadist-console }
