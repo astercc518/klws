@@ -8,7 +8,7 @@ import { cn } from "@/lib/utils";
 const NAV = [
   { href: "/dashboard", label: "概览", en: "Dashboard", icon: LayoutDashboard },
   { href: "/dashboard/accounts", label: "账号池", en: "Accounts", icon: Smartphone },
-  { href: "/dashboard/campaigns", label: "新建群发", en: "Campaigns", icon: Send },
+  { href: "/dashboard/campaigns", label: "群发任务", en: "Campaigns", icon: Send },
   { href: "/dashboard/billing", label: "账单流水", en: "Billing", icon: Receipt },
 ];
 

@@ -1,7 +1,18 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { Plus, QrCode, Smartphone, Wifi, ShieldAlert, LogOut } from "lucide-react";
+import {
+  Plus,
+  QrCode,
+  Smartphone,
+  Wifi,
+  ShieldAlert,
+  LogOut,
+  MoreHorizontal,
+  Network,
+  ChevronDown,
+  Unplug,
+} from "lucide-react";
 import { toast } from "sonner";
 import { api, ApiError } from "@/lib/api";
 import { Button } from "@/components/ui/button";
@@ -10,6 +21,13 @@ import { ProDataTable, type Column } from "@/components/admin/pro-data-table";
 import { StatusBadge, type StatusTone } from "@/components/admin/status-badge";
 import { MetricCardGroup, StatCard, type Accent } from "@/components/admin/stat-card";
 import { RowAvatar } from "@/components/admin/row-avatar";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
+import { cn } from "@/lib/utils";
 
 // StatusTone → avatar accent hue, so a device's monogram tint matches its badge.
 const TONE_ACCENT: Record<StatusTone, Accent> = {
@@ -37,6 +55,60 @@ interface Device {
   ban_status: string;
   owner_node: string | null;
   last_connected_at: string | null;
+  tags: string[];
+  proxy_id: number | null;
+  proxy_url: string | null;
+}
+
+interface Proxy {
+  id: number;
+  proxy_url: string;
+  proxy_type: string;
+  country_code: string;
+  is_alive: boolean;
+  current_bindings: number;
+  max_bindings: number;
+  failure_count: number;
+  bound_devices: number;
+}
+
+// Deterministic tint per tag string, so "US-Marketing" always reads the same
+// hue across rows. A small fixed palette keeps the table calm but multi-color.
+const TAG_PALETTE = [
+  "bg-sky-500/10 text-sky-700 ring-sky-600/20 dark:text-sky-400",
+  "bg-violet-500/10 text-violet-700 ring-violet-600/20 dark:text-violet-400",
+  "bg-emerald-500/10 text-emerald-700 ring-emerald-600/20 dark:text-emerald-400",
+  "bg-amber-500/10 text-amber-700 ring-amber-600/20 dark:text-amber-400",
+  "bg-rose-500/10 text-rose-700 ring-rose-600/20 dark:text-rose-400",
+  "bg-teal-500/10 text-teal-700 ring-teal-600/20 dark:text-teal-400",
+  "bg-fuchsia-500/10 text-fuchsia-700 ring-fuchsia-600/20 dark:text-fuchsia-400",
+  "bg-indigo-500/10 text-indigo-700 ring-indigo-600/20 dark:text-indigo-400",
+];
+function tagColor(tag: string): string {
+  let h = 0;
+  for (let i = 0; i < tag.length; i++) h = (h * 31 + tag.charCodeAt(i)) >>> 0;
+  return TAG_PALETTE[h % TAG_PALETTE.length];
+}
+
+function TagBadges({ tags }: { tags: string[] }) {
+  if (!tags || tags.length === 0) {
+    return <span className="font-mono text-xs text-muted-foreground">—</span>;
+  }
+  return (
+    <div className="flex flex-wrap gap-1">
+      {tags.map((t) => (
+        <span
+          key={t}
+          className={cn(
+            "inline-flex h-5 items-center rounded-full px-2 text-[11px] font-medium ring-1 ring-inset",
+            tagColor(t),
+          )}
+        >
+          {t}
+        </span>
+      ))}
+    </div>
+  );
 }
 
 // Status → tone. Online = active and currently owned by a node. Banned reads
@@ -49,24 +121,38 @@ function statusBadge(d: Device): { label: string; tone: StatusTone } {
   return { label: d.owner_node ? "在线" : "离线", tone: d.owner_node ? "positive" : "neutral" };
 }
 
-// Parse "tenant_id:account_jid:phone" per line.
-function parseDevices(raw: string) {
+type ParsedDevice = {
+  tenant_id: number;
+  account_jid: string;
+  phone: string;
+  tags: string[];
+};
+
+// Parse "tenant_id:account_jid:phone[:tag1,tag2,...]" per line. The 4th
+// colon-field is optional and holds comma-separated tags.
+function parseDevices(raw: string): ParsedDevice[] {
   return raw
     .split("\n")
     .map((l) => l.trim())
     .filter(Boolean)
-    .map((line) => {
-      const [tid, jid, phone] = line.split(":");
+    .map((line): ParsedDevice | null => {
+      const [tid, jid, phone, tagsRaw] = line.split(":");
       const tenant_id = Number(tid);
       if (!tenant_id || !jid || !phone) return null;
-      return { tenant_id, account_jid: jid, phone };
+      const tags = (tagsRaw ?? "")
+        .split(",")
+        .map((t) => t.trim())
+        .filter(Boolean);
+      return { tenant_id, account_jid: jid, phone, tags };
     })
-    .filter((d): d is { tenant_id: number; account_jid: string; phone: string } => d !== null);
+    .filter((d): d is ParsedDevice => d !== null);
 }
 
 export function AdminDevices() {
   const [rows, setRows] = useState<Device[] | null>(null);
+  const [proxies, setProxies] = useState<Proxy[]>([]);
   const [error, setError] = useState<string | null>(null);
+  const [proxyTarget, setProxyTarget] = useState<Device | null>(null);
 
   const load = useCallback(async () => {
     try {
@@ -77,9 +163,23 @@ export function AdminDevices() {
       }
     }
   }, []);
-  useEffect(() => {
+  const loadProxies = useCallback(async () => {
+    try {
+      setProxies(await api.get<Proxy[]>("/admin/resources/proxies"));
+    } catch {
+      // proxy pool is non-critical for the table; the bind dialog will simply
+      // show "无可用代理" if this fails.
+    }
+  }, []);
+  // Refresh both after a bind/unbind so the device row's IP and the proxy
+  // pool's binding counts stay in sync.
+  const refresh = useCallback(() => {
     load();
-  }, [load]);
+    loadProxies();
+  }, [load, loadProxies]);
+  useEffect(() => {
+    refresh();
+  }, [refresh]);
 
   const summary = useMemo(() => {
     if (!rows) return null;
@@ -116,6 +216,24 @@ export function AdminDevices() {
       cell: (d) => <span className="font-mono text-xs text-muted-foreground">#{d.tenant_id}</span>,
     },
     {
+      key: "tags",
+      header: "标签",
+      cell: (d) => <TagBadges tags={d.tags} />,
+    },
+    {
+      key: "proxy",
+      header: "网络环境",
+      cell: (d) =>
+        d.proxy_url ? (
+          <span className="inline-flex items-center gap-1.5 font-mono text-xs">
+            <Network className="size-3.5 text-muted-foreground" />
+            {d.proxy_url}
+          </span>
+        ) : (
+          <StatusBadge tone="warning">未绑定</StatusBadge>
+        ),
+    },
+    {
       key: "status",
       header: "状态",
       cell: (d) => {
@@ -148,8 +266,9 @@ export function AdminDevices() {
         columns={columns}
         getRowKey={(d) => d.id}
         search={{
-          placeholder: "搜索 JID 或手机号…",
-          accessor: (d) => `${d.account_jid} ${d.phone_number}`,
+          placeholder: "搜索 JID / 手机号 / 标签…",
+          accessor: (d) =>
+            `${d.account_jid} ${d.phone_number} ${d.tags.join(" ")} ${d.proxy_url ?? ""}`,
         }}
         emptyState="设备池为空。可批量录入元数据,或在节点侧扫码接入。"
         toolbar={
@@ -158,6 +277,26 @@ export function AdminDevices() {
             <ImportDevicesDialog onDone={load} />
           </>
         }
+        rowActions={(d) => (
+          <DropdownMenu>
+            <DropdownMenuTrigger render={<Button variant="ghost" size="icon-sm" aria-label="操作" />}>
+              <MoreHorizontal className="size-4" />
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end">
+              <DropdownMenuItem onClick={() => setProxyTarget(d)}>
+                <Network className="size-4" />
+                配置网络
+              </DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
+        )}
+      />
+
+      <ProxyDialog
+        target={proxyTarget}
+        proxies={proxies}
+        onClose={() => setProxyTarget(null)}
+        onDone={refresh}
       />
     </>
   );
@@ -230,7 +369,8 @@ function ImportDevicesDialog({ onDone }: { onDone: () => void }) {
         <DialogHeader>
           <DialogTitle>批量录入设备元数据</DialogTitle>
           <DialogDescription>
-            每行一个,格式 <span className="font-mono">tenant_id:account_jid:phone</span>。仅写入元数据,实际登录仍走节点扫码。
+            每行一个,格式{" "}
+            <span className="font-mono">tenant_id:account_jid:phone:tag1,tag2</span>。标签段可省略,多个标签用逗号分隔。仅写入元数据,实际登录仍走节点扫码。
           </DialogDescription>
         </DialogHeader>
         <div className="space-y-2 py-1">
@@ -242,7 +382,7 @@ function ImportDevicesDialog({ onDone }: { onDone: () => void }) {
             id="dv-raw"
             value={raw}
             onChange={(e) => setRaw(e.target.value)}
-            placeholder={"1:8613800000000@s.whatsapp.net:+8613800000000\n1:8613900000000@s.whatsapp.net:+8613900000000"}
+            placeholder={"1:8613800000000@s.whatsapp.net:+8613800000000:US-Marketing,Tier1\n1:8613900000000@s.whatsapp.net:+8613900000000"}
             className="h-40 resize-none font-mono text-sm"
           />
         </div>
@@ -251,6 +391,148 @@ function ImportDevicesDialog({ onDone }: { onDone: () => void }) {
           <Button onClick={submit} disabled={!valid}>
             {busy ? "录入中…" : `确认录入 ${parsed.length} 条`}
           </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+// ProxyDialog binds/unbinds a static proxy IP for one WS account, for
+// per-account network isolation (防关联). Available proxies are those alive and
+// under capacity; the currently-bound proxy is always listed even if full.
+function ProxyDialog({
+  target,
+  proxies,
+  onClose,
+  onDone,
+}: {
+  target: Device | null;
+  proxies: Proxy[];
+  onClose: () => void;
+  onDone: () => void;
+}) {
+  const [selected, setSelected] = useState<number | null>(null);
+  const [busy, setBusy] = useState(false);
+
+  useEffect(() => {
+    setSelected(target?.proxy_id ?? null);
+  }, [target]);
+
+  const selectable = useMemo(() => {
+    const available = proxies.filter((p) => p.is_alive && p.current_bindings < p.max_bindings);
+    const cur = target?.proxy_id;
+    // Keep the current proxy visible even if it is now at capacity.
+    if (cur != null && !available.some((p) => p.id === cur)) {
+      const bound = proxies.find((p) => p.id === cur);
+      if (bound) return [bound, ...available];
+    }
+    return available;
+  }, [proxies, target]);
+
+  const selectedProxy = proxies.find((p) => p.id === selected) ?? null;
+
+  async function bind() {
+    if (!target || selected == null) return;
+    setBusy(true);
+    try {
+      await api.post(`/admin/resources/devices/${target.id}/proxy`, { proxy_id: selected });
+      toast.success("代理已绑定", { description: selectedProxy?.proxy_url });
+      onClose();
+      onDone();
+    } catch (e) {
+      toast.error("绑定失败", { description: e instanceof ApiError ? e.message : "请重试" });
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function unbind() {
+    if (!target) return;
+    setBusy(true);
+    try {
+      await api.delete(`/admin/resources/devices/${target.id}/proxy`);
+      toast.success("已解绑代理");
+      onClose();
+      onDone();
+    } catch (e) {
+      toast.error("解绑失败", { description: e instanceof ApiError ? e.message : "请重试" });
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <Dialog open={target != null} onOpenChange={(o) => !o && onClose()}>
+      <DialogContent className="sm:max-w-md">
+        <DialogHeader>
+          <DialogTitle>配置网络环境</DialogTitle>
+          <DialogDescription>
+            为 <span className="font-mono text-xs">{target?.account_jid}</span>{" "}
+            绑定独享静态代理 IP,实现账号间网络隔离、防止关联封号。
+          </DialogDescription>
+        </DialogHeader>
+        <div className="space-y-4 py-1">
+          <div className="space-y-1.5">
+            <span className="text-sm font-medium">当前绑定</span>
+            <div>
+              {target?.proxy_url ? (
+                <span className="inline-flex items-center gap-1.5 font-mono text-xs">
+                  <Network className="size-3.5 text-muted-foreground" />
+                  {target.proxy_url}
+                </span>
+              ) : (
+                <StatusBadge tone="warning">未绑定</StatusBadge>
+              )}
+            </div>
+          </div>
+          <div className="space-y-1.5">
+            <span className="text-sm font-medium">选择代理 IP</span>
+            <DropdownMenu>
+              <DropdownMenuTrigger
+                render={<Button variant="outline" className="w-full justify-between gap-2 font-mono text-xs" />}
+              >
+                <span className="truncate">
+                  {selectedProxy
+                    ? `${selectedProxy.proxy_url} · ${selectedProxy.country_code}`
+                    : "选择一个可用代理…"}
+                </span>
+                <ChevronDown className="size-4 shrink-0 text-muted-foreground" />
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="start" className="max-h-64 w-72 overflow-y-auto">
+                {selectable.length === 0 ? (
+                  <DropdownMenuItem disabled>无可用代理</DropdownMenuItem>
+                ) : (
+                  selectable.map((p) => (
+                    <DropdownMenuItem key={p.id} onClick={() => setSelected(p.id)}>
+                      <span className="truncate font-mono text-xs">{p.proxy_url}</span>
+                      <span className="ml-auto shrink-0 font-mono text-[10px] text-muted-foreground">
+                        {p.country_code} · {p.current_bindings}/{p.max_bindings}
+                      </span>
+                    </DropdownMenuItem>
+                  ))
+                )}
+              </DropdownMenuContent>
+            </DropdownMenu>
+          </div>
+        </div>
+        <DialogFooter className="sm:justify-between">
+          {target?.proxy_id != null ? (
+            <Button variant="ghost" className="gap-2 text-destructive" onClick={unbind} disabled={busy}>
+              <Unplug className="size-4" />
+              解绑
+            </Button>
+          ) : (
+            <span />
+          )}
+          <div className="flex items-center gap-2">
+            <DialogClose render={<Button variant="ghost" />}>取消</DialogClose>
+            <Button
+              onClick={bind}
+              disabled={busy || selected == null || selected === target?.proxy_id}
+            >
+              {busy ? "提交中…" : "确认绑定"}
+            </Button>
+          </div>
         </DialogFooter>
       </DialogContent>
     </Dialog>

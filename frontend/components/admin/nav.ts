@@ -5,6 +5,7 @@ import {
   Globe,
   Smartphone,
   ScrollText,
+  SlidersHorizontal,
   type LucideIcon,
 } from "lucide-react";
 
@@ -43,6 +44,12 @@ export const NAV_GROUPS: NavGroup[] = [
     items: [
       { href: "/admin/resources", label: "代理网络池", en: "Proxies", icon: Globe },
       { href: "/admin/devices", label: "节点与设备", en: "Devices", icon: Smartphone },
+    ],
+  },
+  {
+    title: "策略中心",
+    items: [
+      { href: "/admin/settings/risk", label: "风控策略", en: "Risk", icon: SlidersHorizontal },
     ],
   },
   {
