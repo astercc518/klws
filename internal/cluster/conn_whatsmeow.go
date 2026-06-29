@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/acme/wadist/internal/dispatch"
 	"github.com/acme/wadist/internal/store"
@@ -12,8 +13,15 @@ import (
 	waLog "go.mau.fi/whatsmeow/util/log"
 	"go.mau.fi/whatsmeow/proto/waE2E"
 	"go.mau.fi/whatsmeow/types"
+	"go.mau.fi/whatsmeow/types/events"
 	"google.golang.org/protobuf/proto"
 )
+
+// ReceiptFunc receives a translated delivery/read receipt for an outgoing
+// message. kind is "delivered" or "read". The cluster layer does nothing but
+// translate whatsmeow's events.Receipt into these primitives and forward them;
+// all persistence lives in internal/receipt (injected from cmd/wadist).
+type ReceiptFunc func(messageIDs []string, kind string, at time.Time)
 
 // waConn is the real whatsmeow-backed Conn. It is the ONLY file in this package
 // that imports whatsmeow; everything else is fake-testable. No live-connection
@@ -24,9 +32,36 @@ type waConn struct {
 }
 
 // NewWAConn builds a client over a registered device store. Proxy is applied at
-// Connect time (per-account dynamic 4G proxy) before dialing.
-func NewWAConn(device *waproto.Device, logger waLog.Logger, proxy *store.ProxyBinding) *waConn {
-	return &waConn{client: whatsmeow.NewClient(device, logger), proxy: proxy}
+// Connect time (per-account dynamic 4G proxy) before dialing. When onReceipt is
+// non-nil, a delivery/read receipt event handler is registered before connect —
+// a thin translation that forwards events.Receipt to onReceipt and nothing else.
+func NewWAConn(device *waproto.Device, logger waLog.Logger, proxy *store.ProxyBinding, onReceipt ReceiptFunc) *waConn {
+	client := whatsmeow.NewClient(device, logger)
+	if onReceipt != nil {
+		client.AddEventHandler(func(evt any) {
+			r, ok := evt.(*events.Receipt)
+			if !ok || len(r.MessageIDs) == 0 {
+				return
+			}
+			// Wire values are version-stable: ""→delivered, read/read-self→read.
+			// Other receipt types (sender/played/…) are ignored.
+			var kind string
+			switch r.Type {
+			case "":
+				kind = "delivered"
+			case "read", "read-self":
+				kind = "read"
+			default:
+				return
+			}
+			ids := make([]string, len(r.MessageIDs))
+			for i, m := range r.MessageIDs {
+				ids[i] = string(m)
+			}
+			onReceipt(ids, kind, r.Timestamp)
+		})
+	}
+	return &waConn{client: client, proxy: proxy}
 }
 
 var _ Conn = (*waConn)(nil)
