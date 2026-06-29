@@ -6,3 +6,6 @@ deploy/proxy/certs/*.pem
 .superpowers/
 *.test
 docker-compose.adopt.yml
+
+# build artifact: compiled Go binary (do not commit)
+/seed
