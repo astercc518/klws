@@ -82,11 +82,19 @@ spec:
     - host: klws.cc
       http:
         paths:
-          - path: /
+          # 同源拆分:/api/* 走 Gin 后端(其路由本身就是 /api/v1/...,无需 rewrite),
+          # 其余全部走 Next.js 前端。/api 更具体,优先于 / 匹配。
+          - path: /api
             pathType: Prefix
             backend:
               service:
                 name: wadist-console
+                port: { name: http }
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: wadist-frontend
                 port: { name: http }
 ---
 apiVersion: policy/v1

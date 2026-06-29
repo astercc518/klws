@@ -10,11 +10,11 @@ import (
 	"testing"
 )
 
-// TestRun_BootsLogin requires a live PG + Redis (WADIST_POSTGRES_DSN set) and
+// TestRun_BootsAPI requires a live PG + Redis (WADIST_POSTGRES_DSN set) and
 // skips otherwise, matching cmd/wadist's smoke test convention.
 // Note: since the RLS guard was added, booting also requires WADIST_APP_TENANT_DSN
 // and WADIST_APP_SYSTEM_DSN to be set; include them when running this test live.
-func TestRun_BootsLogin(t *testing.T) {
+func TestRun_BootsAPI(t *testing.T) {
 	if testing.Short() || os.Getenv("WADIST_POSTGRES_DSN") == "" {
 		t.Skip("integration: set WADIST_POSTGRES_DSN (+ WADIST_REDIS_ADDR + WADIST_APP_TENANT_DSN + WADIST_APP_SYSTEM_DSN)")
 	}
@@ -30,13 +30,13 @@ func TestRun_BootsLogin(t *testing.T) {
 	}
 	defer stop()
 
-	resp, err := http.Get("http://" + srv.Addr() + "/login")
+	resp, err := http.Get("http://" + srv.Addr() + "/healthz")
 	if err != nil {
 		t.Fatal(err)
 	}
 	b, _ := io.ReadAll(resp.Body)
 	resp.Body.Close()
-	if resp.StatusCode != 200 || !strings.Contains(string(b), `action="/login"`) {
-		t.Fatalf("login not served: %d\n%s", resp.StatusCode, b)
+	if resp.StatusCode != 200 || !strings.Contains(string(b), "ok") {
+		t.Fatalf("api not served: %d\n%s", resp.StatusCode, b)
 	}
 }

@@ -1,4 +1,8 @@
 /bin/
-*.test
-.superpowers/
 /console
+deploy/proxy/certs/*.key
+deploy/proxy/certs/*.pem
+.env
+.superpowers/
+*.test
+docker-compose.adopt.yml

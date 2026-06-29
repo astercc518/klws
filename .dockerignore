@@ -1,0 +1,7 @@
+# Keep the Go build context small and deterministic.
+.git
+frontend
+deploy
+docs
+*.md
+scripts

@@ -123,3 +123,78 @@ kubectl set env deployment/wadist WADIST_CANARY_PERCENT=100   # 全量
 ## 6. 故障演练(混沌门禁)
 
 `make chaos`(`TestTakeoverChaos -count=5`)端到端验证:杀掉持锁节点的连接 → advisory 锁自动释放 → 对端扫描器入队 → handler 重抢锁 + 改写 owner_node。CI(`release-gate.yml`)每次跑。生产演练可 `kubectl delete pod <持锁pod> --grace-period=0`(模拟硬死)观察接管时延(应 ≤ 扫描周期 + 起号)。
+
+---
+
+## 7. 前后端分离部署(klws.cc 同源拓扑)
+
+前端 Next.js 与后端 Gin API **共用一个域名 `klws.cc`**,由 ingress 按路径分流,因此**无需任何 CORS / 跨域配置**:
+
+```
+Cloudflare ──HTTPS──▶ Ingress(klws.cc, console.yaml,装 klws-cc-tls)
+    ├─ /api/*  ─▶ wadist-console  Service ─▶ Gin API Pod(:8080,路由本身即 /api/v1/...)
+    └─ /       ─▶ wadist-frontend Service ─▶ Next.js Pod(:3000)
+```
+
+前端在**构建期**已把 `NEXT_PUBLIC_API_BASE_URL=/api/v1`(相对路径)烤进客户端包,运行期请求自然同源命中 `klws.cc/api/v1/...`。
+
+### 构建镜像
+
+```bash
+# 后端(仓库根 Dockerfile,静态二进制 + distroless,内含 /console 与 /seed)
+docker build -t wadist-console:latest .
+
+# 前端(frontend/Dockerfile,standalone 产物)
+docker build -t wadist-frontend:latest ./frontend
+```
+
+### 应用清单
+
+```bash
+kubectl apply -f deploy/console.yaml     # 后端 Deployment/Service + 同源 Ingress(/api 与 /)
+kubectl apply -f deploy/frontend.yaml    # 前端 Deployment/Service
+```
+
+> 前置 Secret(`wadist-console-secrets`)、TLS(`klws-cc-tls`)见 [`console-secrets.example.yaml`](console-secrets.example.yaml)。同源拓扑下后端 `WADIST_CORS_ORIGIN` 留空即可(无需跨域)。
+
+### 注入演示/初始数据(一次性 Job)
+
+镜像内含 `/seed`,可作为一次性 Job 运行(复用同一套 DSN Secret):
+
+```bash
+kubectl run wadist-seed --rm -i --restart=Never \
+  --image=wadist-console:latest --command -- /seed
+# 或写成 batch/v1 Job,envFrom 引用 wadist-console-secrets。
+```
+
+---
+
+## 8. 单机 docker-compose 一键编排(systemd 的替代方案)
+
+[`../docker-compose.prod.yml`](../docker-compose.prod.yml) 把 **pg + redis + backend + frontend + proxy** 五件套收进一个文件,全部 `restart: always` + 健康检查 + 依赖排序,免去手工 systemd/容器管理。代理配置走 compose 服务名见 [`proxy/nginx.conf`](proxy/nginx.conf)。
+
+```bash
+cp .env.example .env       # 填密钥与 DSN(DSN 主机用服务名 postgres:5432 / redis:6379)
+# 放置 Cloudflare Origin 证书:deploy/proxy/certs/{klws.cc.pem,klws.cc.key}
+docker compose -f docker-compose.prod.yml up -d --build
+docker compose -f docker-compose.prod.yml ps
+```
+
+**从现有 systemd 部署切换(有短暂停机)**:
+```bash
+# 1) 停掉手工栈,腾出 80/443/8080/3000
+systemctl disable --now klws-backend klws-frontend
+docker rm -f wadist-proxy
+# 2) 起 compose(pg/redis 若复用现有数据,把卷指过去;否则先迁移+建 RLS 角色+seed)
+docker compose -f docker-compose.prod.yml up -d --build
+```
+
+> 首次起 backend 前数据库需已迁移 + 建好 `app_tenant`/`app_system` 角色 + 跑 `cmd/seed`(否则 backend 因缺 RLS 角色 fail-closed)。`docker-compose.yml`(无 .prod)仍是 `make up` 用的 dev pg/redis,二者勿同时占端口。
+
+**镜像内跑 seed**(backend 镜像内含 `/seed`,连内网 postgres):
+```bash
+docker compose -f docker-compose.prod.yml -f docker-compose.adopt.yml \
+  run --rm --entrypoint /seed backend
+```
+> ⚠️ 必须带 `--entrypoint /seed`:backend 的 ENTRYPOINT 是 `/console`,不覆盖会被跑成 `/console /seed`(启动 API 服务器而非 seed,命令一直挂住)。
+

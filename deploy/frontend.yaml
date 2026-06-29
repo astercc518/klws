@@ -1,0 +1,54 @@
+# wadist frontend (Next.js) production manifest — Deployment + Service.
+#
+# Architecture (same-origin topology):
+#   Cloudflare ──HTTPS──▶ Ingress (klws.cc, see console.yaml)
+#       ├─ path /api  ─▶ wadist-console  Service (Gin JSON API)
+#       └─ path /     ─▶ wadist-frontend Service (this file, Next.js :3000)
+#
+# 前置:镜像 wadist-frontend:latest 由 `docker build -t wadist-frontend:latest ./frontend` 构建。
+# 前端在构建期已把 API_BASE_URL 烤成 /api/v1(相对路径,同源),因此无需任何 CORS/跨域配置。
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: wadist-frontend
+  labels: { app: wadist-frontend }
+spec:
+  replicas: 2                       # 无状态(纯静态资源 + SSR),可水平扩展
+  strategy:
+    type: RollingUpdate
+    rollingUpdate: { maxSurge: 1, maxUnavailable: 0 }
+  selector:
+    matchLabels: { app: wadist-frontend }
+  template:
+    metadata:
+      labels: { app: wadist-frontend }
+    spec:
+      terminationGracePeriodSeconds: 20
+      containers:
+        - name: frontend
+          image: wadist-frontend:latest
+          ports:
+            - { name: http, containerPort: 3000 }
+          readinessProbe:
+            httpGet: { path: /login, port: http }   # 静态页,无需鉴权即 200
+            periodSeconds: 5
+            failureThreshold: 2
+          livenessProbe:
+            httpGet: { path: /login, port: http }
+            periodSeconds: 15
+            failureThreshold: 3
+          resources:
+            requests: { cpu: "100m", memory: "128Mi" }
+            limits:   { cpu: "500m", memory: "256Mi" }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: wadist-frontend
+  labels: { app: wadist-frontend }
+spec:
+  type: ClusterIP
+  selector: { app: wadist-frontend }
+  ports:
+    - { name: http, port: 80, targetPort: http }

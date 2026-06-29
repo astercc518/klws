@@ -5,6 +5,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"os"
 	"os/signal"
 	"sync"
 	"syscall"
@@ -12,6 +13,7 @@ import (
 
 	goredis "github.com/redis/go-redis/v9"
 
+	"github.com/acme/wadist/internal/api"
 	"github.com/acme/wadist/internal/billing"
 	"github.com/acme/wadist/internal/config"
 	"github.com/acme/wadist/internal/console"
@@ -33,9 +35,11 @@ func main() {
 	stop()
 }
 
-// run assembles the console server and returns it plus a stop func. It is the
-// seam the smoke test drives.
-func run(ctx context.Context) (*console.Server, func(), error) {
+// run assembles the JSON API server and returns it plus a stop func. It is the
+// seam the smoke test drives. The HTML console view layer has been replaced by
+// the Gin API (internal/api); all security primitives (sessions, users, RLS,
+// billing, pricing) are reused unchanged.
+func run(ctx context.Context) (*api.Server, func(), error) {
 	baseCfg, err := config.Load() // requires WADIST_POSTGRES_DSN; provides Store()+RedisAddr
 	if err != nil {
 		return nil, nil, err
@@ -65,18 +69,25 @@ func run(ctx context.Context) (*console.Server, func(), error) {
 	bill := billing.NewRepo(mgr.SystemPool())
 	price := pricing.NewRepo(mgr.SystemPool())
 	tenants := console.NewTenantRepo(mgr.SystemPool())
-	srv, err := console.NewServer(webCfg, users, sessions, mgr)
-	if err != nil {
-		mgr.Close()
-		flush()
-		_ = rdb.Close()
-		return nil, nil, err
-	}
-	srv.WithBilling(bill).WithTenants(tenants).WithPricing(price).WithBlindKey(baseCfg.BlindIndexKey)
+
+	// JSON API server — reuses the SAME session/user/tenant/billing/pricing
+	// instances and the store.Manager's RLS machinery; no security logic is
+	// reinvented and no red-line package is touched.
+	srv := api.NewServer(api.Deps{
+		Mgr:        mgr,
+		Billing:    bill,
+		Pricing:    price,
+		Users:      users,
+		Tenants:    tenants,
+		Sessions:   sessions,
+		SessionKey: webCfg.SessionKey,               // same HMAC key as the old console cookie
+		BlindKey:   baseCfg.BlindIndexKey,           // same blind-index key for recipient dedup
+		CORSOrigin: os.Getenv("WADIST_CORS_ORIGIN"), // empty -> defaults to http://localhost:3000
+	})
 	if len(baseCfg.BlindIndexKey) == 0 {
-		log.Printf("console: WADIST_BLIND_INDEX_KEY not set — send endpoints will fail-closed (ErrSendNotConfigured)")
+		log.Printf("api: WADIST_BLIND_INDEX_KEY not set — send endpoints will fail-closed (ErrSendNotConfigured)")
 	}
-	if err := srv.Start(); err != nil {
+	if err := srv.Start(webCfg.Addr); err != nil {
 		mgr.Close()
 		flush()
 		_ = rdb.Close()
