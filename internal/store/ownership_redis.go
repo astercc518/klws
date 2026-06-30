@@ -118,6 +118,13 @@ func (o *redisOwnership) StaleOwned(ctx context.Context, _ time.Duration) ([]str
 	return out, nil
 }
 
+// ExpireNodeForTest 删除节点心跳，模拟进程猝死（Redis 后端的 KillConnForTest 等价物）。
+// 仅供集成测试使用。
+func (m *Manager) ExpireNodeForTest(ctx context.Context, nodeID string) error {
+	if m.cfg.Redis == nil { return nil }
+	return m.cfg.Redis.Del(ctx, hbKey(nodeID)).Err()
+}
+
 // Unowned 返回 active 但无主的账号（pipeline 批量 EXISTS）。
 func (o *redisOwnership) Unowned(ctx context.Context) ([]string, error) {
 	if o.roster == nil { return nil, nil }
