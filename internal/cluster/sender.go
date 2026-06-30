@@ -81,6 +81,7 @@ type RoutingSender struct {
 	fenceOnSend bool
 	typing      TypingPolicy
 	typingOn    bool
+	warmReq     func(jid string)
 }
 
 // NewRoutingSender returns a RoutingSender with default behaviour: no fence
@@ -93,11 +94,23 @@ func NewRoutingSenderWithPolicy(reg *Registry, fenceOnSend bool, typing TypingPo
 	return &RoutingSender{reg: reg, fenceOnSend: fenceOnSend, typing: typing, typingOn: true}
 }
 
+// WithWarmRequest sets a callback invoked when Send encounters a missing
+// session (no active session for the requested JID). The hook fires before the
+// error is returned, letting the control plane reactively enqueue a warm
+// request for the account. Calling this is optional and purely additive.
+func (rs *RoutingSender) WithWarmRequest(fn func(jid string)) *RoutingSender {
+	rs.warmReq = fn
+	return rs
+}
+
 var _ dispatch.Sender = (*RoutingSender)(nil)
 
 func (rs *RoutingSender) Send(ctx context.Context, jid, phone, body string, media *dispatch.MediaHandle) (string, error) {
 	sess, ok := rs.reg.Get(jid)
 	if !ok {
+		if rs.warmReq != nil {
+			rs.warmReq(jid)
+		}
 		return "", fmt.Errorf("cluster: no active session for routing")
 	}
 	if sess.sender == nil {

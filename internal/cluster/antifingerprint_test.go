@@ -98,6 +98,19 @@ func TestTypingSequenceAroundSend(t *testing.T) {
 	}
 }
 
+func TestRoutingSenderWarmRequestOnMiss(t *testing.T) {
+	reg := NewRegistry()
+	var requested string
+	sender := NewRoutingSender(reg).WithWarmRequest(func(jid string) { requested = jid })
+	_, err := sender.Send(context.Background(), "absent-jid", "1555", "hi", nil)
+	if err == nil {
+		t.Fatal("expected no-session error")
+	}
+	if requested != "absent-jid" {
+		t.Fatalf("warmReq=%q want absent-jid", requested)
+	}
+}
+
 func TestNoTypingWhenPlainRoutingSender(t *testing.T) {
 	reg := NewRegistry()
 	rc := &recordingConn{} // 实现 PresenceConn，但 plain sender 不应触发 typing
