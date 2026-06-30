@@ -4,7 +4,6 @@ package store
 import (
 	"context"
 	"testing"
-	"time"
 )
 
 func TestRedisAcquireStillOwnerRelease(t *testing.T) {
@@ -25,5 +24,4 @@ func TestRedisAcquireStillOwnerRelease(t *testing.T) {
 	if n, _ := rdb.Exists(ctx, ownerKey("jid-1")).Result(); n != 0 {
 		t.Fatal("owner key must be gone after Release")
 	}
-	_ = time.Second
 }

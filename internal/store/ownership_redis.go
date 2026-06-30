@@ -3,13 +3,14 @@ package store
 
 import (
 	"context"
-	"strings"
 	"time"
 
 	goredis "github.com/redis/go-redis/v9"
 )
 
 const hbTTL = 30 * time.Second // = NodeStaleness；心跳间隔应 = hbTTL/3
+
+const hbKeyPrefix = "node:hb:"
 
 func ownerKey(jid string) string  { return "owner:" + jid }
 func hbKey(node string) string    { return "node:hb:" + node }
@@ -74,15 +75,6 @@ func (o *redisOwnership) Acquire(ctx context.Context, jid, nodeID string) (LockH
 	if ok == 0 { return nil, ErrDeviceLocked }
 	fence, _ := res[1].(int64)
 	return &redisLockHandle{rdb: o.rdb, jid: jid, nodeID: nodeID, fence: fence}, nil
-}
-
-const hbKeyPrefix = "node:hb:"
-
-// helper for tests/observability
-func splitOwner(v string) (node string, rest string) {
-	i := strings.Index(v, ":")
-	if i < 0 { return v, "" }
-	return v[:i], v[i+1:]
 }
 
 // Heartbeat 刷新本节点在 Redis 中的活性标记。
