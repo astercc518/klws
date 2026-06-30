@@ -68,7 +68,7 @@ func (m *Manager) AcquireDeviceLock(ctx, jid string) (LockHandle, error) {
 - `redisOwnership`：本 spec 新增。
 - `shadowOwnership`：包装 pg(权威)+redis(影子)，比对决策、打分歧指标。
 
-> `ClaimAccount` 保留写 `account_devices.owner_node`（两后端都写）→ **只读镜像**，供可观测 + 现有 chaos 断言兼容。
+> **owner_node 彻底移除（已定）**：终态不保留 `account_devices.owner_node`。但**移除是 cutover 后的最后一步迁移**——shadow/canary 阶段 `pgOwnership` 仍依赖它做权威比对，故 owner_node + `cluster_nodes` 表保留到 redis 成为唯一权威且稳定后，再用一支迁移 `DROP COLUMN owner_node` + `DROP TABLE cluster_nodes`。移除后所有权可观测改由读 Redis `owner:{jid}` 的 admin/metrics 端点提供（不再依赖 PG 列）。现有 chaos 断言相应改为断言 Redis owner（见第 12 节）。
 
 ---
 
@@ -161,7 +161,9 @@ GC 暂停隐患（owner 卡顿→租约过期→被抢→醒来误发）的防�
 3. **message_id 幂等**：`campaignID:recipientID` + worker state 守卫 → 同消息不双发。
 4. **billing Hold `ON CONFLICT(message_id)`** → 不双扣。
 
-防线 2/3/4 已独立挡住最坏后果，故 fencing 负担轻。**可选硬化** `OWNERSHIP_FENCE_ON_SEND=true`：`RoutingSender.Send` 前调一次 StillOwner（+1 Redis RTT/send，167/s 可忽略），避免从"即将被踢"的会话发信（防封卫生）。默认关。
+防线 2/3/4 已独立挡住最坏后果，故 fencing 负担轻。**`OWNERSHIP_FENCE_ON_SEND` 默认开（已定）**：`RoutingSender.Send` 在真正 `SendMessage` 前先调一次句柄 `Healthy()`（redis 后端 = StillOwner Lua），失去所有权则不发、走 requeue（+1 Redis RTT/send，167/s 可忽略），避免从"即将被 WhatsApp 踢"的会话发信（防封卫生）。
+
+> 落点说明：该校验在 `cluster/sender.go` 的 `RoutingSender.Send` 内（用户已授权编辑 `cluster`），调用 `session` 持有的 `DeviceLockHandle.Healthy()` —— 与反指纹 spec（presence/typing）同处一个 RoutingSender 改动，见 [2026-06-30-cluster-antifingerprint-impl-design.md](2026-06-30-cluster-antifingerprint-impl-design.md)。
 
 ---
 
@@ -171,7 +173,7 @@ GC 暂停隐患（owner 卡顿→租约过期→被抢→醒来误发）的防�
 |---|---|---|
 | `WADIST_OWNERSHIP_BACKEND` | `pg` | `pg`/`redis`/`shadow` |
 | `WADIST_MAX_LOCK_CONNS` | 300 | 仅 pg 后端有意义；redis 下忽略 |
-| `WADIST_OWNERSHIP_FENCE_ON_SEND` | false | 发送前 fencing 校验 |
+| `WADIST_OWNERSHIP_FENCE_ON_SEND` | **true** | 发送前 fencing 校验（已定默认开）|
 | Redis（compose） | — | **新增 `--appendonly yes --appendfsync everysec`**，`--maxmemory` 512mb→2gb |
 
 ---
@@ -209,7 +211,7 @@ GC 暂停隐患（owner 卡顿→租约过期→被抢→醒来误发）的防�
 ## 12. 测试与验收门槛
 
 - **现有 `TestTakeoverChaos`(pg) 保持绿**（backend=pg 行为字节不变）。
-- **新增 `TestTakeoverChaos_Redis`**：node-A Redis Acquire+hb → `ExpireNodeForTest`(DEL node:hb:node-A) 模拟死亡 → node-B scanOnce 发现 → StartAccountWithLock CAS 抢占 → 断言 `owner:{jid}==node-B:fence` 且 owner_node 镜像==node-B 且 registry 有 session。`-count=5`。
+- **新增 `TestTakeoverChaos_Redis`**：node-A Redis Acquire+hb → `ExpireNodeForTest`(DEL node:hb:node-A) 模拟死亡 → node-B scanOnce 发现 → StartAccountWithLock CAS 抢占 → 断言 **Redis `owner:{jid}==node-B:fence`** 且 registry 有 session（owner_node 列移除后不再断言 PG 列）。`-count=5`。
 - **新增 `TestAcquireRace`**：2 节点并发 Acquire 同 jid → 恰一个成功（无双 owner）。
 - **新增 `TestFencingGCPause`**：node-A 持有→删 hb→node-B Acquire→断言 node-A `StillOwner`==false（醒来不发）。
 - **Shadow parity 测试**：同序列操作下 pg 与 redis 决策一致。
@@ -230,9 +232,9 @@ GC 暂停隐患（owner 卡顿→租约过期→被抢→醒来误发）的防�
 
 **不做**：多节点 send 路由（per-node 队列）——单机不需要，留国家分片时做。
 
-**待决策**：
-1. owner_node 列：保留作只读镜像（推荐，兼容现有 test/可观测）还是彻底移除？
-2. `FENCE_ON_SEND` 默认开还是关？（开=防封更稳，+1 RTT/send）
+**已决策（2026-06-30）**：
+1. ✅ owner_node 列**彻底移除**——cutover 后最后一支迁移 `DROP COLUMN owner_node` + `DROP TABLE cluster_nodes`（vestigial）；shadow/canary 期间保留供 pg 权威比对；可观测改读 Redis `owner:{jid}`。
+2. ✅ `FENCE_ON_SEND` **默认开**——落点 `cluster/sender.go` RoutingSender，见反指纹 spec。
 
 **风险**：所有权是系统最安全敏感的机制；缓解=shadow 双跑 + chaos parity 硬门槛 + pg 回滚路径常驻。
 
