@@ -1,0 +1,29 @@
+# OPT-IN worker overlay — NOT part of the default stack.
+#
+# ⚠️ Starting this service launches the REAL WhatsApp sending engine: it connects
+# every active account, dispatches campaigns in state='running' (real messages +
+# billing holds), runs the ban-rate circuit breaker, and ingests delivery/read
+# receipts. Read docs/WADIST-WORKER-DEPLOY-zh.md first.
+#
+# ⚠️ ALWAYS include the prod + adopt files so postgres keeps its external volume
+# (omitting adopt can recreate postgres onto an empty volume — see deploy memo):
+#   docker compose -f docker-compose.prod.yml -f docker-compose.adopt.yml -f docker-compose.worker.yml up -d wadist
+#
+# Stop just the worker (sending halts; campaigns stay 'running' in the DB):
+#   docker compose -f docker-compose.prod.yml -f docker-compose.adopt.yml -f docker-compose.worker.yml stop wadist
+services:
+  wadist:
+    build:
+      context: .
+      dockerfile: Dockerfile.wadist
+    image: klws-wadist:latest
+    restart: always
+    env_file:
+      - .env            # reuse console's WADIST_POSTGRES_DSN / REDIS / keys (host = postgres:5432 / redis:6379)
+    environment:
+      WADIST_RECEIPTS: "on"          # ingest delivery/read receipts → delivered_at/read_at
+      WADIST_NODE_ID: "wadist-compose-1"
+    depends_on:
+      postgres: { condition: service_healthy }
+      redis: { condition: service_healthy }
+    # No published ports: this is a worker, not an HTTP service.
