@@ -1,7 +1,11 @@
 // internal/store/config.go
 package store
 
-import "time"
+import (
+	"time"
+
+	goredis "github.com/redis/go-redis/v9"
+)
 
 // Config 连接池配置。MaxOpenConns 匹配 Postgres 承载力,而非 Goroutine 数。
 type Config struct {
@@ -21,6 +25,14 @@ type Config struct {
 	// AppSystemDSN is the DSN for the app_system role (BYPASSRLS).
 	// Empty → falls back to bizPool.
 	AppSystemDSN string
+	// OwnershipBackend selects the ownership implementation: "pg" (default) | "redis" | "shadow".
+	OwnershipBackend string
+	// Redis is the client used by the redis/shadow ownership backends.
+	// Must be non-nil when OwnershipBackend is "redis" or "shadow".
+	Redis *goredis.Client
+	// OnShadowDivergence is called when the shadow backend detects a divergence
+	// between the pg and redis ownership states. Placeholder until Task 6.
+	OnShadowDivergence func(op string)
 }
 
 func (c *Config) withDefaults() {
@@ -38,5 +50,8 @@ func (c *Config) withDefaults() {
 	}
 	if c.MaxLockConns == 0 {
 		c.MaxLockConns = 300
+	}
+	if c.OwnershipBackend == "" {
+		c.OwnershipBackend = "pg"
 	}
 }

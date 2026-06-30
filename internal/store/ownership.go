@@ -26,3 +26,30 @@ type Ownership interface {
 	// Unowned 返回 active 但无主的账号。
 	Unowned(ctx context.Context) ([]string, error)
 }
+
+// newOwnership constructs the Ownership backend selected by m.cfg.OwnershipBackend.
+func newOwnership(m *Manager) Ownership {
+	switch m.cfg.OwnershipBackend {
+	case "redis":
+		return newRedisOwnershipWithRoster(m.cfg.Redis, m.ListActiveAccounts)
+	case "shadow":
+		// TODO(Task 6): wire shadowOwnership here; until then fall back to pg.
+		return &pgOwnership{m: m}
+	default:
+		return &pgOwnership{m: m}
+	}
+}
+
+// backendName returns a short string identifying the concrete Ownership type.
+// Used in tests and observability.
+func backendName(o Ownership) string {
+	switch o.(type) {
+	case *pgOwnership:
+		return "pg"
+	case *redisOwnership:
+		return "redis"
+	// TODO(Task 6): add *shadowOwnership case here.
+	default:
+		return "unknown"
+	}
+}

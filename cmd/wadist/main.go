@@ -81,7 +81,10 @@ func run(ctx context.Context, cfg *config.Config) (*metrics.Server, func(), erro
 		return nil, nil, err
 	}
 
-	mgr, err := store.Init(ctx, cfg.Store(), logger)
+	rdb := goredis.NewClient(&goredis.Options{Addr: cfg.RedisAddr})
+	sc := cfg.Store()
+	sc.Redis = rdb
+	mgr, err := store.Init(ctx, sc, logger)
 	if err != nil {
 		flush()
 		return nil, nil, err
@@ -124,7 +127,6 @@ func run(ctx context.Context, cfg *config.Config) (*metrics.Server, func(), erro
 	m := metrics.New(promReg)
 	promReg.MustRegister(metrics.NewDBCollector(pool, 10*time.Second, reg))
 
-	rdb := goredis.NewClient(&goredis.Options{Addr: cfg.RedisAddr})
 	adm := sendgate.NewAdmission(rdb)
 	gate := sendgate.NewSendGate(pool, adm, 3*time.Second)
 

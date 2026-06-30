@@ -168,7 +168,7 @@ func newManager(ctx context.Context, cfg Config, logger waLog.Logger) (*Manager,
 		sqlDB:      sqlDB,
 		log:        logger,
 	}
-	m.ownership = &pgOwnership{m: m}
+	m.ownership = newOwnership(m)
 	return m, nil
 }
 

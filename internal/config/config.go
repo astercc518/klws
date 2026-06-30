@@ -42,6 +42,8 @@ type Config struct {
 	// PreStopDelay is the time to wait after /readyz → 503 before beginning
 	// supervisor shutdown, giving k8s time to remove the endpoint (default 5s).
 	PreStopDelay time.Duration // WADIST_PRESTOP_DELAY default 5s
+	// OwnershipBackend selects the ownership implementation: "pg" (default) | "redis" | "shadow".
+	OwnershipBackend string // WADIST_OWNERSHIP_BACKEND default "pg"
 }
 
 // Load reads configuration from the environment. PostgresDSN is required;
@@ -91,6 +93,7 @@ func Load() (*Config, error) {
 	}
 	cfg.AppTenantDSN = getenv("WADIST_APP_TENANT_DSN", "")
 	cfg.AppSystemDSN = getenv("WADIST_APP_SYSTEM_DSN", "")
+	cfg.OwnershipBackend = getenv("WADIST_OWNERSHIP_BACKEND", "pg")
 	cfg.NodeRegion = getenv("WADIST_NODE_REGION", "default")
 	cfg.AsynqConcurrency = 32
 	if v := getenv("WADIST_ASYNQ_CONCURRENCY", ""); v != "" {
@@ -128,12 +131,14 @@ func Load() (*Config, error) {
 // Store projects the app config onto the storage layer's Config.
 func (c *Config) Store() store.Config {
 	return store.Config{
-		DSN:          c.PostgresDSN,
-		MaxOpenConns: c.MaxOpenConns,
-		MaxLockConns: c.MaxLockConns,
-		NodeID:       c.NodeID,
-		AppTenantDSN: c.AppTenantDSN,
-		AppSystemDSN: c.AppSystemDSN,
+		DSN:              c.PostgresDSN,
+		MaxOpenConns:     c.MaxOpenConns,
+		MaxLockConns:     c.MaxLockConns,
+		NodeID:           c.NodeID,
+		AppTenantDSN:     c.AppTenantDSN,
+		AppSystemDSN:     c.AppSystemDSN,
+		OwnershipBackend: c.OwnershipBackend,
+		// Redis is injected by cmd/wadist after Store() returns.
 	}
 }
 
