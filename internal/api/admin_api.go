@@ -15,8 +15,16 @@ import (
 	"strconv"
 
 	"github.com/gin-gonic/gin"
+	"github.com/jackc/pgx/v5"
 
 	"github.com/acme/wadist/internal/console"
+)
+
+// Sentinel errors for the device⇄proxy binding handlers, so the SystemPool
+// transaction below can signal a clean HTTP status to the caller.
+var (
+	errDeviceNotFound   = errors.New("device not found")
+	errProxyUnavailable = errors.New("proxy is offline or at capacity")
 )
 
 // ---------------------------------------------------------------------------
@@ -355,13 +363,19 @@ type proxyRow struct {
 	CurrentBindings int    `json:"current_bindings"`
 	MaxBindings     int    `json:"max_bindings"`
 	FailureCount    int    `json:"failure_count"`
+	// BoundDevices is the live count of WS accounts currently bound to this
+	// proxy (account_devices.proxy_id = p.id), independent of the cached
+	// current_bindings counter so the admin sees the real association fan-out.
+	BoundDevices int `json:"bound_devices"`
 }
 
 // handleAdminListProxies: GET /api/v1/admin/resources/proxies.
 func (s *Server) handleAdminListProxies(c *gin.Context) {
 	rows, err := s.deps.Mgr.SystemPool().Query(c.Request.Context(), `
-SELECT id, proxy_url, proxy_type::text, country_code, is_alive, current_bindings, max_bindings, failure_count
-  FROM proxy_pool ORDER BY id DESC LIMIT 500`)
+SELECT p.id, p.proxy_url, p.proxy_type::text, p.country_code, p.is_alive,
+       p.current_bindings, p.max_bindings, p.failure_count,
+       (SELECT count(*)::int FROM account_devices a WHERE a.proxy_id = p.id) AS bound_devices
+  FROM proxy_pool p ORDER BY p.id DESC LIMIT 500`)
 	if err != nil {
 		fail(c, http.StatusInternalServerError, "list proxies")
 		return
@@ -370,7 +384,7 @@ SELECT id, proxy_url, proxy_type::text, country_code, is_alive, current_bindings
 	out := make([]proxyRow, 0)
 	for rows.Next() {
 		var p proxyRow
-		if err := rows.Scan(&p.ID, &p.URL, &p.Type, &p.Country, &p.IsAlive, &p.CurrentBindings, &p.MaxBindings, &p.FailureCount); err != nil {
+		if err := rows.Scan(&p.ID, &p.URL, &p.Type, &p.Country, &p.IsAlive, &p.CurrentBindings, &p.MaxBindings, &p.FailureCount, &p.BoundDevices); err != nil {
 			fail(c, http.StatusInternalServerError, "scan proxy")
 			return
 		}
@@ -415,19 +429,23 @@ VALUES ($1, $2, $3) ON CONFLICT (proxy_url) DO NOTHING`, p.URL, typ, p.Country)
 }
 
 type deviceRow struct {
-	ID              int64   `json:"id"`
-	TenantID        int64   `json:"tenant_id"`
-	AccountJID      string  `json:"account_jid"`
-	Phone           string  `json:"phone_number"`
-	BanStatus       string  `json:"ban_status"`
-	OwnerNode       *string `json:"owner_node"`
-	LastConnectedAt *string `json:"last_connected_at"`
+	ID              int64    `json:"id"`
+	TenantID        int64    `json:"tenant_id"`
+	AccountJID      string   `json:"account_jid"`
+	Phone           string   `json:"phone_number"`
+	BanStatus       string   `json:"ban_status"`
+	OwnerNode       *string  `json:"owner_node"`
+	LastConnectedAt *string  `json:"last_connected_at"`
+	Tags            []string `json:"tags"`
+	ProxyID         *int64   `json:"proxy_id"`
+	ProxyURL        *string  `json:"proxy_url"`
 }
 
 // handleAdminListDevices: GET /api/v1/admin/resources/devices (cross-tenant).
 func (s *Server) handleAdminListDevices(c *gin.Context) {
 	rows, err := s.deps.Mgr.SystemPool().Query(c.Request.Context(), `
-SELECT id, tenant_id, account_jid, phone_number, ban_status::text, owner_node, last_connected_at::text
+SELECT id, tenant_id, account_jid, phone_number, ban_status::text, owner_node, last_connected_at::text,
+       tags, proxy_id, proxy_url_cache
   FROM account_devices ORDER BY id DESC LIMIT 500`)
 	if err != nil {
 		fail(c, http.StatusInternalServerError, "list devices")
@@ -437,7 +455,8 @@ SELECT id, tenant_id, account_jid, phone_number, ban_status::text, owner_node, l
 	out := make([]deviceRow, 0)
 	for rows.Next() {
 		var d deviceRow
-		if err := rows.Scan(&d.ID, &d.TenantID, &d.AccountJID, &d.Phone, &d.BanStatus, &d.OwnerNode, &d.LastConnectedAt); err != nil {
+		if err := rows.Scan(&d.ID, &d.TenantID, &d.AccountJID, &d.Phone, &d.BanStatus, &d.OwnerNode, &d.LastConnectedAt,
+			&d.Tags, &d.ProxyID, &d.ProxyURL); err != nil {
 			fail(c, http.StatusInternalServerError, "scan device")
 			return
 		}
@@ -453,10 +472,11 @@ SELECT id, tenant_id, account_jid, phone_number, ban_status::text, owner_node, l
 func (s *Server) handleAdminImportDevices(c *gin.Context) {
 	var req struct {
 		Devices []struct {
-			TenantID   int64  `json:"tenant_id" binding:"required"`
-			AccountJID string `json:"account_jid" binding:"required"`
-			Phone      string `json:"phone" binding:"required"`
-			PushName   string `json:"push_name"`
+			TenantID   int64    `json:"tenant_id" binding:"required"`
+			AccountJID string   `json:"account_jid" binding:"required"`
+			Phone      string   `json:"phone" binding:"required"`
+			PushName   string   `json:"push_name"`
+			Tags       []string `json:"tags"`
 		} `json:"devices" binding:"required,dive"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
@@ -471,10 +491,14 @@ func (s *Server) handleAdminImportDevices(c *gin.Context) {
 		if d.PushName != "" {
 			pushName = d.PushName
 		}
+		tags := d.Tags
+		if tags == nil {
+			tags = []string{} // NOT NULL column; never send a SQL NULL
+		}
 		tag, err := pool.Exec(ctx, `
-INSERT INTO account_devices (tenant_id, account_jid, phone_number, push_name, ban_status)
-VALUES ($1, $2, $3, $4, 'init') ON CONFLICT (account_jid) DO NOTHING`,
-			d.TenantID, d.AccountJID, d.Phone, pushName)
+INSERT INTO account_devices (tenant_id, account_jid, phone_number, push_name, ban_status, tags)
+VALUES ($1, $2, $3, $4, 'init', $5) ON CONFLICT (account_jid) DO NOTHING`,
+			d.TenantID, d.AccountJID, d.Phone, pushName, tags)
 		if err != nil {
 			fail(c, http.StatusInternalServerError, "import device failed: "+err.Error())
 			return
@@ -482,6 +506,271 @@ VALUES ($1, $2, $3, $4, 'init') ON CONFLICT (account_jid) DO NOTHING`,
 		imported += int(tag.RowsAffected())
 	}
 	ok(c, gin.H{"submitted": len(req.Devices), "imported": imported, "skipped": len(req.Devices) - imported})
+}
+
+// handleAdminBindDeviceProxy: POST /api/v1/admin/resources/devices/:id/proxy
+// { proxy_id }. Binds a specific static proxy to a WS account for per-account
+// network isolation ("防关联"). This mirrors the counter invariants of
+// store.BindProxy (release the old proxy, claim the target only if alive and
+// under capacity) but lives entirely in this admin layer on the BYPASSRLS
+// SystemPool — it does NOT touch the internal/store engine package. The
+// proxy_pool chk_bindings CHECK is the backstop against counter corruption.
+func (s *Server) handleAdminBindDeviceProxy(c *gin.Context) {
+	id, err := strconv.ParseInt(c.Param("id"), 10, 64)
+	if err != nil || id <= 0 {
+		fail(c, http.StatusBadRequest, "invalid device id")
+		return
+	}
+	var req struct {
+		ProxyID int64 `json:"proxy_id" binding:"required"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		fail(c, http.StatusBadRequest, "proxy_id is required")
+		return
+	}
+	ctx := c.Request.Context()
+	var proxyURL string
+	err = pgx.BeginTxFunc(ctx, s.deps.Mgr.SystemPool(), pgx.TxOptions{}, func(tx pgx.Tx) error {
+		// Lock the device row and read its current proxy.
+		var oldProxyID *int64
+		err := tx.QueryRow(ctx, `SELECT proxy_id FROM account_devices WHERE id=$1 FOR UPDATE`, id).Scan(&oldProxyID)
+		if errors.Is(err, pgx.ErrNoRows) {
+			return errDeviceNotFound
+		}
+		if err != nil {
+			return err
+		}
+		// No-op if it is already bound to the requested proxy; just refresh cache.
+		if oldProxyID != nil && *oldProxyID == req.ProxyID {
+			return tx.QueryRow(ctx, `SELECT proxy_url FROM proxy_pool WHERE id=$1`, req.ProxyID).Scan(&proxyURL)
+		}
+		// Release the old proxy's slot (GREATEST guards against underflow).
+		if oldProxyID != nil {
+			if _, err := tx.Exec(ctx,
+				`UPDATE proxy_pool SET current_bindings = GREATEST(current_bindings-1, 0) WHERE id=$1`,
+				*oldProxyID); err != nil {
+				return err
+			}
+		}
+		// Claim the target proxy atomically: the WHERE enforces aliveness and
+		// free capacity, so a 0-row result means "unavailable".
+		err = tx.QueryRow(ctx, `
+UPDATE proxy_pool
+   SET current_bindings = current_bindings + 1,
+       usage_count      = usage_count + 1
+ WHERE id = $1 AND is_alive = TRUE AND current_bindings < max_bindings
+RETURNING proxy_url`, req.ProxyID).Scan(&proxyURL)
+		if errors.Is(err, pgx.ErrNoRows) {
+			return errProxyUnavailable
+		}
+		if err != nil {
+			return err
+		}
+		_, err = tx.Exec(ctx,
+			`UPDATE account_devices SET proxy_id=$1, proxy_url_cache=$2 WHERE id=$3`,
+			req.ProxyID, proxyURL, id)
+		return err
+	})
+	switch {
+	case errors.Is(err, errDeviceNotFound):
+		fail(c, http.StatusNotFound, "device not found")
+		return
+	case errors.Is(err, errProxyUnavailable):
+		fail(c, http.StatusConflict, "proxy is offline or already at capacity")
+		return
+	case err != nil:
+		fail(c, http.StatusInternalServerError, "bind proxy failed: "+err.Error())
+		return
+	}
+	ok(c, gin.H{"device_id": id, "proxy_id": req.ProxyID, "proxy_url": proxyURL})
+}
+
+// handleAdminUnbindDeviceProxy: DELETE /api/v1/admin/resources/devices/:id/proxy.
+// Releases the account's proxy binding and frees the proxy's slot. Idempotent.
+func (s *Server) handleAdminUnbindDeviceProxy(c *gin.Context) {
+	id, err := strconv.ParseInt(c.Param("id"), 10, 64)
+	if err != nil || id <= 0 {
+		fail(c, http.StatusBadRequest, "invalid device id")
+		return
+	}
+	ctx := c.Request.Context()
+	err = pgx.BeginTxFunc(ctx, s.deps.Mgr.SystemPool(), pgx.TxOptions{}, func(tx pgx.Tx) error {
+		var oldProxyID *int64
+		err := tx.QueryRow(ctx, `SELECT proxy_id FROM account_devices WHERE id=$1 FOR UPDATE`, id).Scan(&oldProxyID)
+		if errors.Is(err, pgx.ErrNoRows) {
+			return errDeviceNotFound
+		}
+		if err != nil {
+			return err
+		}
+		if oldProxyID == nil {
+			return nil // already unbound
+		}
+		if _, err := tx.Exec(ctx,
+			`UPDATE proxy_pool SET current_bindings = GREATEST(current_bindings-1, 0) WHERE id=$1`,
+			*oldProxyID); err != nil {
+			return err
+		}
+		_, err = tx.Exec(ctx,
+			`UPDATE account_devices SET proxy_id=NULL, proxy_url_cache=NULL WHERE id=$1`, id)
+		return err
+	})
+	switch {
+	case errors.Is(err, errDeviceNotFound):
+		fail(c, http.StatusNotFound, "device not found")
+		return
+	case err != nil:
+		fail(c, http.StatusInternalServerError, "unbind proxy failed: "+err.Error())
+		return
+	}
+	ok(c, gin.H{"device_id": id, "proxy_id": nil})
+}
+
+// ---------------------------------------------------------------------------
+// Risk / anti-ban policy (control-plane). Persists the admin's intended global
+// strategy to system_risk_config via the BYPASSRLS SystemPool. This is a
+// control-plane store only: it does NOT alter the dispatch/sendgate engine,
+// which keeps its compiled defaults until a future integration reads this row.
+// No red-line package (dispatch/sendgate/store) is touched here.
+// ---------------------------------------------------------------------------
+
+type riskConfig struct {
+	MinDelaySeconds       int     `json:"min_delay_seconds"`
+	MaxDelaySeconds       int     `json:"max_delay_seconds"`
+	DailyLimitPerDevice   int     `json:"daily_limit_per_device"`
+	BanRateCircuitBreaker float64 `json:"ban_rate_circuit_breaker"`
+	// Circuit-breaker control knobs (consumed by the future internal/riskbreaker
+	// supervisor; see docs/RISK-CIRCUIT-BREAKER-DESIGN-zh.md). Persisted here so
+	// they are hot-reloadable without an engine restart.
+	CircuitBreakerEnabled bool `json:"circuit_breaker_enabled"`
+	CircuitBreakerDryRun  bool `json:"circuit_breaker_dry_run"`
+	MinSample             int  `json:"min_sample"`
+	WindowSeconds         int  `json:"window_seconds"`
+	EvalIntervalSeconds   int  `json:"eval_interval_seconds"`
+
+	UpdatedAt *string `json:"updated_at"`
+	UpdatedBy *int64  `json:"updated_by"`
+}
+
+// riskConfigDefaults mirrors the engine's current compiled behavior, used both
+// to seed and as a defensive fallback if the singleton row is somehow absent.
+// Breaker ships disabled + dry-run (safe by default).
+func riskConfigDefaults() riskConfig {
+	return riskConfig{
+		MinDelaySeconds: 3, MaxDelaySeconds: 8, DailyLimitPerDevice: 1000, BanRateCircuitBreaker: 0.15,
+		CircuitBreakerEnabled: false, CircuitBreakerDryRun: true,
+		MinSample: 20, WindowSeconds: 900, EvalIntervalSeconds: 20,
+	}
+}
+
+// handleAdminGetRiskConfig: GET /api/v1/admin/settings/risk.
+func (s *Server) handleAdminGetRiskConfig(c *gin.Context) {
+	var rc riskConfig
+	err := s.deps.Mgr.SystemPool().QueryRow(c.Request.Context(), `
+SELECT min_delay_seconds, max_delay_seconds, daily_limit_per_device, ban_rate_circuit_breaker,
+       circuit_breaker_enabled, circuit_breaker_dry_run, min_sample, window_seconds, eval_interval_seconds,
+       updated_at::text, updated_by
+  FROM system_risk_config WHERE id = 1`).
+		Scan(&rc.MinDelaySeconds, &rc.MaxDelaySeconds, &rc.DailyLimitPerDevice, &rc.BanRateCircuitBreaker,
+			&rc.CircuitBreakerEnabled, &rc.CircuitBreakerDryRun, &rc.MinSample, &rc.WindowSeconds, &rc.EvalIntervalSeconds,
+			&rc.UpdatedAt, &rc.UpdatedBy)
+	if errors.Is(err, pgx.ErrNoRows) {
+		ok(c, riskConfigDefaults()) // migration seeds id=1; be defensive anyway
+		return
+	}
+	if err != nil {
+		fail(c, http.StatusInternalServerError, "load risk config")
+		return
+	}
+	ok(c, rc)
+}
+
+// handleAdminUpdateRiskConfig: PUT /api/v1/admin/settings/risk. Pointers +
+// "required" ensure every field is present (so a legitimate 0 is distinguished
+// from a missing field); ranges are validated below, with the table CHECKs as
+// a backstop.
+func (s *Server) handleAdminUpdateRiskConfig(c *gin.Context) {
+	var req struct {
+		MinDelaySeconds       *int     `json:"min_delay_seconds" binding:"required"`
+		MaxDelaySeconds       *int     `json:"max_delay_seconds" binding:"required"`
+		DailyLimitPerDevice   *int     `json:"daily_limit_per_device" binding:"required"`
+		BanRateCircuitBreaker *float64 `json:"ban_rate_circuit_breaker" binding:"required"`
+		// Booleans intentionally use plain types (not pointers + required): a
+		// false value is meaningful and must not be rejected as "missing".
+		CircuitBreakerEnabled bool `json:"circuit_breaker_enabled"`
+		CircuitBreakerDryRun  bool `json:"circuit_breaker_dry_run"`
+		MinSample             *int `json:"min_sample" binding:"required"`
+		WindowSeconds         *int `json:"window_seconds" binding:"required"`
+		EvalIntervalSeconds   *int `json:"eval_interval_seconds" binding:"required"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		fail(c, http.StatusBadRequest, "min_delay_seconds, max_delay_seconds, daily_limit_per_device, ban_rate_circuit_breaker, min_sample, window_seconds, eval_interval_seconds are required")
+		return
+	}
+	switch {
+	case *req.MinDelaySeconds < 0:
+		fail(c, http.StatusBadRequest, "min_delay_seconds must be >= 0")
+		return
+	case *req.MaxDelaySeconds < *req.MinDelaySeconds:
+		fail(c, http.StatusBadRequest, "max_delay_seconds must be >= min_delay_seconds")
+		return
+	case *req.DailyLimitPerDevice <= 0:
+		fail(c, http.StatusBadRequest, "daily_limit_per_device must be > 0")
+		return
+	case *req.BanRateCircuitBreaker < 0 || *req.BanRateCircuitBreaker > 1:
+		fail(c, http.StatusBadRequest, "ban_rate_circuit_breaker must be between 0 and 1")
+		return
+	case *req.MinSample < 1:
+		fail(c, http.StatusBadRequest, "min_sample must be >= 1")
+		return
+	case *req.WindowSeconds < 1:
+		fail(c, http.StatusBadRequest, "window_seconds must be >= 1")
+		return
+	case *req.EvalIntervalSeconds < 1:
+		fail(c, http.StatusBadRequest, "eval_interval_seconds must be >= 1")
+		return
+	}
+	var updatedBy *int64
+	if sd := sessionFrom(c); sd != nil {
+		updatedBy = &sd.UserID
+	}
+	_, err := s.deps.Mgr.SystemPool().Exec(c.Request.Context(), `
+INSERT INTO system_risk_config
+       (id, min_delay_seconds, max_delay_seconds, daily_limit_per_device, ban_rate_circuit_breaker,
+        circuit_breaker_enabled, circuit_breaker_dry_run, min_sample, window_seconds, eval_interval_seconds,
+        updated_at, updated_by)
+VALUES (1,  $1, $2, $3, $4,  $5, $6, $7, $8, $9,  now(), $10)
+ON CONFLICT (id) DO UPDATE SET
+       min_delay_seconds        = EXCLUDED.min_delay_seconds,
+       max_delay_seconds        = EXCLUDED.max_delay_seconds,
+       daily_limit_per_device   = EXCLUDED.daily_limit_per_device,
+       ban_rate_circuit_breaker = EXCLUDED.ban_rate_circuit_breaker,
+       circuit_breaker_enabled  = EXCLUDED.circuit_breaker_enabled,
+       circuit_breaker_dry_run  = EXCLUDED.circuit_breaker_dry_run,
+       min_sample               = EXCLUDED.min_sample,
+       window_seconds           = EXCLUDED.window_seconds,
+       eval_interval_seconds    = EXCLUDED.eval_interval_seconds,
+       updated_at               = now(),
+       updated_by               = EXCLUDED.updated_by`,
+		*req.MinDelaySeconds, *req.MaxDelaySeconds, *req.DailyLimitPerDevice, *req.BanRateCircuitBreaker,
+		req.CircuitBreakerEnabled, req.CircuitBreakerDryRun, *req.MinSample, *req.WindowSeconds, *req.EvalIntervalSeconds,
+		updatedBy)
+	if err != nil {
+		fail(c, http.StatusInternalServerError, "save risk config failed: "+err.Error())
+		return
+	}
+	ok(c, riskConfig{
+		MinDelaySeconds:       *req.MinDelaySeconds,
+		MaxDelaySeconds:       *req.MaxDelaySeconds,
+		DailyLimitPerDevice:   *req.DailyLimitPerDevice,
+		BanRateCircuitBreaker: *req.BanRateCircuitBreaker,
+		CircuitBreakerEnabled: req.CircuitBreakerEnabled,
+		CircuitBreakerDryRun:  req.CircuitBreakerDryRun,
+		MinSample:             *req.MinSample,
+		WindowSeconds:         *req.WindowSeconds,
+		EvalIntervalSeconds:   *req.EvalIntervalSeconds,
+		UpdatedBy:             updatedBy,
+	})
 }
 
 // ---------------------------------------------------------------------------
@@ -496,13 +785,23 @@ type adminCampaignRow struct {
 	Sent      int    `json:"sent"`
 	Failed    int    `json:"failed"`
 	CreatedAt string `json:"created_at"`
+	// AutoTripped is true when the campaign is currently paused because the
+	// risk circuit breaker tripped it (a circuit_break audit newer than any
+	// later resume), as opposed to a manual operator stop.
+	AutoTripped bool `json:"auto_tripped"`
 }
 
 // handleAdminListCampaigns: GET /api/v1/admin/campaigns (all tenants).
 func (s *Server) handleAdminListCampaigns(c *gin.Context) {
 	rows, err := s.deps.Mgr.SystemPool().Query(c.Request.Context(), `
-SELECT id, tenant_id, state::text, total, sent, failed, created_at::text
-  FROM campaigns ORDER BY id DESC LIMIT 200`)
+SELECT c.id, c.tenant_id, c.state::text, c.total, c.sent, c.failed, c.created_at::text,
+       (c.state = 'paused' AND
+        COALESCE((SELECT max(occurred_at) FROM audit_log a
+                   WHERE a.action='campaign.circuit_break' AND a.resource_id=c.id), 'epoch') >
+        COALESCE((SELECT max(occurred_at) FROM audit_log a
+                   WHERE a.action='campaign.resume' AND a.resource_id=c.id), 'epoch')
+       ) AS auto_tripped
+  FROM campaigns c ORDER BY c.id DESC LIMIT 200`)
 	if err != nil {
 		fail(c, http.StatusInternalServerError, "list campaigns")
 		return
@@ -511,7 +810,7 @@ SELECT id, tenant_id, state::text, total, sent, failed, created_at::text
 	out := make([]adminCampaignRow, 0)
 	for rows.Next() {
 		var cp adminCampaignRow
-		if err := rows.Scan(&cp.ID, &cp.TenantID, &cp.State, &cp.Total, &cp.Sent, &cp.Failed, &cp.CreatedAt); err != nil {
+		if err := rows.Scan(&cp.ID, &cp.TenantID, &cp.State, &cp.Total, &cp.Sent, &cp.Failed, &cp.CreatedAt, &cp.AutoTripped); err != nil {
 			fail(c, http.StatusInternalServerError, "scan campaign")
 			return
 		}
@@ -541,6 +840,75 @@ func (s *Server) handleAdminStopCampaign(c *gin.Context) {
 		return
 	}
 	ok(c, gin.H{"id": id, "state": "paused"})
+}
+
+// handleAdminResumeCampaign: POST /api/v1/admin/campaigns/:id/resume. Reverses a
+// pause (manual stop OR an automatic circuit-breaker trip) by flipping 'paused'
+// back to 'running'. Operators use this after investigating a tripped campaign;
+// there is intentionally no auto-resume (the ban root-cause may be unresolved).
+// Plain control-plane UPDATE; no dispatch engine code is touched.
+func (s *Server) handleAdminResumeCampaign(c *gin.Context) {
+	id, err := strconv.ParseInt(c.Param("id"), 10, 64)
+	if err != nil {
+		fail(c, http.StatusBadRequest, "bad campaign id")
+		return
+	}
+	var actorID *int64
+	if sd := sessionFrom(c); sd != nil {
+		actorID = &sd.UserID
+	}
+	ctx := c.Request.Context()
+	resumed := false
+	err = pgx.BeginTxFunc(ctx, s.deps.Mgr.SystemPool(), pgx.TxOptions{}, func(tx pgx.Tx) error {
+		var tenantID int64
+		err := tx.QueryRow(ctx,
+			`UPDATE campaigns SET state='running' WHERE id=$1 AND state='paused' RETURNING tenant_id`, id).
+			Scan(&tenantID)
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil // not paused / not found; resumed stays false
+		}
+		if err != nil {
+			return err
+		}
+		resumed = true
+		// Audit the resume so AutoTripped (latest circuit_break vs latest resume)
+		// reads correctly afterwards, and operators have a trail.
+		_, err = tx.Exec(ctx, `
+INSERT INTO audit_log (tenant_id, actor_id, action, resource_type, resource_id, details)
+VALUES ($1, $2, 'campaign.resume', 'campaign', $3, '{}'::jsonb)`, tenantID, actorID, id)
+		return err
+	})
+	if err != nil {
+		fail(c, http.StatusInternalServerError, "resume campaign failed")
+		return
+	}
+	if !resumed {
+		fail(c, http.StatusConflict, "campaign not found or not in 'paused' state")
+		return
+	}
+	ok(c, gin.H{"id": id, "state": "running"})
+}
+
+// handleAdminListCampaignRecipients: GET /api/v1/admin/campaigns/:id/recipients
+// (cross-tenant). Reuses loadRecipients (campaign.go) over the BYPASSRLS
+// SystemPool so super-admins can drill into any tenant's campaign.
+func (s *Server) handleAdminListCampaignRecipients(c *gin.Context) {
+	id, err := strconv.ParseInt(c.Param("id"), 10, 64)
+	if err != nil || id <= 0 {
+		fail(c, http.StatusBadRequest, "bad campaign id")
+		return
+	}
+	page, pageSize := parsePageParams(c)
+	resp, found, err := loadRecipients(c.Request.Context(), s.deps.Mgr.SystemPool(), id, page, pageSize)
+	if err != nil {
+		fail(c, http.StatusInternalServerError, "list recipients failed")
+		return
+	}
+	if !found {
+		fail(c, http.StatusNotFound, "campaign not found")
+		return
+	}
+	ok(c, resp)
 }
 
 // ---------------------------------------------------------------------------

@@ -102,6 +102,7 @@ func (s *Server) Router() *gin.Engine {
 	{
 		campaigns.POST("", s.handleCreateCampaign)
 		campaigns.GET("", s.handleListCampaigns)
+		campaigns.GET("/:id/recipients", s.handleListCampaignRecipients)
 	}
 
 	// --- Sales controller (a sales user's own customers) ---
@@ -133,9 +134,16 @@ func (s *Server) Router() *gin.Engine {
 		admin.POST("/resources/proxies", s.handleAdminImportProxies)
 		admin.GET("/resources/devices", s.handleAdminListDevices)
 		admin.POST("/resources/devices", s.handleAdminImportDevices)
+		admin.POST("/resources/devices/:id/proxy", s.handleAdminBindDeviceProxy)
+		admin.DELETE("/resources/devices/:id/proxy", s.handleAdminUnbindDeviceProxy)
+
+		admin.GET("/settings/risk", s.handleAdminGetRiskConfig)
+		admin.PUT("/settings/risk", s.handleAdminUpdateRiskConfig)
 
 		admin.GET("/campaigns", s.handleAdminListCampaigns)
+		admin.GET("/campaigns/:id/recipients", s.handleAdminListCampaignRecipients)
 		admin.POST("/campaigns/:id/stop", s.handleAdminStopCampaign)
+		admin.POST("/campaigns/:id/resume", s.handleAdminResumeCampaign)
 	}
 
 	return r

@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"os"
 	"os/signal"
 	"syscall"
 	"time"
@@ -24,6 +25,8 @@ import (
 	"github.com/acme/wadist/internal/metrics"
 	"github.com/acme/wadist/internal/node"
 	"github.com/acme/wadist/internal/pricing"
+	"github.com/acme/wadist/internal/receipt"
+	"github.com/acme/wadist/internal/riskbreaker"
 	"github.com/acme/wadist/internal/sendgate"
 	"github.com/acme/wadist/internal/store"
 )
@@ -157,6 +160,11 @@ func run(ctx context.Context, cfg *config.Config) (*metrics.Server, func(), erro
 		return body, mediaSha, mime, nil, nil
 	})
 
+	// Delivery/read receipt recorder. Wired into each WA connection unless
+	// WADIST_RECEIPTS=off (rollback knob; the send path is unaffected either way).
+	receiptRec := receipt.New(mgr.SystemPool())
+	receiptsOn := os.Getenv("WADIST_RECEIPTS") != "off"
+
 	// Build a real SessionFactory: acquire device store + optional proxy + whatsmeow conn.
 	factory := node.SessionFactory(func(fctx context.Context, jid string, lock cluster.DeviceLockHandle) (*cluster.Session, error) {
 		device, err := mgr.GetDeviceStore(fctx, jid)
@@ -170,8 +178,20 @@ func run(ctx context.Context, cfg *config.Config) (*metrics.Server, func(), erro
 		} else if !errors.Is(err, store.ErrProxyNotBound) {
 			return nil, err
 		}
+		// Receipt callback for THIS account; jid is the assigned_jid we match on.
+		// Receipts arrive asynchronously, so use a background context.
+		var onReceipt cluster.ReceiptFunc
+		if receiptsOn {
+			onReceipt = func(ids []string, kind string, at time.Time) {
+				if err := receiptRec.Record(context.Background(), receipt.Event{
+					MessageIDs: ids, SenderJID: jid, Kind: receipt.Kind(kind), At: at,
+				}); err != nil {
+					log.Printf("receipt record (%s): %v", jid, err)
+				}
+			}
+		}
 		// proxy may be nil if no proxy is bound — that's acceptable
-		conn := cluster.NewWAConn(device, logger, proxyBinding)
+		conn := cluster.NewWAConn(device, logger, proxyBinding, onReceipt)
 		if err := conn.Connect(fctx); err != nil {
 			return nil, err
 		}
@@ -220,6 +240,15 @@ func run(ctx context.Context, cfg *config.Config) (*metrics.Server, func(), erro
 			}
 		}
 	})
+	// Side-car ban-rate circuit breaker: auto-pauses campaigns over the
+	// admin-configured threshold. Decoupled from the dispatch engine — it only
+	// flips campaign state, which the dispatch loop above already honors. Ships
+	// disabled-by-default (system_risk_config.circuit_breaker_enabled).
+	breaker := riskbreaker.New(mgr.SystemPool())
+	sup.Go(func(lctx context.Context) error {
+		return breaker.Run(lctx)
+	})
+
 	sup.Go(func(lctx context.Context) error {
 		return orch.RunHeartbeat(lctx, cfg.HeartbeatInterval)
 	})

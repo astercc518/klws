@@ -1,0 +1,23 @@
+# wadist worker image — the WhatsApp sending NODE. Running this binary starts a
+# real sending engine: it connects active accounts, dispatches running campaigns
+# (real messages + billing holds), runs the ban-rate circuit-breaker supervisor,
+# and ingests delivery/read receipts. It is NOT part of the default console
+# stack; see docs/WADIST-WORKER-DEPLOY-zh.md before deploying.
+#
+# Build from the repo root:
+#   docker build -f Dockerfile.wadist -t klws-wadist:latest .
+FROM golang:1.26 AS build
+WORKDIR /src
+COPY go.mod go.sum ./
+RUN go mod download
+COPY . .
+# CGO not needed (pure-Go deps); trimmed static binary.
+RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/wadist ./cmd/wadist
+
+FROM gcr.io/distroless/static-debian12:nonroot
+COPY --from=build /out/wadist /wadist
+# Prometheus metrics (WADIST_METRICS_ADDR, default :9090). Not published to host
+# in the worker overlay; scrape in-network if desired.
+EXPOSE 9090
+USER nonroot:nonroot
+ENTRYPOINT ["/wadist"]

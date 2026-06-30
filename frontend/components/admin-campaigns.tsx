@@ -1,13 +1,14 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
-import { Ban } from "lucide-react";
+import { Ban, Play, ShieldAlert } from "lucide-react";
 import { toast } from "sonner";
 import { api, ApiError } from "@/lib/api";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Card } from "@/components/ui/card";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import { CampaignDetailSheet } from "@/components/campaign-detail-sheet";
 import {
   Dialog,
   DialogClose,
@@ -26,6 +27,7 @@ interface Campaign {
   sent: number;
   failed: number;
   created_at: string;
+  auto_tripped: boolean;
 }
 
 const stateVariant: Record<Campaign["state"], "default" | "secondary" | "outline" | "destructive"> = {
@@ -42,6 +44,7 @@ export function AdminCampaigns() {
   const [error, setError] = useState<string | null>(null);
   const [killTarget, setKillTarget] = useState<Campaign | null>(null);
   const [busy, setBusy] = useState(false);
+  const [detailId, setDetailId] = useState<number | null>(null);
 
   const load = useCallback(async () => {
     try {
@@ -68,6 +71,20 @@ export function AdminCampaigns() {
       toast.error("操作失败", { description: e instanceof ApiError ? e.message : "请重试" });
     } finally {
       setBusy(false);
+    }
+  }
+
+  const [resumingId, setResumingId] = useState<number | null>(null);
+  async function resume(c: Campaign) {
+    setResumingId(c.id);
+    try {
+      await api.post(`/admin/campaigns/${c.id}/resume`);
+      toast.success("已恢复任务", { description: `任务 #${c.id} → running` });
+      load();
+    } catch (e) {
+      toast.error("恢复失败", { description: e instanceof ApiError ? e.message : "请重试" });
+    } finally {
+      setResumingId(null);
     }
   }
 
@@ -98,28 +115,57 @@ export function AdminCampaigns() {
               </TableRow>
             ) : (
               rows.map((c) => (
-                <TableRow key={c.id}>
+                <TableRow
+                  key={c.id}
+                  className="cursor-pointer"
+                  onClick={() => setDetailId(c.id)}
+                >
                   <TableCell className="font-mono text-sm">#{c.id}</TableCell>
                   <TableCell className="font-mono text-xs text-muted-foreground">#{c.tenant_id}</TableCell>
                   <TableCell>
-                    <Badge variant={stateVariant[c.state]}>{c.state}</Badge>
+                    <div className="flex items-center gap-1.5">
+                      <Badge variant={stateVariant[c.state]}>{c.state}</Badge>
+                      {c.auto_tripped && (
+                        <Badge
+                          variant="destructive"
+                          className="gap-1"
+                          title="风控熔断器因封号率超阈值自动挂起了此任务"
+                        >
+                          <ShieldAlert className="size-3" />
+                          自动熔断
+                        </Badge>
+                      )}
+                    </div>
                   </TableCell>
                   <TableCell className="text-right font-mono tabular-nums text-sm">{nf.format(c.total)}</TableCell>
                   <TableCell className="text-right font-mono tabular-nums text-sm">{nf.format(c.sent)}</TableCell>
                   <TableCell className="text-right font-mono tabular-nums text-sm text-muted-foreground">
                     {nf.format(c.failed)}
                   </TableCell>
-                  <TableCell className="text-right">
-                    <Button
-                      variant="ghost"
-                      size="sm"
-                      className="gap-1.5 text-destructive hover:text-destructive"
-                      disabled={c.state !== "running"}
-                      onClick={() => setKillTarget(c)}
-                    >
-                      <Ban className="size-3.5" />
-                      强制终止
-                    </Button>
+                  <TableCell className="text-right" onClick={(e) => e.stopPropagation()}>
+                    {c.state === "paused" ? (
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        className="gap-1.5"
+                        disabled={resumingId === c.id}
+                        onClick={() => resume(c)}
+                      >
+                        <Play className="size-3.5" />
+                        {resumingId === c.id ? "恢复中…" : "恢复"}
+                      </Button>
+                    ) : (
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        className="gap-1.5 text-destructive hover:text-destructive"
+                        disabled={c.state !== "running"}
+                        onClick={() => setKillTarget(c)}
+                      >
+                        <Ban className="size-3.5" />
+                        强制终止
+                      </Button>
+                    )}
                   </TableCell>
                 </TableRow>
               ))
@@ -145,6 +191,12 @@ export function AdminCampaigns() {
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      <CampaignDetailSheet
+        campaignId={detailId}
+        apiBase="/admin/campaigns"
+        onClose={() => setDetailId(null)}
+      />
     </>
   );
 }

@@ -26,7 +26,7 @@ function parsePhones(raw: string): string[] {
     .filter(Boolean);
 }
 
-export function NewCampaignDialog() {
+export function NewCampaignDialog({ onDone }: { onDone?: () => void } = {}) {
   const [open, setOpen] = useState(false);
   const [phones, setPhones] = useState("");
   const [body, setBody] = useState("");
@@ -52,6 +52,7 @@ export function NewCampaignDialog() {
       toast.success("群发任务已进入调度队列", {
         description: `${count} 个号码已提交,后台将按受控速率发送`,
       });
+      onDone?.();
     } catch (e) {
       // 401 redirects globally; show the backend's message for everything else
       // (e.g. 余额不足 / 未配置单价).

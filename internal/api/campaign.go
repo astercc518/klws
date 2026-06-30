@@ -7,11 +7,15 @@
 package api
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"net/http"
+	"strconv"
+	"strings"
 
 	"github.com/gin-gonic/gin"
+	"github.com/jackc/pgx/v5"
 
 	"github.com/acme/wadist/internal/crypto"
 	"github.com/acme/wadist/internal/pricing"
@@ -33,11 +37,12 @@ type createCampaignResponse struct {
 
 // campaignSummary is one row in GET /api/v1/campaigns.
 type campaignSummary struct {
-	ID     int64  `json:"id"`
-	State  string `json:"state"`
-	Total  int    `json:"total"`
-	Sent   int    `json:"sent"`
-	Failed int    `json:"failed"`
+	ID        int64  `json:"id"`
+	State     string `json:"state"`
+	Total     int    `json:"total"`
+	Sent      int    `json:"sent"`
+	Failed    int    `json:"failed"`
+	CreatedAt string `json:"created_at"`
 }
 
 // handleCreateCampaign: POST /api/v1/campaigns (customer only).
@@ -143,7 +148,7 @@ func (s *Server) handleListCampaigns(c *gin.Context) {
 	defer tx.Rollback(ctx) //nolint:errcheck
 
 	rows, err := tx.Query(ctx,
-		`SELECT id, state::text, total, sent, failed FROM campaigns ORDER BY id DESC LIMIT 50`)
+		`SELECT id, state::text, total, sent, failed, created_at::text FROM campaigns ORDER BY id DESC LIMIT 50`)
 	if err != nil {
 		fail(c, http.StatusInternalServerError, "list campaigns failed")
 		return
@@ -153,7 +158,7 @@ func (s *Server) handleListCampaigns(c *gin.Context) {
 	out := make([]campaignSummary, 0)
 	for rows.Next() {
 		var cs campaignSummary
-		if err := rows.Scan(&cs.ID, &cs.State, &cs.Total, &cs.Sent, &cs.Failed); err != nil {
+		if err := rows.Scan(&cs.ID, &cs.State, &cs.Total, &cs.Sent, &cs.Failed, &cs.CreatedAt); err != nil {
 			fail(c, http.StatusInternalServerError, "scan campaign failed")
 			return
 		}
@@ -164,4 +169,215 @@ func (s *Server) handleListCampaigns(c *gin.Context) {
 		return
 	}
 	ok(c, out)
+}
+
+// ---------------------------------------------------------------------------
+// Recipient drill-through — per-number delivery detail with a status funnel.
+//
+// Honest mapping to what the engine actually records (no fabricated receipts):
+//   recipient_state_t pending -> "queued", and sent/failed/skipped pass through.
+//   There is NO delivered/read tracking (the node does not ingest WhatsApp
+//   receipts yet), so the funnel's success node is "sent" (left our system),
+//   not "delivered". error_reason is a best-effort classification of the free
+//   text last_error; the raw text is also returned as error_detail.
+// Shared by the customer (RLS tx) and admin (SystemPool) handlers — both pass a
+// rowQuerier, so ownership is enforced by RLS for customers and by the explicit
+// admin role for super-admins.
+// ---------------------------------------------------------------------------
+
+// rowQuerier is satisfied by both pgx.Tx (customer RLS) and *pgxpool.Pool (admin).
+type rowQuerier interface {
+	Query(ctx context.Context, sql string, args ...any) (pgx.Rows, error)
+	QueryRow(ctx context.Context, sql string, args ...any) pgx.Row
+}
+
+type recipientDetail struct {
+	ID          int64   `json:"id"`
+	Phone       string  `json:"phone"`
+	Status      string  `json:"status"` // queued | sent | delivered | read | failed | skipped
+	ErrorReason *string `json:"error_reason"`
+	ErrorDetail *string `json:"error_detail"`
+	SentAt      *string `json:"sent_at"`      // set for sent rows (state-change time)
+	DeliveredAt *string `json:"delivered_at"` // WA delivery receipt time (null until ingested)
+	ReadAt      *string `json:"read_at"`      // WA read receipt time (null until ingested)
+	UpdatedAt   string  `json:"updated_at"`   // last state-change time
+}
+
+type recipientsResponse struct {
+	CampaignID int64             `json:"campaign_id"`
+	Total      int               `json:"total"`
+	Counts     map[string]int    `json:"counts"` // keyed by mapped status
+	Page       int               `json:"page"`
+	PageSize   int               `json:"page_size"`
+	Recipients []recipientDetail `json:"recipients"`
+}
+
+// mapStatus maps the DB enum to the API status vocabulary.
+func mapStatus(state string) string {
+	if state == "pending" {
+		return "queued"
+	}
+	return state // sent | failed | skipped
+}
+
+// classifyError turns a free-text last_error into a structured reason code while
+// preserving the raw text. Patterns for device_banned mirror dispatch's
+// isBanSignal (keep in sync). Returns (reason, detail).
+func classifyError(lastError string) (*string, *string) {
+	if lastError == "" {
+		return nil, nil
+	}
+	detail := lastError
+	s := strings.ToLower(lastError)
+	var code string
+	switch {
+	case strings.Contains(s, "wa_warning"), strings.Contains(s, "banned"), strings.Contains(s, "403"):
+		code = "device_banned"
+	case strings.Contains(s, "invalid"), strings.Contains(s, "not on whatsapp"),
+		strings.Contains(s, "no such"), strings.Contains(s, "unregistered"):
+		code = "number_invalid"
+	case strings.Contains(s, "billing"), strings.Contains(s, "insufficient"),
+		strings.Contains(s, "balance"), strings.Contains(s, "wallet"):
+		code = "billing_error"
+	case strings.Contains(s, "admit"), strings.Contains(s, "rate"),
+		strings.Contains(s, "pacing"), strings.Contains(s, "quota"):
+		code = "rate_limited"
+	case strings.Contains(s, "media"):
+		code = "media_error"
+	default:
+		code = "unknown"
+	}
+	return &code, &detail
+}
+
+// parsePageParams reads ?page=&page_size= (1-based; page_size capped at 200).
+func parsePageParams(c *gin.Context) (page, pageSize int) {
+	page = 1
+	if v, err := strconv.Atoi(c.Query("page")); err == nil && v > 0 {
+		page = v
+	}
+	pageSize = 50
+	if v, err := strconv.Atoi(c.Query("page_size")); err == nil && v > 0 {
+		pageSize = v
+	}
+	if pageSize > 200 {
+		pageSize = 200
+	}
+	return page, pageSize
+}
+
+// loadRecipients returns the funnel counts + one page of recipient details for a
+// campaign. The second return is false when the campaign does not exist (or, for
+// an RLS tx, is not visible to this tenant) so the caller can 404.
+func loadRecipients(ctx context.Context, q rowQuerier, campaignID int64, page, pageSize int) (recipientsResponse, bool, error) {
+	var exists bool
+	err := q.QueryRow(ctx, `SELECT true FROM campaigns WHERE id=$1`, campaignID).Scan(&exists)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return recipientsResponse{}, false, nil
+	}
+	if err != nil {
+		return recipientsResponse{}, false, fmt.Errorf("check campaign: %w", err)
+	}
+
+	resp := recipientsResponse{
+		CampaignID: campaignID,
+		Page:       page,
+		PageSize:   pageSize,
+		Recipients: make([]recipientDetail, 0, pageSize),
+	}
+
+	// Cumulative funnel counts in one aggregate row. sent/delivered/read are
+	// nested (read ⊆ delivered ⊆ sent): delivered/read are derived from the
+	// receipt timestamps, which stay 0 until receipt ingestion is wired.
+	var queued, sent, delivered, read, failed, skipped int
+	err = q.QueryRow(ctx, `
+SELECT count(*),
+       count(*) FILTER (WHERE state='pending'),
+       count(*) FILTER (WHERE state='sent'),
+       count(*) FILTER (WHERE delivered_at IS NOT NULL),
+       count(*) FILTER (WHERE read_at IS NOT NULL),
+       count(*) FILTER (WHERE state='failed'),
+       count(*) FILTER (WHERE state='skipped')
+  FROM campaign_recipients WHERE campaign_id=$1`, campaignID).
+		Scan(&resp.Total, &queued, &sent, &delivered, &read, &failed, &skipped)
+	if err != nil {
+		return resp, true, fmt.Errorf("count recipients: %w", err)
+	}
+	resp.Counts = map[string]int{
+		"queued": queued, "sent": sent, "delivered": delivered,
+		"read": read, "failed": failed, "skipped": skipped,
+	}
+
+	offset := (page - 1) * pageSize
+	rows, err := q.Query(ctx, `
+SELECT id, phone, state::text, last_error, updated_at::text,
+       delivered_at::text, read_at::text
+  FROM campaign_recipients
+ WHERE campaign_id=$1
+ ORDER BY id
+ LIMIT $2 OFFSET $3`, campaignID, pageSize, offset)
+	if err != nil {
+		return resp, true, fmt.Errorf("list recipients: %w", err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var d recipientDetail
+		var rawState string
+		var lastError *string
+		if err := rows.Scan(&d.ID, &d.Phone, &rawState, &lastError, &d.UpdatedAt,
+			&d.DeliveredAt, &d.ReadAt); err != nil {
+			return resp, true, fmt.Errorf("scan recipient: %w", err)
+		}
+		// Milestone status: read > delivered > sent > (queued/failed/skipped).
+		switch {
+		case d.ReadAt != nil:
+			d.Status = "read"
+		case d.DeliveredAt != nil:
+			d.Status = "delivered"
+		default:
+			d.Status = mapStatus(rawState)
+		}
+		if lastError != nil {
+			d.ErrorReason, d.ErrorDetail = classifyError(*lastError)
+		}
+		if rawState == "sent" {
+			ts := d.UpdatedAt
+			d.SentAt = &ts
+		}
+		resp.Recipients = append(resp.Recipients, d)
+	}
+	return resp, true, rows.Err()
+}
+
+// handleListCampaignRecipients: GET /api/v1/campaigns/:id/recipients (customer).
+// RLS scopes both the existence check and the rows to the session tenant.
+func (s *Server) handleListCampaignRecipients(c *gin.Context) {
+	tid, ok2 := tenantID(c)
+	if !ok2 {
+		fail(c, http.StatusForbidden, "no tenant in session")
+		return
+	}
+	id, err := strconv.ParseInt(c.Param("id"), 10, 64)
+	if err != nil || id <= 0 {
+		fail(c, http.StatusBadRequest, "bad campaign id")
+		return
+	}
+	page, pageSize := parsePageParams(c)
+	ctx := c.Request.Context()
+	tx, err := s.deps.Mgr.WithTenant(ctx, tid)
+	if err != nil {
+		fail(c, http.StatusInternalServerError, "could not open transaction")
+		return
+	}
+	defer tx.Rollback(ctx) //nolint:errcheck
+	resp, found, err := loadRecipients(ctx, tx, id, page, pageSize)
+	if err != nil {
+		fail(c, http.StatusInternalServerError, "list recipients failed")
+		return
+	}
+	if !found {
+		fail(c, http.StatusNotFound, "campaign not found")
+		return
+	}
+	ok(c, resp)
 }
