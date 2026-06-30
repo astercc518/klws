@@ -8,6 +8,7 @@ package cluster
 import (
 	"context"
 	"sync"
+	"time"
 )
 
 // Conn is one account's live transport (real impl wraps a whatsmeow client).
@@ -50,6 +51,22 @@ func (s *Session) JID() string { return s.jid }
 
 func (s *Session) Healthy(ctx context.Context) bool {
 	return s.lock != nil && s.lock.Healthy(ctx)
+}
+
+// GracefulClose signals presence-unavailable, waits linger (if > 0), then calls
+// Close (disconnect → release lock). Never calls whatsmeow Logout. linger<=0
+// skips the wait. Reuses Close's disconnect→release ordering.
+func (s *Session) GracefulClose(ctx context.Context, linger time.Duration) {
+	if pc, ok := s.conn.(PresenceConn); ok {
+		_ = pc.SetPresence(ctx, false)
+	}
+	if linger > 0 {
+		select {
+		case <-time.After(linger):
+		case <-ctx.Done():
+		}
+	}
+	s.Close(ctx)
 }
 
 // Close detaches the session: disconnect the live transport FIRST (stop

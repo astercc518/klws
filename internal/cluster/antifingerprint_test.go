@@ -38,3 +38,14 @@ func TestRecordingConnSatisfiesPresenceConn(t *testing.T) {
 	var _ Conn = (*recordingConn)(nil)
 	var _ PresenceConn = (*recordingConn)(nil)
 }
+
+func TestGracefulCloseSequence(t *testing.T) {
+	rc := &recordingConn{}
+	sess := NewSession("jid-1", rc, &fakeLock{healthy: true})
+	sess.GracefulClose(context.Background(), 0) // linger=0 skips wait
+
+	want := []string{"present:off", "disconnect"}
+	if len(rc.calls) != 2 || rc.calls[0] != want[0] || rc.calls[1] != want[1] {
+		t.Fatalf("calls=%v want %v", rc.calls, want)
+	}
+}
