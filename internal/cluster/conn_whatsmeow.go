@@ -79,6 +79,29 @@ func (c *waConn) Connect(_ context.Context) error {
 
 func (c *waConn) Disconnect() { c.client.Disconnect() }
 
+var _ PresenceConn = (*waConn)(nil)
+
+// SetPresence signals the account's global online/offline state to WhatsApp.
+// Call with available=true before a sending burst and available=false after.
+func (c *waConn) SetPresence(ctx context.Context, available bool) error {
+	st := types.PresenceUnavailable
+	if available {
+		st = types.PresenceAvailable
+	}
+	return c.client.SendPresence(ctx, st)
+}
+
+// SendTyping signals composing/paused state in a specific chat. chatPhone is
+// the bare E.164-style number (no @s.whatsapp.net suffix needed).
+func (c *waConn) SendTyping(ctx context.Context, chatPhone string, composing bool) error {
+	jid := types.NewJID(chatPhone, types.DefaultUserServer)
+	st := types.ChatPresencePaused
+	if composing {
+		st = types.ChatPresenceComposing
+	}
+	return c.client.SendChatPresence(ctx, jid, st, "")
+}
+
 var _ SessionSender = (*waConn)(nil)
 
 // Send delivers a text message to `phone` via the live whatsmeow client and

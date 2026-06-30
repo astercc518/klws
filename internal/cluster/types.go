@@ -16,6 +16,15 @@ type Conn interface {
 	Disconnect()
 }
 
+// PresenceConn is an optional anthropomorphic capability on top of Conn:
+// online-presence signalling and per-chat typing indicators. waConn implements
+// it; Conn implementations that do not (test fakes, capability-less conns) are
+// safely skipped at the call site.
+type PresenceConn interface {
+	SetPresence(ctx context.Context, available bool) error
+	SendTyping(ctx context.Context, chatPhone string, composing bool) error
+}
+
 // DeviceLockHandle is the cross-process ownership lock for an account.
 // *store.DeviceLock satisfies this structurally.
 type DeviceLockHandle interface {
