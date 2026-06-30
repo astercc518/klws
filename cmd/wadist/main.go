@@ -81,9 +81,13 @@ func run(ctx context.Context, cfg *config.Config) (*metrics.Server, func(), erro
 		return nil, nil, err
 	}
 
+	promReg := prometheus.NewRegistry()
+	m := metrics.New(promReg)
+
 	rdb := goredis.NewClient(&goredis.Options{Addr: cfg.RedisAddr})
 	sc := cfg.Store()
 	sc.Redis = rdb
+	sc.OnShadowDivergence = func(op string) { m.ObserveOwnershipDivergence(op) }
 	mgr, err := store.Init(ctx, sc, logger)
 	if err != nil {
 		flush()
@@ -123,8 +127,6 @@ func run(ctx context.Context, cfg *config.Config) (*metrics.Server, func(), erro
 
 	reg := cluster.NewRegistry()
 
-	promReg := prometheus.NewRegistry()
-	m := metrics.New(promReg)
 	promReg.MustRegister(metrics.NewDBCollector(pool, 10*time.Second, reg))
 
 	adm := sendgate.NewAdmission(rdb)

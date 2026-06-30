@@ -22,8 +22,9 @@ type Metrics struct {
 	batchAssigned prometheus.Histogram
 	noCapacity    prometheus.Counter
 	proxyOps      *prometheus.CounterVec // labels: op, outcome
-	lockOps       *prometheus.CounterVec // label: outcome
-	cohortSends   *prometheus.CounterVec // labels: cohort, outcome
+	lockOps              *prometheus.CounterVec // label: outcome
+	cohortSends          *prometheus.CounterVec // labels: cohort, outcome
+	ownershipDivergence  *prometheus.CounterVec // label: op
 }
 
 func New(reg *prometheus.Registry) *Metrics {
@@ -65,10 +66,15 @@ func New(reg *prometheus.Registry) *Metrics {
 		Name: "wadist_cohort_sends_total",
 		Help: "Send outcomes split by canary cohort (cohort: canary|stable).",
 	}, []string{"cohort", "outcome"})
+	m.ownershipDivergence = prometheus.NewCounterVec(prometheus.CounterOpts{
+		Name: "wadist_ownership_shadow_divergence_total",
+		Help: "shadow-mode ownership decision divergences",
+	}, []string{"op"})
 
 	reg.MustRegister(
 		m.sendOutcomes, m.gateDecisions, m.healthSignals, m.billingOps,
 		m.batchAssigned, m.noCapacity, m.proxyOps, m.lockOps, m.cohortSends,
+		m.ownershipDivergence,
 	)
 	return m
 }
@@ -142,4 +148,11 @@ func (m *Metrics) RecordCohortSend(cohort, outcome string) {
 		return
 	}
 	m.cohortSends.WithLabelValues(cohort, outcome).Inc()
+}
+
+func (m *Metrics) ObserveOwnershipDivergence(op string) {
+	if m == nil {
+		return
+	}
+	m.ownershipDivergence.WithLabelValues(op).Inc()
 }

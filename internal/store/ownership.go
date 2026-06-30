@@ -33,8 +33,7 @@ func newOwnership(m *Manager) Ownership {
 	case "redis":
 		return newRedisOwnershipWithRoster(m.cfg.Redis, m.ListActiveAccounts)
 	case "shadow":
-		// TODO(Task 6): wire shadowOwnership here; until then fall back to pg.
-		return &pgOwnership{m: m}
+		return newShadowOwnership(&pgOwnership{m: m}, newRedisOwnershipWithRoster(m.cfg.Redis, m.ListActiveAccounts), m.cfg.OnShadowDivergence)
 	default:
 		return &pgOwnership{m: m}
 	}
@@ -48,7 +47,8 @@ func backendName(o Ownership) string {
 		return "pg"
 	case *redisOwnership:
 		return "redis"
-	// TODO(Task 6): add *shadowOwnership case here.
+	case *shadowOwnership:
+		return "shadow"
 	default:
 		return "unknown"
 	}

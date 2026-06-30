@@ -10,5 +10,7 @@ func TestNewOwnershipSelect(t *testing.T) {
 	if got := backendName(&redisOwnership{}); got != "redis" {
 		t.Fatalf("redis name=%s", got)
 	}
-	// Task 6: if got := backendName(&shadowOwnership{}); got != "shadow" { t.Fatalf("shadow name=%s", got) }
+	if got := backendName(&shadowOwnership{}); got != "shadow" {
+		t.Fatalf("shadow name=%s", got)
+	}
 }
