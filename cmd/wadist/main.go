@@ -6,8 +6,10 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"math/rand"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
@@ -19,6 +21,7 @@ import (
 	"github.com/acme/wadist/internal/billing"
 	"github.com/acme/wadist/internal/cluster"
 	"github.com/acme/wadist/internal/config"
+	"github.com/acme/wadist/internal/control"
 	"github.com/acme/wadist/internal/crypto"
 	"github.com/acme/wadist/internal/dispatch"
 	walog "github.com/acme/wadist/internal/log"
@@ -229,15 +232,81 @@ func run(ctx context.Context, cfg *config.Config) (*metrics.Server, func(), erro
 	takeEnq := node.NewTakeoverEnqueuer(asynqClient, cfg.NodeStaleness)
 	node.RegisterTakeoverHandler(mux, orch)
 
+	// Control-plane: scheduler + sticky proxy + working-set.
+	sched := control.NewScheduler(rdb)
+	sticky := control.StickyBindProxy(
+		func(ctx context.Context, jid string) (bool, error) {
+			_, err := mgr.GetBoundProxy(ctx, jid)
+			if errors.Is(err, store.ErrProxyNotBound) {
+				return false, nil
+			}
+			return err == nil, err
+		},
+		func(ctx context.Context, jid, cc string) error {
+			_, e := mgr.BindProxy(ctx, jid, cc)
+			return e
+		},
+	)
+	deps := control.Deps{
+		Warm: func(ctx context.Context, jid string) (bool, error) {
+			sess, err := orch.StartAccountWithLock(ctx, jid)
+			return sess != nil, err
+		},
+		Evict: func(ctx context.Context, jid string, linger time.Duration) {
+			if s, ok := reg.Get(jid); ok {
+				s.GracefulClose(ctx, linger)
+			}
+		},
+		IsWarm:    func(jid string) bool { _, ok := reg.Get(jid); return ok },
+		BindProxy: sticky,
+	}
+
+	// activeCountries: prefer WADIST_COUNTRIES env (comma-separated), else query
+	// distinct non-null country_code from proxy_pool. Falls back to empty slice on
+	// any error (WorkingSet active-warm loop is skipped when ccs is empty).
+	activeCountries := loadActiveCountries(ctx, mgr)
+
+	ws := control.NewWorkingSet(rdb, sched, activeCountries, control.Config{
+		Target:          cfg.WarmTarget,
+		WarmReqBatch:    cfg.WarmReqBatch,
+		KeepWarmHorizon: cfg.KeepWarmHorizon,
+		Linger:          cfg.Linger,
+	}, deps)
+
+	// Wire RoutingSender warm-request hook: on a send miss, push jid|cc to warm:req.
+	routing = routing.WithWarmRequest(func(jid string) {
+		cc := ""
+		if pb, err := mgr.GetBoundProxy(context.Background(), jid); err == nil {
+			cc = pb.Country
+		}
+		rdb.RPush(context.Background(), "warm:req", jid+"|"+cc)
+	})
+
 	// Kick off initial account startup with bounded concurrency.
 	jids, err := mgr.ListActiveAccounts(ctx)
 	if err != nil {
 		log.Printf("warn: list active accounts at startup: %v — starting with zero accounts", err)
 		jids = nil
 	}
+
+	// Seed the scheduler with per-account next-eligible times, then start the
+	// WorkingSet loop. This REPLACES the previous full-startup StartAccounts call.
 	sup.Go(func(lctx context.Context) error {
-		return sup.StartAccounts(lctx, jids, orch.StartAccountWithLock)
+		accts := make([]control.AccountCC, 0, len(jids))
+		now := time.Now().UnixMilli()
+		rng := rand.New(rand.NewSource(now)) //nolint:gosec
+		for _, jid := range jids {
+			cc := countryOf(lctx, mgr, jid)
+			quota := randQuota(rng, cfg.DailyQuotaMin, cfg.DailyQuotaMax)
+			accts = append(accts, control.AccountCC{
+				JID:    jid,
+				CC:     cc,
+				NextMs: control.NextEligibleMs(now, quota, control.Window{StartHour: 9, EndHour: 22}, rng),
+			})
+		}
+		return sched.SeedDue(lctx, accts)
 	})
+	sup.Go(func(lctx context.Context) error { return ws.Run(lctx, cfg.WSTick) })
 
 	// Start the supervised dispatch loop: ticks every second, dispatches running
 	// campaigns. Per-tick errors are logged but do not exit the loop (transient
@@ -323,3 +392,55 @@ func loadForTest(t interface {
 
 // ensure placeholderUploader satisfies the dispatch interface at compile time.
 var _ dispatch.Uploader = placeholderUploader{}
+
+// loadActiveCountries returns the list of active proxy countries. It first
+// checks WADIST_COUNTRIES (comma-separated, e.g. "US,IN,BR"); if unset it
+// queries distinct non-null country_code from proxy_pool. Falls back to an
+// empty slice on any DB error so the WorkingSet active-warm loop is safely
+// skipped rather than crashing startup.
+func loadActiveCountries(ctx context.Context, mgr *store.Manager) []string {
+	if v := os.Getenv("WADIST_COUNTRIES"); v != "" {
+		var ccs []string
+		for _, s := range strings.Split(v, ",") {
+			if s = strings.TrimSpace(s); s != "" {
+				ccs = append(ccs, s)
+			}
+		}
+		return ccs
+	}
+	rows, err := mgr.Pool().Query(ctx,
+		`SELECT DISTINCT country_code FROM proxy_pool WHERE country_code IS NOT NULL ORDER BY country_code`)
+	if err != nil {
+		log.Printf("warn: load active countries: %v — control-plane active-warm disabled", err)
+		return nil
+	}
+	defer rows.Close()
+	var ccs []string
+	for rows.Next() {
+		var cc string
+		if err := rows.Scan(&cc); err == nil {
+			ccs = append(ccs, cc)
+		}
+	}
+	return ccs
+}
+
+// countryOf returns the country code bound to jid by consulting GetBoundProxy.
+// Accounts with no bound proxy or an unresolvable country are seeded with cc=""
+// (they land in the due:"" shard and will be skipped by the active-warm loop
+// since "" is not in activeCountries; reactive warm:req still works for them).
+func countryOf(ctx context.Context, mgr *store.Manager, jid string) string {
+	pb, err := mgr.GetBoundProxy(ctx, jid)
+	if err != nil {
+		return ""
+	}
+	return pb.Country
+}
+
+// randQuota returns a random integer in [min, max]. If min >= max it returns min.
+func randQuota(rng *rand.Rand, min, max int) int {
+	if min >= max {
+		return min
+	}
+	return min + rng.Intn(max-min+1)
+}

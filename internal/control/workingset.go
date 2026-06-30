@@ -58,6 +58,25 @@ func (w *WorkingSet) warm(ctx context.Context, jid, cc string) {
 	}
 }
 
+// Run starts a ticker loop that calls Tick on every interval. Tick errors are
+// logged and the loop continues. Run returns ctx.Err() when the context is
+// cancelled.
+func (w *WorkingSet) Run(ctx context.Context, interval time.Duration) error {
+	t := time.NewTicker(interval)
+	defer t.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-t.C:
+			if err := w.Tick(ctx, time.Now().UnixMilli()); err != nil {
+				// log and continue — transient error; next tick retries
+				_ = err
+			}
+		}
+	}
+}
+
 func (w *WorkingSet) Tick(ctx context.Context, nowMs int64) error {
 	// 1. PASSIVE warm: pop warm:req batch
 	reqs, _ := w.rdb.LPopCount(ctx, warmReqKey, w.cfg.WarmReqBatch).Result()

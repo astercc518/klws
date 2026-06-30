@@ -52,6 +52,13 @@ type Config struct {
 	DwellMin    time.Duration // WADIST_DWELL_MIN_MS default 3000ms
 	DwellMax    time.Duration // WADIST_DWELL_MAX_MS default 10000ms
 	Linger      time.Duration // WADIST_LINGER_MS default 15000ms
+	// Control-plane warm-set configuration.
+	WarmTarget      int           // WADIST_WARM_TARGET default 1500
+	WSTick          time.Duration // WADIST_WS_TICK_MS default 500ms
+	KeepWarmHorizon time.Duration // WADIST_KEEP_WARM_HORIZON_MS default 90000ms
+	WarmReqBatch    int           // WADIST_WARMREQ_BATCH default 64
+	DailyQuotaMin   int           // WADIST_DAILY_QUOTA_MIN default 5
+	DailyQuotaMax   int           // WADIST_DAILY_QUOTA_MAX default 10
 }
 
 // Load reads configuration from the environment. PostgresDSN is required;
@@ -130,6 +137,12 @@ func Load() (*Config, error) {
 	cfg.DwellMin = msEnv("WADIST_DWELL_MIN_MS", 3000)
 	cfg.DwellMax = msEnv("WADIST_DWELL_MAX_MS", 10000)
 	cfg.Linger = msEnv("WADIST_LINGER_MS", 15000)
+	cfg.WarmTarget = intEnv("WADIST_WARM_TARGET", 1500)
+	cfg.WSTick = msEnv("WADIST_WS_TICK_MS", 500)
+	cfg.KeepWarmHorizon = msEnv("WADIST_KEEP_WARM_HORIZON_MS", 90000)
+	cfg.WarmReqBatch = intEnv("WADIST_WARMREQ_BATCH", 64)
+	cfg.DailyQuotaMin = intEnv("WADIST_DAILY_QUOTA_MIN", 5)
+	cfg.DailyQuotaMax = intEnv("WADIST_DAILY_QUOTA_MAX", 10)
 
 	mk, err := decodeKey32("WADIST_MASTER_KEY")
 	if err != nil {
@@ -161,6 +174,15 @@ func (c *Config) Store() store.Config {
 func getenv(key, def string) string {
 	if v := os.Getenv(key); v != "" {
 		return v
+	}
+	return def
+}
+
+func intEnv(key string, def int) int {
+	if v := os.Getenv(key); v != "" {
+		if n, err := strconv.Atoi(v); err == nil {
+			return n
+		}
 	}
 	return def
 }

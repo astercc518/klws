@@ -227,6 +227,21 @@ func TestLoad_CanaryPercentOutOfRange(t *testing.T) {
 	}
 }
 
+func TestLoad_ControlDefaults(t *testing.T) {
+	t.Setenv("WADIST_REDIS_ADDR", "x:1")
+	t.Setenv("WADIST_POSTGRES_DSN", "postgres://x")
+	cfg, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.WarmTarget != 1500 {
+		t.Fatalf("WarmTarget=%d want 1500", cfg.WarmTarget)
+	}
+	if cfg.WSTick != 500*time.Millisecond {
+		t.Fatalf("WSTick=%v", cfg.WSTick)
+	}
+}
+
 func TestLoad_AntifpDefaults(t *testing.T) {
 	t.Setenv("WADIST_POSTGRES_DSN", "postgres://x")
 	t.Setenv("WADIST_REDIS_ADDR", "x:1")

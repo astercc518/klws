@@ -137,12 +137,18 @@ func (m *Manager) listUnownedActiveAccountsPG(ctx context.Context) ([]string, er
 
 // GetBoundProxy reads the cached proxy binding for an account (for reconnect).
 // Returns ErrProxyNotBound if no proxy URL is cached.
+// Country is populated by LEFT JOINing proxy_pool on the bound proxy_id (additive
+// read-only; error semantics and transaction logic are unchanged).
 func (m *Manager) GetBoundProxy(ctx context.Context, accountJID string) (*ProxyBinding, error) {
 	var proxyID *int64
 	var proxyURL *string
+	var country *string
 	err := m.bizPool.QueryRow(ctx,
-		`SELECT proxy_id, proxy_url_cache FROM account_devices WHERE account_jid=$1`,
-		accountJID).Scan(&proxyID, &proxyURL)
+		`SELECT ad.proxy_id, ad.proxy_url_cache, p.country_code
+		   FROM account_devices ad
+		   LEFT JOIN proxy_pool p ON p.id = ad.proxy_id
+		  WHERE ad.account_jid = $1`,
+		accountJID).Scan(&proxyID, &proxyURL, &country)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return nil, ErrProxyNotBound
@@ -156,9 +162,14 @@ func (m *Manager) GetBoundProxy(ctx context.Context, accountJID string) (*ProxyB
 	if proxyID != nil {
 		id = *proxyID
 	}
+	var cc string
+	if country != nil {
+		cc = *country
+	}
 	return &ProxyBinding{
 		ProxyID:  id,
 		ProxyURL: *proxyURL,
+		Country:  cc,
 	}, nil
 }
 

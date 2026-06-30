@@ -31,6 +31,27 @@ func (d *fakeDeps) deps() Deps {
 	}
 }
 
+func TestWorkingSetRunStopsOnCancel(t *testing.T) {
+	// This test does not require Redis — it only verifies that Run exits when
+	// the context is cancelled. We pass a nil rdb and confirm Run returns
+	// context.Canceled promptly.
+	ctx, cancel := context.WithCancel(context.Background())
+	d := newFakeDeps()
+	// Use a nil rdb — Run will never reach Tick because we cancel immediately.
+	w := &WorkingSet{deps: d.deps(), cfg: Config{Target: 1, WarmReqBatch: 1}}
+	done := make(chan error, 1)
+	go func() { done <- w.Run(ctx, 10*time.Millisecond) }()
+	cancel()
+	select {
+	case err := <-done:
+		if err != context.Canceled {
+			t.Fatalf("Run returned %v, want context.Canceled", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("Run did not stop within 1s after cancel")
+	}
+}
+
 func TestWorkingSetActiveWarm(t *testing.T) {
 	if testing.Short() { t.Skip("integration") }
 	ctx := context.Background()
