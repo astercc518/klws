@@ -226,3 +226,24 @@ func TestLoad_CanaryPercentOutOfRange(t *testing.T) {
 		t.Fatalf("CanaryPercent out-of-range should be 0, got %d", cfg.CanaryPercent)
 	}
 }
+
+func TestLoad_AntifpDefaults(t *testing.T) {
+	t.Setenv("WADIST_POSTGRES_DSN", "postgres://x")
+	t.Setenv("WADIST_REDIS_ADDR", "x:1")
+	cfg, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !cfg.AntifpOn {
+		t.Fatal("AntifpOn 默认应为 true")
+	}
+	if !cfg.FenceOnSend {
+		t.Fatal("FenceOnSend 默认应为 true")
+	}
+	if cfg.TypingMin != 1200*time.Millisecond || cfg.TypingMax != 3500*time.Millisecond {
+		t.Fatalf("typing 默认 = %v/%v", cfg.TypingMin, cfg.TypingMax)
+	}
+	if cfg.Linger != 15*time.Second {
+		t.Fatalf("linger 默认 = %v", cfg.Linger)
+	}
+}

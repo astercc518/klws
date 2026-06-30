@@ -44,6 +44,14 @@ type Config struct {
 	PreStopDelay time.Duration // WADIST_PRESTOP_DELAY default 5s
 	// OwnershipBackend selects the ownership implementation: "pg" (default) | "redis" | "shadow".
 	OwnershipBackend string // WADIST_OWNERSHIP_BACKEND default "pg"
+	// Anti-fingerprint / anthropomorphic pacing.
+	AntifpOn    bool          // WADIST_ANTIFP default "on" (off to disable)
+	FenceOnSend bool          // WADIST_OWNERSHIP_FENCE_ON_SEND default "true"
+	TypingMin   time.Duration // WADIST_TYPING_MIN_MS default 1200ms
+	TypingMax   time.Duration // WADIST_TYPING_MAX_MS default 3500ms
+	DwellMin    time.Duration // WADIST_DWELL_MIN_MS default 3000ms
+	DwellMax    time.Duration // WADIST_DWELL_MAX_MS default 10000ms
+	Linger      time.Duration // WADIST_LINGER_MS default 15000ms
 }
 
 // Load reads configuration from the environment. PostgresDSN is required;
@@ -115,6 +123,14 @@ func Load() (*Config, error) {
 		}
 	}
 
+	cfg.AntifpOn = getenv("WADIST_ANTIFP", "on") != "off"
+	cfg.FenceOnSend = getenv("WADIST_OWNERSHIP_FENCE_ON_SEND", "true") != "false"
+	cfg.TypingMin = msEnv("WADIST_TYPING_MIN_MS", 1200)
+	cfg.TypingMax = msEnv("WADIST_TYPING_MAX_MS", 3500)
+	cfg.DwellMin = msEnv("WADIST_DWELL_MIN_MS", 3000)
+	cfg.DwellMax = msEnv("WADIST_DWELL_MAX_MS", 10000)
+	cfg.Linger = msEnv("WADIST_LINGER_MS", 15000)
+
 	mk, err := decodeKey32("WADIST_MASTER_KEY")
 	if err != nil {
 		return nil, err
@@ -147,6 +163,15 @@ func getenv(key, def string) string {
 		return v
 	}
 	return def
+}
+
+func msEnv(key string, def int) time.Duration {
+	if v := os.Getenv(key); v != "" {
+		if n, err := strconv.Atoi(v); err == nil {
+			return time.Duration(n) * time.Millisecond
+		}
+	}
+	return time.Duration(def) * time.Millisecond
 }
 
 func getenvInt32(key string, def int32) int32 {

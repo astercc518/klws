@@ -139,10 +139,18 @@ func run(ctx context.Context, cfg *config.Config) (*metrics.Server, func(), erro
 
 	// cluster.NewRoutingSender routes sends to live sessions; returns a clear
 	// error when no active session exists rather than silently succeeding.
+	// When AntifpOn, upgrade to policy-based sender with typing pacing + fence.
+	var routing *cluster.RoutingSender
+	if cfg.AntifpOn {
+		routing = cluster.NewRoutingSenderWithPolicy(reg, cfg.FenceOnSend,
+			cluster.TypingPolicy{Min: cfg.TypingMin, Max: cfg.TypingMax})
+	} else {
+		routing = cluster.NewRoutingSender(reg)
+	}
 	priceRepo := pricing.NewRepo(pool)
 	// priceFor falls back to the existing per-country default table when a tenant
 	// has no explicit price configured.
-	worker := dispatch.NewSendWorker(pool, gate, billingRepo, cluster.NewRoutingSender(reg), placeholderUploader{}).
+	worker := dispatch.NewSendWorker(pool, gate, billingRepo, routing, placeholderUploader{}).
 		WithMetrics(m).
 		WithCanary(cfg.CanaryPercent).
 		WithPricing(func(ctx context.Context, tenantID int64, country string) int64 {
@@ -198,6 +206,11 @@ func run(ctx context.Context, cfg *config.Config) (*metrics.Server, func(), erro
 		conn := cluster.NewWAConn(device, logger, proxyBinding, onReceipt)
 		if err := conn.Connect(fctx); err != nil {
 			return nil, err
+		}
+		if cfg.AntifpOn {
+			if pc, ok := any(conn).(cluster.PresenceConn); ok {
+				_ = pc.SetPresence(fctx, true)
+			}
 		}
 		return cluster.NewSessionWithSender(jid, conn, lock, conn), nil
 	})
