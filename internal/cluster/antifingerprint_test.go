@@ -97,3 +97,24 @@ func TestTypingSequenceAroundSend(t *testing.T) {
 		t.Fatal("send 应发生")
 	}
 }
+
+type plainConn struct{}
+
+func (p *plainConn) Connect(context.Context) error { return nil }
+func (p *plainConn) Disconnect()                   {}
+
+func TestNoTypingWhenPlainRoutingSender(t *testing.T) {
+	reg := NewRegistry()
+	pc := &plainConn{} // 不实现 PresenceConn → 无 typing/presence 调用
+	rs := &recordingSender{}
+	sess := newSessionWithSender("jid-3", pc, &fakeLock{healthy: true}, rs)
+	reg.Add(sess)
+
+	sender := NewRoutingSender(reg) // 旧构造 = AntifpOff 等价
+	if _, err := sender.Send(context.Background(), "jid-3", "1555222", "hi", nil); err != nil {
+		t.Fatal(err)
+	}
+	if !rs.called {
+		t.Fatal("send 仍应发生")
+	}
+}
