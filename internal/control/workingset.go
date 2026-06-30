@@ -2,6 +2,7 @@ package control
 
 import (
 	"context"
+	"log"
 	"time"
 
 	goredis "github.com/redis/go-redis/v9"
@@ -70,8 +71,8 @@ func (w *WorkingSet) Run(ctx context.Context, interval time.Duration) error {
 			return ctx.Err()
 		case <-t.C:
 			if err := w.Tick(ctx, time.Now().UnixMilli()); err != nil {
-				// log and continue — transient error; next tick retries
-				_ = err
+				log.Printf("control: WorkingSet.Tick error: %v", err)
+				// continue — transient error; next tick retries
 			}
 		}
 	}
