@@ -6,6 +6,29 @@ import (
 	"testing"
 )
 
+func TestRedisHeartbeatStaleUnowned(t *testing.T) {
+	if testing.Short() { t.Skip("integration") }
+	ctx := context.Background()
+	rdb := newTestRedis(t)
+	roster := func(context.Context) ([]string, error) { return []string{"jid-1", "jid-2"}, nil }
+	o := newRedisOwnershipWithRoster(rdb, roster)
+
+	_ = o.Heartbeat(ctx, "node-A")
+	if n, _ := rdb.Exists(ctx, hbKey("node-A")).Result(); n != 1 { t.Fatal("hb key missing") }
+	ttl, _ := rdb.TTL(ctx, hbKey("node-A")).Result()
+	if ttl <= 0 || ttl > hbTTL { t.Fatalf("hb ttl=%v", ttl) }
+
+	if _, err := o.Acquire(ctx, "jid-1", "node-A"); err != nil { t.Fatal(err) }
+	// jid-2 unowned
+	un, _ := o.Unowned(ctx)
+	if len(un) != 1 || un[0] != "jid-2" { t.Fatalf("unowned=%v want [jid-2]", un) }
+
+	// kill node-A heartbeat → jid-1 becomes stale
+	rdb.Del(ctx, hbKey("node-A"))
+	st, _ := o.StaleOwned(ctx, hbTTL)
+	if len(st) != 1 || st[0] != "jid-1" { t.Fatalf("stale=%v want [jid-1]", st) }
+}
+
 func TestRedisAcquireStillOwnerRelease(t *testing.T) {
 	if testing.Short() { t.Skip("integration") }
 	ctx := context.Background()

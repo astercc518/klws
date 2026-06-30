@@ -3,6 +3,7 @@ package store
 
 import (
 	"context"
+	"strings"
 	"time"
 
 	goredis "github.com/redis/go-redis/v9"
@@ -63,9 +64,15 @@ func (h *redisLockHandle) Release(ctx context.Context) {
 
 var _ LockHandle = (*redisLockHandle)(nil)
 
-type redisOwnership struct{ rdb *goredis.Client }
+type redisOwnership struct {
+	rdb    *goredis.Client
+	roster func(ctx context.Context) ([]string, error) // active 账号花名册（PG）
+}
 
 func newRedisOwnership(rdb *goredis.Client) *redisOwnership { return &redisOwnership{rdb: rdb} }
+func newRedisOwnershipWithRoster(rdb *goredis.Client, roster func(context.Context) ([]string, error)) *redisOwnership {
+	return &redisOwnership{rdb: rdb, roster: roster}
+}
 
 func (o *redisOwnership) Acquire(ctx context.Context, jid, nodeID string) (LockHandle, error) {
 	res, err := luaAcquire.Run(ctx, o.rdb,
@@ -79,18 +86,15 @@ func (o *redisOwnership) Acquire(ctx context.Context, jid, nodeID string) (LockH
 
 // Heartbeat 刷新本节点在 Redis 中的活性标记。
 func (o *redisOwnership) Heartbeat(ctx context.Context, nodeID string) error {
-	return o.rdb.Set(ctx, hbKey(nodeID), 1, hbTTL).Err()
+	return o.rdb.Set(ctx, hbKey(nodeID), "1", hbTTL).Err()
 }
 
 // Deregister 清理本节点在 Redis 中的所有权台账。
 func (o *redisOwnership) Deregister(ctx context.Context, nodeID string) error {
-	// Remove the heartbeat key and all owned jids
-	members, err := o.rdb.SMembers(ctx, ownedKey(nodeID)).Result()
-	if err != nil {
-		return err
-	}
-	pipe := o.rdb.Pipeline()
-	for _, jid := range members {
+	jids, err := o.rdb.SMembers(ctx, ownedKey(nodeID)).Result()
+	if err != nil { return err }
+	pipe := o.rdb.TxPipeline()
+	for _, jid := range jids {
 		pipe.Del(ctx, ownerKey(jid))
 	}
 	pipe.Del(ctx, ownedKey(nodeID))
@@ -100,13 +104,32 @@ func (o *redisOwnership) Deregister(ctx context.Context, nodeID string) error {
 }
 
 // StaleOwned 返回归属于已过期节点的账号（接管候选）。
-func (o *redisOwnership) StaleOwned(ctx context.Context, staleness time.Duration) ([]string, error) {
-	// Scan all owned:{node} sets where the node heartbeat has expired
-	// This is a best-effort scan; for Task 2 we return empty (wired in Task 5)
-	return nil, nil
+// 遍历所有 node 的 owned 集；其 hb 缺失即 stale。单机/少节点规模可接受。
+func (o *redisOwnership) StaleOwned(ctx context.Context, _ time.Duration) ([]string, error) {
+	nodes, err := o.rdb.Keys(ctx, "owned:*").Result()
+	if err != nil { return nil, err }
+	var out []string
+	for _, ok := range nodes {
+		node := strings.TrimPrefix(ok, "owned:")
+		if n, _ := o.rdb.Exists(ctx, hbKey(node)).Result(); n == 1 { continue }
+		jids, _ := o.rdb.SMembers(ctx, ok).Result()
+		out = append(out, jids...)
+	}
+	return out, nil
 }
 
-// Unowned 返回 active 但无主的账号（Task 5 补全）。
+// Unowned 返回 active 但无主的账号（pipeline 批量 EXISTS）。
 func (o *redisOwnership) Unowned(ctx context.Context) ([]string, error) {
-	return nil, nil
+	if o.roster == nil { return nil, nil }
+	all, err := o.roster(ctx)
+	if err != nil { return nil, err }
+	pipe := o.rdb.Pipeline()
+	cmds := make([]*goredis.IntCmd, len(all))
+	for i, jid := range all { cmds[i] = pipe.Exists(ctx, ownerKey(jid)) }
+	if _, err := pipe.Exec(ctx); err != nil { return nil, err }
+	var out []string
+	for i, c := range cmds {
+		if c.Val() == 0 { out = append(out, all[i]) }
+	}
+	return out, nil
 }
