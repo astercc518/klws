@@ -24,8 +24,9 @@ func advisoryKey(accountJID string) int64 {
 	return int64(h.Sum64())
 }
 
-// AcquireDeviceLock 非阻塞抢占账号独占权;失败返回 ErrDeviceLocked。
-func (m *Manager) AcquireDeviceLock(ctx context.Context, accountJID string) (*DeviceLock, error) {
+// acquirePGLock 非阻塞抢占账号独占权;失败返回 ErrDeviceLocked。
+// 供 pgOwnership.Acquire 调用；外部代码请使用 Manager.AcquireDeviceLock。
+func (m *Manager) acquirePGLock(ctx context.Context, accountJID string) (*DeviceLock, error) {
 	key := advisoryKey(accountJID)
 
 	conn, err := m.lockPool.Acquire(ctx)

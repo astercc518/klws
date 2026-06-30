@@ -67,7 +67,7 @@ func TestDeviceLock_Healthy_FalseAfterBackendTerminated(t *testing.T) {
 	ctx := context.Background()
 	seedAccountDevice(t, ctx, m, "jid-h2")
 
-	lock, err := m.AcquireDeviceLock(ctx, "jid-h2")
+	lock, err := m.acquirePGLock(ctx, "jid-h2")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -107,7 +107,7 @@ func TestDeviceLock_Healthy_FalseAfterLockReleased_ConnStillAlive(t *testing.T) 
 	m := newTestManager(t)
 	ctx := context.Background()
 	seedAccountDevice(t, ctx, m, "jid-h4")
-	lock, err := m.AcquireDeviceLock(ctx, "jid-h4")
+	lock, err := m.acquirePGLock(ctx, "jid-h4")
 	if err != nil {
 		t.Fatal(err)
 	}

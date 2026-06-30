@@ -6,8 +6,20 @@ import (
 	"time"
 
 	"github.com/acme/wadist/internal/cluster"
+	"github.com/acme/wadist/internal/store"
 	"github.com/hibiken/asynq"
 )
+
+// mustPGLock asserts that h is a *store.DeviceLock (the PG ownership backend)
+// and returns it. Used only in chaos tests that need KillConnForTest.
+func mustPGLock(t *testing.T, h store.LockHandle) *store.DeviceLock {
+	t.Helper()
+	dl, ok := h.(*store.DeviceLock)
+	if !ok {
+		t.Fatalf("mustPGLock: expected *store.DeviceLock, got %T", h)
+	}
+	return dl
+}
 
 // TestTakeoverChaos simulates node death and asserts a peer takes over the
 // account: node A directly holds the advisory lock for jid; A's lock connection
@@ -30,7 +42,7 @@ func TestTakeoverChaos(t *testing.T) {
 	if err := m.UpsertNodeHeartbeat(ctx, "node-A"); err != nil {
 		t.Fatalf("upsert node-A heartbeat: %v", err)
 	}
-	lockA, err := m.AcquireDeviceLock(ctx, jid)
+	lockAHandle, err := m.AcquireDeviceLock(ctx, jid)
 	if err != nil {
 		t.Fatalf("node A acquire lock: %v", err)
 	}
@@ -41,6 +53,7 @@ func TestTakeoverChaos(t *testing.T) {
 	// --- CHAOS: forcibly close node A's lock connection (simulates process
 	// death). PG releases the session-level advisory lock automatically when
 	// the backend TCP connection drops. ---
+	lockA := mustPGLock(t, lockAHandle)
 	lockA.KillConnForTest(ctx)
 
 	// Make node-A's heartbeat stale so scanOnce picks the account up.

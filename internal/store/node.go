@@ -13,9 +13,10 @@ import (
 // ErrProxyNotBound is returned by GetBoundProxy when the account has no cached proxy URL.
 var ErrProxyNotBound = errors.New("store: account has no bound proxy")
 
-// UpsertNodeHeartbeat inserts or updates a cluster_nodes row for nodeID,
+// upsertNodeHeartbeatPG inserts or updates a cluster_nodes row for nodeID,
 // setting last_heartbeat_at to now(). Safe to call repeatedly.
-func (m *Manager) UpsertNodeHeartbeat(ctx context.Context, nodeID string) error {
+// Underlying PG implementation; called via pgOwnership.Heartbeat.
+func (m *Manager) upsertNodeHeartbeatPG(ctx context.Context, nodeID string) error {
 	_, err := m.bizPool.Exec(ctx, `
 INSERT INTO cluster_nodes (node_id, last_heartbeat_at)
 VALUES ($1, now())
@@ -27,9 +28,10 @@ ON CONFLICT (node_id) DO UPDATE SET last_heartbeat_at = now()
 	return nil
 }
 
-// DeregisterNode clears owner_node on all account_devices owned by nodeID,
+// deregisterNodePG clears owner_node on all account_devices owned by nodeID,
 // then deletes the cluster_nodes row. Both steps run in a single transaction.
-func (m *Manager) DeregisterNode(ctx context.Context, nodeID string) error {
+// Underlying PG implementation; called via pgOwnership.Deregister.
+func (m *Manager) deregisterNodePG(ctx context.Context, nodeID string) error {
 	tx, err := m.bizPool.Begin(ctx)
 	if err != nil {
 		return fmt.Errorf("deregister node %q begin tx: %w", nodeID, err)
@@ -86,9 +88,10 @@ func (m *Manager) ClaimAccount(ctx context.Context, accountJID, nodeID string) e
 	return nil
 }
 
-// StaleOwnedAccounts returns active accounts whose owner node's heartbeat is
+// staleOwnedAccountsPG returns active accounts whose owner node's heartbeat is
 // older than staleness — candidates for takeover.
-func (m *Manager) StaleOwnedAccounts(ctx context.Context, staleness time.Duration) ([]string, error) {
+// Underlying PG implementation; called via pgOwnership.StaleOwned.
+func (m *Manager) staleOwnedAccountsPG(ctx context.Context, staleness time.Duration) ([]string, error) {
 	rows, err := m.bizPool.Query(ctx, `
 SELECT a.account_jid
   FROM account_devices a
@@ -111,9 +114,10 @@ SELECT a.account_jid
 	return out, rows.Err()
 }
 
-// ListUnownedActiveAccounts returns active accounts with no owner_node set —
+// listUnownedActiveAccountsPG returns active accounts with no owner_node set —
 // accounts that were deregistered gracefully and not yet re-adopted.
-func (m *Manager) ListUnownedActiveAccounts(ctx context.Context) ([]string, error) {
+// Underlying PG implementation; called via pgOwnership.Unowned.
+func (m *Manager) listUnownedActiveAccountsPG(ctx context.Context) ([]string, error) {
 	rows, err := m.bizPool.Query(ctx,
 		`SELECT account_jid FROM account_devices WHERE ban_status='active' AND owner_node IS NULL ORDER BY account_jid`)
 	if err != nil {
@@ -156,4 +160,35 @@ func (m *Manager) GetBoundProxy(ctx context.Context, accountJID string) (*ProxyB
 		ProxyID:  id,
 		ProxyURL: *proxyURL,
 	}, nil
+}
+
+// ---------------------------------------------------------------------------
+// Public Ownership delegates — forward to the pluggable Ownership backend.
+// ---------------------------------------------------------------------------
+
+// AcquireDeviceLock non-blockingly acquires the advisory lock for accountJID.
+// Returns ErrDeviceLocked if another node currently holds it.
+func (m *Manager) AcquireDeviceLock(ctx context.Context, accountJID string) (LockHandle, error) {
+	return m.ownership.Acquire(ctx, accountJID, m.cfg.NodeID)
+}
+
+// UpsertNodeHeartbeat refreshes the caller's liveness record in cluster_nodes.
+func (m *Manager) UpsertNodeHeartbeat(ctx context.Context, nodeID string) error {
+	return m.ownership.Heartbeat(ctx, nodeID)
+}
+
+// DeregisterNode gracefully deregisters nodeID (clears its accounts, removes row).
+func (m *Manager) DeregisterNode(ctx context.Context, nodeID string) error {
+	return m.ownership.Deregister(ctx, nodeID)
+}
+
+// StaleOwnedAccounts returns active accounts owned by nodes whose heartbeat is
+// older than staleness — takeover candidates.
+func (m *Manager) StaleOwnedAccounts(ctx context.Context, staleness time.Duration) ([]string, error) {
+	return m.ownership.StaleOwned(ctx, staleness)
+}
+
+// ListUnownedActiveAccounts returns active accounts with no owner_node set.
+func (m *Manager) ListUnownedActiveAccounts(ctx context.Context) ([]string, error) {
+	return m.ownership.Unowned(ctx)
 }

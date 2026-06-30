@@ -24,6 +24,7 @@ type Manager struct {
 	systemPool *pgxpool.Pool // BYPASSRLS role app_system (or bizPool fallback)
 	sqlDB      *sql.DB
 	log        waLog.Logger
+	ownership  Ownership // pluggable ownership backend; default: pgOwnership
 }
 
 var (
@@ -157,7 +158,7 @@ func newManager(ctx context.Context, cfg Config, logger waLog.Logger) (*Manager,
 		}
 	}
 
-	return &Manager{
+	m := &Manager{
 		cfg:        cfg,
 		container:  container,
 		bizPool:    bizPool,
@@ -166,7 +167,9 @@ func newManager(ctx context.Context, cfg Config, logger waLog.Logger) (*Manager,
 		systemPool: systemPool,
 		sqlDB:      sqlDB,
 		log:        logger,
-	}, nil
+	}
+	m.ownership = &pgOwnership{m: m}
+	return m, nil
 }
 
 func (m *Manager) BizPool() *pgxpool.Pool { return m.bizPool }
