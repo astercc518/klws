@@ -98,21 +98,20 @@ func TestTypingSequenceAroundSend(t *testing.T) {
 	}
 }
 
-type plainConn struct{}
-
-func (p *plainConn) Connect(context.Context) error { return nil }
-func (p *plainConn) Disconnect()                   {}
-
 func TestNoTypingWhenPlainRoutingSender(t *testing.T) {
 	reg := NewRegistry()
-	pc := &plainConn{} // 不实现 PresenceConn → 无 typing/presence 调用
+	rc := &recordingConn{} // 实现 PresenceConn，但 plain sender 不应触发 typing
 	rs := &recordingSender{}
-	sess := newSessionWithSender("jid-3", pc, &fakeLock{healthy: true}, rs)
+	sess := newSessionWithSender("jid-3", rc, &fakeLock{healthy: true}, rs)
 	reg.Add(sess)
 
-	sender := NewRoutingSender(reg) // 旧构造 = AntifpOff 等价
+	sender := NewRoutingSender(reg) // 旧构造 = AntifpOff 等价，typingOn=false
 	if _, err := sender.Send(context.Background(), "jid-3", "1555222", "hi", nil); err != nil {
 		t.Fatal(err)
+	}
+	// conn 能力存在，但 plain sender 不得发送任何 typing/presence 调用
+	if len(rc.calls) != 0 {
+		t.Fatalf("plain sender 不应产生 typing/presence 调用，got %v", rc.calls)
 	}
 	if !rs.called {
 		t.Fatal("send 仍应发生")

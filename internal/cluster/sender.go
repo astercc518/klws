@@ -80,6 +80,7 @@ type RoutingSender struct {
 	reg         *Registry
 	fenceOnSend bool
 	typing      TypingPolicy
+	typingOn    bool
 }
 
 // NewRoutingSender returns a RoutingSender with default behaviour: no fence
@@ -89,7 +90,7 @@ func NewRoutingSender(reg *Registry) *RoutingSender { return &RoutingSender{reg:
 // NewRoutingSenderWithPolicy returns a RoutingSender with optional fence-on-send
 // and typing-sequence behaviour.
 func NewRoutingSenderWithPolicy(reg *Registry, fenceOnSend bool, typing TypingPolicy) *RoutingSender {
-	return &RoutingSender{reg: reg, fenceOnSend: fenceOnSend, typing: typing}
+	return &RoutingSender{reg: reg, fenceOnSend: fenceOnSend, typing: typing, typingOn: true}
 }
 
 var _ dispatch.Sender = (*RoutingSender)(nil)
@@ -110,12 +111,12 @@ func (rs *RoutingSender) Send(ctx context.Context, jid, phone, body string, medi
 
 	// (B) Typing anthropomorphism: composing → jitter → send → paused (best-effort).
 	pc, hasPresence := sess.conn.(PresenceConn)
-	if hasPresence {
+	if rs.typingOn && hasPresence {
 		_ = pc.SendTyping(ctx, phone, true)
 		sleepJitter(ctx, rs.typing.Min, rs.typing.Max)
 	}
 	id, err := sess.sender.Send(ctx, phone, body, media)
-	if hasPresence {
+	if rs.typingOn && hasPresence {
 		_ = pc.SendTyping(ctx, phone, false)
 	}
 	return id, err
