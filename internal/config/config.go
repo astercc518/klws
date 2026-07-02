@@ -176,6 +176,8 @@ func (c *Config) Store() store.Config {
 		AppTenantDSN:     c.AppTenantDSN,
 		AppSystemDSN:     c.AppSystemDSN,
 		OwnershipBackend: c.OwnershipBackend,
+		SessionStore:     os.Getenv("WADIST_SESSION_STORE"),
+		BadgerDir:        os.Getenv("WADIST_BADGER_DIR"),
 		// Redis is injected by cmd/wadist after Store() returns.
 	}
 }

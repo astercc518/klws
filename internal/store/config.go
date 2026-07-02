@@ -33,6 +33,11 @@ type Config struct {
 	// OnShadowDivergence is called when the shadow backend detects a divergence
 	// between the pg and redis ownership states. Placeholder until Task 6.
 	OnShadowDivergence func(op string)
+	// SessionStore selects the whatsmeow store backend: "pg" (sqlstore, default) or
+	// "badger" (local NVMe KV via internal/store/wabadger).
+	SessionStore string
+	// BadgerDir is the on-disk directory for the Badger session store (SessionStore=="badger").
+	BadgerDir string
 }
 
 func (c *Config) withDefaults() {
@@ -53,5 +58,11 @@ func (c *Config) withDefaults() {
 	}
 	if c.OwnershipBackend == "" {
 		c.OwnershipBackend = "pg"
+	}
+	if c.SessionStore == "" {
+		c.SessionStore = "pg"
+	}
+	if c.BadgerDir == "" {
+		c.BadgerDir = "/var/lib/wadist/badger"
 	}
 }

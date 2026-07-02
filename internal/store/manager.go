@@ -11,13 +11,25 @@ import (
 	_ "github.com/jackc/pgx/v5/stdlib" // 注册 "pgx" database/sql 驱动
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"go.mau.fi/whatsmeow/store"
 	"go.mau.fi/whatsmeow/store/sqlstore"
+	"go.mau.fi/whatsmeow/types"
 	waLog "go.mau.fi/whatsmeow/util/log"
+
+	"github.com/acme/wadist/internal/store/wabadger"
 )
+
+// deviceContainer is the subset of container behaviour Manager needs (both
+// sqlstore.Container and wabadger.Container satisfy it via store.DeviceContainer).
+type deviceContainer interface {
+	GetDevice(ctx context.Context, jid types.JID) (*store.Device, error)
+	NewDevice() *store.Device
+}
 
 type Manager struct {
 	cfg        Config
-	container  *sqlstore.Container
+	container  deviceContainer
+	badgerDB   *wabadger.DB // set when cfg.SessionStore=="badger"; closed by Manager.Close
 	bizPool    *pgxpool.Pool
 	lockPool   *pgxpool.Pool
 	tenantPool *pgxpool.Pool // RLS-constrained role app_tenant (or bizPool fallback)
@@ -68,12 +80,27 @@ func newManager(ctx context.Context, cfg Config, logger waLog.Logger) (*Manager,
 		return nil, fmt.Errorf("ping whatsmeow db: %w", err)
 	}
 
-	container := sqlstore.NewWithDB(sqlDB, "postgres", logger)
-	upgradeCtx, upgradeCancel := context.WithTimeout(ctx, 30*time.Second)
-	defer upgradeCancel()
-	if err := container.Upgrade(upgradeCtx); err != nil {
-		_ = sqlDB.Close()
-		return nil, fmt.Errorf("upgrade whatsmeow schema: %w", err)
+	var container deviceContainer
+	var badgerDB *wabadger.DB
+	switch cfg.SessionStore {
+	case "badger":
+		bdb, err := wabadger.Open(cfg.BadgerDir)
+		if err != nil {
+			_ = sqlDB.Close()
+			return nil, fmt.Errorf("open badger: %w", err)
+		}
+		badgerDB = bdb
+		container = wabadger.NewContainer(bdb, logger)
+		// NOTE: sqlDB is still opened for business tables; whatsmeow tables are unused.
+	default: // "pg"
+		sc := sqlstore.NewWithDB(sqlDB, "postgres", logger)
+		upgradeCtx, upgradeCancel := context.WithTimeout(ctx, 30*time.Second)
+		defer upgradeCancel()
+		if err := sc.Upgrade(upgradeCtx); err != nil {
+			_ = sqlDB.Close()
+			return nil, fmt.Errorf("upgrade whatsmeow schema: %w", err)
+		}
+		container = sc
 	}
 
 	poolCfg, err := pgxpool.ParseConfig(cfg.DSN)
@@ -161,6 +188,7 @@ func newManager(ctx context.Context, cfg Config, logger waLog.Logger) (*Manager,
 	m := &Manager{
 		cfg:        cfg,
 		container:  container,
+		badgerDB:   badgerDB,
 		bizPool:    bizPool,
 		lockPool:   lockPool,
 		tenantPool: tenantPool,
@@ -193,5 +221,8 @@ func (m *Manager) Close() {
 	}
 	if m.sqlDB != nil {
 		_ = m.sqlDB.Close()
+	}
+	if m.badgerDB != nil {
+		_ = m.badgerDB.Close()
 	}
 }
