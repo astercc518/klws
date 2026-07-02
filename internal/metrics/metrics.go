@@ -22,6 +22,7 @@ type Metrics struct {
 	batchAssigned prometheus.Histogram
 	noCapacity    prometheus.Counter
 	proxyRebind   prometheus.Counter
+	scheduleReconciled prometheus.Counter
 	proxyOps      *prometheus.CounterVec // labels: op, outcome
 	lockOps              *prometheus.CounterVec // label: outcome
 	cohortSends          *prometheus.CounterVec // labels: cohort, outcome
@@ -59,6 +60,10 @@ func New(reg *prometheus.Registry) *Metrics {
 		Name: "wadist_proxy_rebind_total",
 		Help: "Accounts auto-rebound off a dead proxy by the janitor.",
 	})
+	m.scheduleReconciled = prometheus.NewCounter(prometheus.CounterOpts{
+		Name: "wadist_schedule_reconciled_total",
+		Help: "Active accounts re-enqueued into the due-ZSet by the reconciler.",
+	})
 	m.proxyOps = prometheus.NewCounterVec(prometheus.CounterOpts{
 		Name: "wadist_proxy_ops_total",
 		Help: "Proxy pool operations by op and outcome.",
@@ -78,7 +83,7 @@ func New(reg *prometheus.Registry) *Metrics {
 
 	reg.MustRegister(
 		m.sendOutcomes, m.gateDecisions, m.healthSignals, m.billingOps,
-		m.batchAssigned, m.noCapacity, m.proxyRebind, m.proxyOps, m.lockOps, m.cohortSends,
+		m.batchAssigned, m.noCapacity, m.proxyRebind, m.scheduleReconciled, m.proxyOps, m.lockOps, m.cohortSends,
 		m.ownershipDivergence,
 	)
 	return m
@@ -139,6 +144,13 @@ func (m *Metrics) IncProxyRebind() {
 		return
 	}
 	m.proxyRebind.Inc()
+}
+
+func (m *Metrics) IncScheduleReconciled(n int) {
+	if m == nil || n <= 0 {
+		return
+	}
+	m.scheduleReconciled.Add(float64(n))
 }
 
 func (m *Metrics) RecordProxy(op, outcome string) {
