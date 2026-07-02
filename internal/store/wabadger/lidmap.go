@@ -19,10 +19,12 @@ func newLIDMap(db *DB) *LIDMap { return &LIDMap{db: db} }
 var _ store.LIDStore = (*LIDMap)(nil)
 
 func (m *LIDMap) PutLIDMapping(ctx context.Context, lid, pn types.JID) error {
-	if err := m.db.put(kb("lidpn", lid.User), []byte(pn.String()), false); err != nil {
-		return err
-	}
-	return m.db.put(kb("lidlid", pn.User), []byte(lid.String()), false)
+	// Both directions must land together: a half-written mapping (lidpn set but
+	// lidlid missing, or vice versa) is inconsistent, so use a single txn.
+	return m.db.putBatch([][2][]byte{
+		{kb("lidpn", lid.User), []byte(pn.String())},
+		{kb("lidlid", pn.User), []byte(lid.String())},
+	}, false)
 }
 
 func (m *LIDMap) PutManyLIDMappings(ctx context.Context, mappings []store.LIDMapping) error {
@@ -53,7 +55,13 @@ func (m *LIDMap) GetLIDForPN(ctx context.Context, pn types.JID) (types.JID, erro
 func (m *LIDMap) GetManyLIDsForPNs(ctx context.Context, pns []types.JID) (map[types.JID]types.JID, error) {
 	out := map[types.JID]types.JID{}
 	for _, pn := range pns {
-		if lid, err := m.GetLIDForPN(ctx, pn); err == nil && !lid.IsEmpty() {
+		lid, err := m.GetLIDForPN(ctx, pn)
+		if err != nil {
+			// A real backend fault must propagate: whatsmeow's send path aborts
+			// the send on it rather than silently treating the PN as unmapped.
+			return nil, err
+		}
+		if !lid.IsEmpty() {
 			out[pn] = lid
 		}
 	}

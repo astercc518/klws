@@ -77,6 +77,27 @@ func (d *DB) put(k, v []byte, sync bool) error {
 	return nil
 }
 
+// putBatch writes every pair[0]=pair[1] in a SINGLE transaction, so callers
+// that must keep several keys consistent (e.g. a bidirectional LID mapping, or
+// PutManySessions) get all-or-nothing atomicity. When sync is true, db.Sync()
+// forces the batch to durable storage before returning.
+func (d *DB) putBatch(pairs [][2][]byte, sync bool) error {
+	if err := d.db.Update(func(txn *badger.Txn) error {
+		for _, p := range pairs {
+			if err := txn.Set(p[0], p[1]); err != nil {
+				return err
+			}
+		}
+		return nil
+	}); err != nil {
+		return err
+	}
+	if sync {
+		return d.db.Sync()
+	}
+	return nil
+}
+
 func (d *DB) del(k []byte) error {
 	return d.db.Update(func(txn *badger.Txn) error { return txn.Delete(k) })
 }
