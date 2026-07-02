@@ -15,18 +15,18 @@ type RegistrySnapshotProvider interface {
 type Metrics struct {
 	reg *prometheus.Registry
 
-	sendOutcomes  *prometheus.CounterVec // label: outcome
-	gateDecisions *prometheus.CounterVec // labels: allow, reason
-	healthSignals *prometheus.CounterVec // label: signal
-	billingOps    *prometheus.CounterVec // labels: op, outcome
-	batchAssigned prometheus.Histogram
-	noCapacity    prometheus.Counter
-	proxyRebind   prometheus.Counter
-	scheduleReconciled prometheus.Counter
-	proxyOps      *prometheus.CounterVec // labels: op, outcome
-	lockOps              *prometheus.CounterVec // label: outcome
-	cohortSends          *prometheus.CounterVec // labels: cohort, outcome
-	ownershipDivergence  *prometheus.CounterVec // label: op
+	sendOutcomes        *prometheus.CounterVec // label: outcome
+	gateDecisions       *prometheus.CounterVec // labels: allow, reason
+	healthSignals       *prometheus.CounterVec // label: signal
+	billingOps          *prometheus.CounterVec // labels: op, outcome
+	batchAssigned       prometheus.Histogram
+	noCapacity          prometheus.Counter
+	proxyRebind         prometheus.Counter
+	scheduleReconciled  prometheus.Counter
+	proxyOps            *prometheus.CounterVec // labels: op, outcome
+	lockOps             *prometheus.CounterVec // label: outcome
+	cohortSends         *prometheus.CounterVec // labels: cohort, outcome
+	ownershipDivergence *prometheus.CounterVec // label: op
 }
 
 func New(reg *prometheus.Registry) *Metrics {
