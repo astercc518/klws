@@ -89,8 +89,7 @@ func (s *badgerStore) GetAppStateMutationMAC(ctx context.Context, name string, i
 // Sync keys are auth-critical (losing one can force a re-login/history-loss),
 // so writes are durable (sync=true).
 
-// getSyncKey is the shared decode path for GetAppStateSyncKey and the
-// existing-timestamp check in PutAppStateSyncKey.
+// getSyncKey is the decode path for GetAppStateSyncKey.
 func (s *badgerStore) getSyncKey(id []byte) (*store.AppStateSyncKey, error) {
 	v, err := s.db.get(kb("ask", s.jid, string(id)))
 	if err != nil || v == nil {
@@ -108,15 +107,21 @@ func (s *badgerStore) getSyncKey(id []byte) (*store.AppStateSyncKey, error) {
 // stored (sqlstore: `ON CONFLICT ... DO UPDATE ... WHERE excluded.timestamp >
 // whatsmeow_app_state_sync_keys.timestamp`); a stale/duplicate write is a
 // silent no-op rather than clobbering a newer key.
+//
+// The read-compare-write runs in a single badger transaction (getPut) so the
+// stale-skip is atomic: concurrent Puts for the same id can't let an
+// older-timestamp write win a lost-update race, matching sqlstore's atomic
+// conditional ON CONFLICT.
 func (s *badgerStore) PutAppStateSyncKey(ctx context.Context, id []byte, key store.AppStateSyncKey) error {
-	cur, err := s.getSyncKey(id)
-	if err != nil {
-		return err
-	}
-	if cur != nil && cur.Timestamp >= key.Timestamp {
-		return nil
-	}
-	return s.db.put(kb("ask", s.jid, string(id)), gobEnc(key), true)
+	return s.db.getPut(kb("ask", s.jid, string(id)), func(cur []byte) ([]byte, bool) {
+		if cur != nil {
+			var existing store.AppStateSyncKey
+			if err := gobDec(cur, &existing); err == nil && existing.Timestamp > key.Timestamp {
+				return nil, false // stored key is newer; skip
+			}
+		}
+		return gobEnc(key), true
+	}, true)
 }
 
 func (s *badgerStore) GetAppStateSyncKey(ctx context.Context, id []byte) (*store.AppStateSyncKey, error) {
@@ -137,6 +142,9 @@ func (s *badgerStore) GetLatestAppStateSyncKeyID(ctx context.Context) ([]byte, e
 		if err := gobDec(v, &key); err != nil {
 			return err
 		}
+		// strictly-greater keeps the first-scanned id on a timestamp tie; the
+		// tie-break is non-contractual (sqlstore's ORDER BY timestamp DESC has
+		// no secondary key either, so ties are arbitrary there too).
 		if bestID == nil || key.Timestamp > bestTS {
 			bestTS = key.Timestamp
 			bestID = append([]byte(nil), k[len(pfx):]...)

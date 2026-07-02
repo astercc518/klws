@@ -102,6 +102,38 @@ func (d *DB) del(k []byte) error {
 	return d.db.Update(func(txn *badger.Txn) error { return txn.Delete(k) })
 }
 
+// getPut runs a read-modify-write on key k in ONE badger transaction, so a
+// compare-and-swap (read current, decide, conditionally write) is atomic
+// against concurrent writers to the same key. fn receives the current value
+// (nil if the key is absent) and returns (newValue, write); when write is
+// false nothing is written. When sync is true, db.Sync() forces a durable
+// write before returning.
+func (d *DB) getPut(k []byte, fn func(cur []byte) (newv []byte, write bool), sync bool) error {
+	if err := d.db.Update(func(txn *badger.Txn) error {
+		var cur []byte
+		item, e := txn.Get(k)
+		if e == nil {
+			cur, e = item.ValueCopy(nil)
+			if e != nil {
+				return e
+			}
+		} else if !errors.Is(e, badger.ErrKeyNotFound) {
+			return e
+		}
+		nv, write := fn(cur)
+		if !write {
+			return nil
+		}
+		return txn.Set(k, nv)
+	}); err != nil {
+		return err
+	}
+	if sync {
+		return d.db.Sync()
+	}
+	return nil
+}
+
 // writeBatch applies every set (pair[0]=pair[1]) and then every delete in a
 // SINGLE transaction, so a group of mutations that must stay mutually
 // consistent (e.g. a PN→LID migration that copies keys forward and removes the
