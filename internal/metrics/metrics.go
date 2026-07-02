@@ -21,6 +21,7 @@ type Metrics struct {
 	billingOps    *prometheus.CounterVec // labels: op, outcome
 	batchAssigned prometheus.Histogram
 	noCapacity    prometheus.Counter
+	proxyRebind   prometheus.Counter
 	proxyOps      *prometheus.CounterVec // labels: op, outcome
 	lockOps              *prometheus.CounterVec // label: outcome
 	cohortSends          *prometheus.CounterVec // labels: cohort, outcome
@@ -54,6 +55,10 @@ func New(reg *prometheus.Registry) *Metrics {
 		Name: "wadist_dispatch_no_capacity_total",
 		Help: "Recipients left pending due to ErrNoCapacity.",
 	})
+	m.proxyRebind = prometheus.NewCounter(prometheus.CounterOpts{
+		Name: "wadist_proxy_rebind_total",
+		Help: "Accounts auto-rebound off a dead proxy by the janitor.",
+	})
 	m.proxyOps = prometheus.NewCounterVec(prometheus.CounterOpts{
 		Name: "wadist_proxy_ops_total",
 		Help: "Proxy pool operations by op and outcome.",
@@ -73,7 +78,7 @@ func New(reg *prometheus.Registry) *Metrics {
 
 	reg.MustRegister(
 		m.sendOutcomes, m.gateDecisions, m.healthSignals, m.billingOps,
-		m.batchAssigned, m.noCapacity, m.proxyOps, m.lockOps, m.cohortSends,
+		m.batchAssigned, m.noCapacity, m.proxyRebind, m.proxyOps, m.lockOps, m.cohortSends,
 		m.ownershipDivergence,
 	)
 	return m
@@ -127,6 +132,13 @@ func (m *Metrics) IncNoCapacity() {
 		return
 	}
 	m.noCapacity.Inc()
+}
+
+func (m *Metrics) IncProxyRebind() {
+	if m == nil {
+		return
+	}
+	m.proxyRebind.Inc()
 }
 
 func (m *Metrics) RecordProxy(op, outcome string) {

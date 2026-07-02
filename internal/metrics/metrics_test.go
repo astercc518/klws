@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/testutil"
 	dto "github.com/prometheus/client_model/go"
 )
 
@@ -49,6 +50,7 @@ func TestNew_RegistersAndRecords(t *testing.T) {
 		"wadist_billing_ops_total",
 		"wadist_dispatch_batch_assigned",
 		"wadist_dispatch_no_capacity_total",
+		"wadist_proxy_rebind_total",
 		"wadist_proxy_ops_total",
 		"wadist_lock_ops_total",
 		"wadist_cohort_sends_total",
@@ -70,7 +72,18 @@ func TestNilSafe(t *testing.T) {
 	m.RecordBilling("settle", "ok")
 	m.ObserveBatch(1)
 	m.IncNoCapacity()
+	m.IncProxyRebind()
 	m.RecordProxy("release", "ok")
 	m.RecordLock("acquired")
 	m.RecordCohortSend("canary", "sent")
+}
+
+func TestIncProxyRebind(t *testing.T) {
+	reg := prometheus.NewRegistry()
+	m := New(reg)
+	m.IncProxyRebind()
+	m.IncProxyRebind()
+	if got := testutil.ToFloat64(m.proxyRebind); got != 2 {
+		t.Fatalf("proxy_rebind=%v want 2", got)
+	}
 }
