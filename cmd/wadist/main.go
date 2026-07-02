@@ -308,6 +308,37 @@ func run(ctx context.Context, cfg *config.Config) (*metrics.Server, func(), erro
 	})
 	sup.Go(func(lctx context.Context) error { return ws.Run(lctx, cfg.WSTick) })
 
+	// Proxy janitor: periodic sweep that auto-rebinds accounts stuck on dead
+	// proxies (Release → Evict(linger=0) → RequestWarm) so the next WorkingSet
+	// tick's StickyBindProxy picks a live proxy.
+	janitor := control.NewJanitor(
+		control.JanitorConfig{Batch: cfg.ProxyJanitorBatch},
+		control.JanitorDeps{
+			ListDeadProxyAccounts: func(ctx context.Context, limit int) ([]control.DeadProxyAccount, error) {
+				rows, err := mgr.ListDeadProxyAccountsAll(ctx, limit)
+				if err != nil {
+					return nil, err
+				}
+				out := make([]control.DeadProxyAccount, len(rows))
+				for i, r := range rows {
+					out[i] = control.DeadProxyAccount{JID: r.JID, CC: r.CountryCode}
+				}
+				return out, nil
+			},
+			Release: func(ctx context.Context, jid string) error { return mgr.ReleaseProxy(ctx, jid) },
+			Evict: func(ctx context.Context, jid string, linger time.Duration) {
+				if s, ok := reg.Get(jid); ok {
+					s.GracefulClose(ctx, linger)
+				}
+			},
+			RequestWarm: func(ctx context.Context, jid, cc string) error {
+				return rdb.RPush(ctx, "warm:req", jid+"|"+cc).Err()
+			},
+			OnRebind: func() { m.IncProxyRebind() },
+		},
+	)
+	sup.Go(func(lctx context.Context) error { return janitor.Run(lctx, cfg.ProxyJanitorInterval) })
+
 	// Start the supervised dispatch loop: ticks every second, dispatches running
 	// campaigns. Per-tick errors are logged but do not exit the loop (transient
 	// DB errors recover on the next tick). The loop exits when lctx is cancelled.

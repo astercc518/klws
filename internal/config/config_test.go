@@ -242,6 +242,21 @@ func TestLoad_ControlDefaults(t *testing.T) {
 	}
 }
 
+func TestLoad_ProxyJanitorDefaults(t *testing.T) {
+	t.Setenv("WADIST_POSTGRES_DSN", "postgres://x")
+	t.Setenv("WADIST_REDIS_ADDR", "x:1")
+	cfg, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.ProxyJanitorInterval != 30*time.Second {
+		t.Fatalf("ProxyJanitorInterval=%v want 30s", cfg.ProxyJanitorInterval)
+	}
+	if cfg.ProxyJanitorBatch != 256 {
+		t.Fatalf("ProxyJanitorBatch=%d want 256", cfg.ProxyJanitorBatch)
+	}
+}
+
 func TestLoad_AntifpDefaults(t *testing.T) {
 	t.Setenv("WADIST_POSTGRES_DSN", "postgres://x")
 	t.Setenv("WADIST_REDIS_ADDR", "x:1")

@@ -59,6 +59,9 @@ type Config struct {
 	WarmReqBatch    int           // WADIST_WARMREQ_BATCH default 64
 	DailyQuotaMin   int           // WADIST_DAILY_QUOTA_MIN default 5
 	DailyQuotaMax   int           // WADIST_DAILY_QUOTA_MAX default 10
+	// ProxyJanitor: periodic sweep that auto-rebinds accounts stuck on dead proxies.
+	ProxyJanitorInterval time.Duration // WADIST_PROXY_JANITOR_INTERVAL_MS default 30000ms
+	ProxyJanitorBatch    int           // WADIST_PROXY_JANITOR_BATCH default 256
 }
 
 // Load reads configuration from the environment. PostgresDSN is required;
@@ -143,6 +146,8 @@ func Load() (*Config, error) {
 	cfg.WarmReqBatch = intEnv("WADIST_WARMREQ_BATCH", 64)
 	cfg.DailyQuotaMin = intEnv("WADIST_DAILY_QUOTA_MIN", 5)
 	cfg.DailyQuotaMax = intEnv("WADIST_DAILY_QUOTA_MAX", 10)
+	cfg.ProxyJanitorInterval = msEnv("WADIST_PROXY_JANITOR_INTERVAL_MS", 30000)
+	cfg.ProxyJanitorBatch = intEnv("WADIST_PROXY_JANITOR_BATCH", 256)
 
 	mk, err := decodeKey32("WADIST_MASTER_KEY")
 	if err != nil {
