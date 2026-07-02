@@ -102,6 +102,33 @@ func (d *DB) del(k []byte) error {
 	return d.db.Update(func(txn *badger.Txn) error { return txn.Delete(k) })
 }
 
+// writeBatch applies every set (pair[0]=pair[1]) and then every delete in a
+// SINGLE transaction, so a group of mutations that must stay mutually
+// consistent (e.g. a PN→LID migration that copies keys forward and removes the
+// originals) is all-or-nothing. Sets are applied before deletes. When sync is
+// true, db.Sync() forces the batch to durable storage before returning.
+func (d *DB) writeBatch(sets [][2][]byte, dels [][]byte, sync bool) error {
+	if err := d.db.Update(func(txn *badger.Txn) error {
+		for _, p := range sets {
+			if err := txn.Set(p[0], p[1]); err != nil {
+				return err
+			}
+		}
+		for _, k := range dels {
+			if err := txn.Delete(k); err != nil {
+				return err
+			}
+		}
+		return nil
+	}); err != nil {
+		return err
+	}
+	if sync {
+		return d.db.Sync()
+	}
+	return nil
+}
+
 // scanPrefix calls fn(key, value) for every key under prefix p. fn receives
 // copies safe to retain.
 func (d *DB) scanPrefix(p []byte, fn func(k, v []byte) error) error {

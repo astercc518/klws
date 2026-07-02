@@ -19,7 +19,13 @@ func (s *badgerStore) GetManySessions(ctx context.Context, addresses []string) (
 	if len(addresses) == 0 {
 		return nil, nil
 	}
+	// Return one entry per requested address (nil for misses): whatsmeow's
+	// session cache / existingSessions map relies on every queried address
+	// being present in the result map, matching sqlstore's behaviour.
 	out := make(map[string][]byte, len(addresses))
+	for _, a := range addresses {
+		out[a] = nil
+	}
 	for _, a := range addresses {
 		v, err := s.db.get(kb("ses", s.jid, a))
 		if err != nil {
@@ -69,30 +75,40 @@ func (s *badgerStore) DeleteAllSessions(ctx context.Context, phone string) error
 	return nil
 }
 
-// MigratePNToLID copies sessions AND identities whose address is under the phone
-// JID's user to the corresponding LID user (mirrors sqlstore's PN→LID migration).
+// MigratePNToLID moves sessions AND identities whose address is under the phone
+// JID's signal user to the corresponding LID signal user (mirrors sqlstore's
+// PN→LID migration: copy each entry forward, then delete the original). The
+// whole copy+delete is committed in a single badger transaction so the
+// migration is all-or-nothing.
+//
+// pn.SignalAddressUser()/lid.SignalAddressUser() (not the raw .User) are used
+// for both prefix-matching and the address rewrite, matching sqlstore — for a
+// LID the signal user carries an "_<agent>" suffix that the raw .User lacks.
 func (s *badgerStore) MigratePNToLID(ctx context.Context, pn, lid types.JID) error {
-	pnUser, lidUser := pn.User, lid.User
+	pnUser := pn.SignalAddressUser()
+	lidUser := lid.SignalAddressUser()
+	var sets [][2][]byte
+	var dels [][]byte
+	// TODO(task7): extend MigratePNToLID to also migrate sender keys ("sk")
+	// once the SenderKeyStore lands — sqlstore migrates sender keys too; we
+	// defer since no sk store exists yet.
 	for _, code := range []string{"ses", "idt"} {
 		pfx := kp(code, s.jid)
-		type kv struct{ k, v []byte }
-		var copies []kv
 		err := s.db.scanPrefix(pfx, func(k, v []byte) error {
 			addr := string(k[len(pfx):])
 			if hasSignalUserPrefix(addr, pnUser) {
 				newAddr := lidUser + addr[len(pnUser):]
-				copies = append(copies, kv{k: kb(code, s.jid, newAddr), v: append([]byte(nil), v...)})
+				sets = append(sets, [2][]byte{kb(code, s.jid, newAddr), append([]byte(nil), v...)})
+				dels = append(dels, append([]byte(nil), k...))
 			}
 			return nil
 		})
 		if err != nil {
 			return err
 		}
-		for _, c := range copies {
-			if err := s.db.put(c.k, c.v, false); err != nil {
-				return err
-			}
-		}
 	}
-	return nil
+	if len(sets) == 0 && len(dels) == 0 {
+		return nil
+	}
+	return s.db.writeBatch(sets, dels, false)
 }
