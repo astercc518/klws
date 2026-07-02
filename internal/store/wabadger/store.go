@@ -3,6 +3,7 @@ package wabadger
 import (
 	"context"
 
+	"go.mau.fi/whatsmeow/store"
 	"go.mau.fi/whatsmeow/types"
 )
 
@@ -17,8 +18,7 @@ func newBadgerStore(db *DB, jid types.JID) *badgerStore {
 }
 
 // compile-time proof the adapter satisfies every per-device store interface.
-// TODO(compile-gate): re-enable in Task 8 once all sub-stores exist
-// var _ store.AllSessionSpecificStores = (*badgerStore)(nil)
+var _ store.AllSessionSpecificStores = (*badgerStore)(nil)
 
 func (s *badgerStore) PutIdentity(ctx context.Context, address string, key [32]byte) error {
 	return s.db.put(kb("idt", s.jid, address), key[:], true) // idt = sync
