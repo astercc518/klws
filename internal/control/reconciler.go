@@ -41,7 +41,9 @@ func (r *Reconciler) Tick(ctx context.Context, nowMs int64) (int, error) {
 		resident[jid] = struct{}{}
 	}
 	scheduled := map[string]struct{}{}
+	ccSet := make(map[string]struct{}, len(r.ccs))
 	for _, cc := range r.ccs {
+		ccSet[cc] = struct{}{}
 		for _, jid := range r.rdb.ZRange(ctx, dueKey(cc), 0, -1).Val() {
 			scheduled[jid] = struct{}{}
 		}
@@ -56,6 +58,9 @@ func (r *Reconciler) Tick(ctx context.Context, nowMs int64) (int, error) {
 			continue // 已排队
 		}
 		cc := r.deps.CountryOf(ctx, jid)
+		if _, active := ccSet[cc]; !active {
+			continue // cc 不在活跃国家集合内（含未绑定 cc==""）：走被动 warm:req，不主动调度
+		}
 		if err := r.sched.Enqueue(ctx, jid, cc, r.deps.NextDue(cc)); err != nil {
 			log.Printf("control: reconciler enqueue %s: %v", jid, err)
 			continue
