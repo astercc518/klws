@@ -168,6 +168,40 @@ SELECT a.account_jid
 	return jids, rows.Err()
 }
 
+// DeadProxyAccount is an active account bound to a dead proxy, with the dead
+// proxy's country_code (so the rebind can pick a same-country replacement).
+type DeadProxyAccount struct {
+	JID         string
+	CountryCode string
+}
+
+// ListDeadProxyAccountsAll returns, across ALL tenants, active accounts bound to
+// dead proxies, for automatic rebind. Read-only; mirrors ListAccountsByDeadProxies
+// without the tenant filter and additionally returns the proxy country_code.
+func (m *Manager) ListDeadProxyAccountsAll(ctx context.Context, limit int) ([]DeadProxyAccount, error) {
+	const sql = `
+SELECT a.account_jid, p.country_code
+  FROM account_devices a
+  JOIN proxy_pool p ON p.id = a.proxy_id
+ WHERE p.is_alive = FALSE AND a.ban_status = 'active'
+ LIMIT $1;`
+	rows, err := m.bizPool.Query(ctx, sql, limit)
+	if err != nil {
+		return nil, fmt.Errorf("query dead-proxy accounts (all): %w", err)
+	}
+	defer rows.Close()
+
+	var out []DeadProxyAccount
+	for rows.Next() {
+		var a DeadProxyAccount
+		if err := rows.Scan(&a.JID, &a.CountryCode); err != nil {
+			return nil, fmt.Errorf("scan dead-proxy account: %w", err)
+		}
+		out = append(out, a)
+	}
+	return out, rows.Err()
+}
+
 // ApplyProxy applies a bound proxy to a whatsmeow client. Must be called before
 // client.Connect(). Rejects an empty binding (SetProxyAddress("") would silently
 // UNSET the proxy, defeating per-account isolation).
