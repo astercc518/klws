@@ -46,7 +46,7 @@ internal/config   internal/log
    env→配置          zap→waLog 适配
 ```
 
-**包职责一览(15 个):**
+**包职责一览(23 个)** — 代码级细节见 [`ARCHITECTURE-DETAILED-zh.md`](ARCHITECTURE-DETAILED-zh.md)：
 
 | 包 | 职责 | 关键导出 |
 |---|---|---|
@@ -64,6 +64,13 @@ internal/config   internal/log
 | `capacity` | 节点/连接/Redis 内存容量计算(纯函数) | `Compute`、`Inputs`、`Plan` |
 | `canary` | `fnv64a` 确定性 cohort 分桶 | `InCohort`、`Cohort` |
 | `deploy` | k8s 清单字段校验测试 | — |
+| `api` | Gin JSON API 薄层(auth/tenant/campaigns/sales/admin);只调引擎导出方法 + 改 DB | `Server`、`Router` |
+| `console` | 服务端渲染后台 + 会话/RBAC/argon2id + Redis SessionStore | `Server`、`UserRepo`、`SessionStore` |
+| `control` | 温驻留控制面:Scheduler(due-ZSet) + WorkingSet(active+reactive warm) + StickyBindProxy;零引擎依赖(回调注入) | `Scheduler`、`WorkingSet`、`StickyBindProxy` |
+| `riskbreaker` | 旁路封号率熔断:超阈值把 campaign 置 `paused`(dry-run 默认);只改状态不碰引擎 | `Breaker` |
+| `receipt` | WhatsApp 回执(delivered/read)幂等回填(`COALESCE` 保最早) | `Recorder`、`Event`、`Kind` |
+| `pricing` | per-tenant×country 定价 + 热路径 `PriceFor` 兜底(never errors) | `Repo`、`PriceFor` |
+| `spintax` | `{a|b|c}` 模板渲染(反指纹文案变体) | `Expand` |
 
 ---
 
