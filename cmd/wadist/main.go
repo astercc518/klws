@@ -339,6 +339,45 @@ func run(ctx context.Context, cfg *config.Config) (*metrics.Server, func(), erro
 	)
 	sup.Go(func(lctx context.Context) error { return janitor.Run(lctx, cfg.ProxyJanitorInterval) })
 
+	// Reconciler: periodic sweep that re-enqueues active accounts missing from
+	// the scheduler's due set (closes the "scheduling loop" self-heal gap —
+	// e.g. accounts created while this node was down, or dropped from due:{cc}
+	// by an unrelated bug). Resident (already-warm) and already-queued accounts
+	// are skipped; only fresh accounts get a NextDue score.
+	reconciler := control.NewReconciler(rdb, sched, activeCountries, control.ReconcileDeps{
+		ListActive: mgr.ListActiveAccounts,
+		CountryOf:  func(ctx context.Context, jid string) string { return countryOf(ctx, mgr, jid) },
+		NextDue: func(cc string) int64 {
+			now := time.Now().UnixMilli()
+			// Reuse the same seed-time formula as startup seeding; rng is built
+			// fresh per call to avoid sharing *rand.Rand across goroutines.
+			rng := rand.New(rand.NewSource(now)) //nolint:gosec
+			q := randQuota(rng, cfg.DailyQuotaMin, cfg.DailyQuotaMax)
+			return control.NextEligibleMs(now, q, control.Window{StartHour: 9, EndHour: 22}, rng)
+		},
+	})
+	sup.Go(func(lctx context.Context) error {
+		if cfg.ReconcileInterval <= 0 {
+			<-lctx.Done()
+			return lctx.Err()
+		}
+		t := time.NewTicker(cfg.ReconcileInterval)
+		defer t.Stop()
+		for {
+			select {
+			case <-lctx.Done():
+				return lctx.Err()
+			case <-t.C:
+				n, err := reconciler.Tick(lctx, time.Now().UnixMilli())
+				if err != nil {
+					log.Printf("reconciler: %v", err)
+					continue
+				}
+				m.IncScheduleReconciled(n)
+			}
+		}
+	})
+
 	// Start the supervised dispatch loop: ticks every second, dispatches running
 	// campaigns. Per-tick errors are logged but do not exit the loop (transient
 	// DB errors recover on the next tick). The loop exits when lctx is cancelled.

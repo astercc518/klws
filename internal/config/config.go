@@ -62,6 +62,9 @@ type Config struct {
 	// ProxyJanitor: periodic sweep that auto-rebinds accounts stuck on dead proxies.
 	ProxyJanitorInterval time.Duration // WADIST_PROXY_JANITOR_INTERVAL_MS default 30000ms
 	ProxyJanitorBatch    int           // WADIST_PROXY_JANITOR_BATCH default 256
+	// Reconciler: periodic sweep that re-enqueues active accounts missing from
+	// the scheduler's due set (closes the scheduling loop against drift).
+	ReconcileInterval time.Duration // WADIST_RECONCILE_INTERVAL_MS default 300000ms (5m)
 }
 
 // Load reads configuration from the environment. PostgresDSN is required;
@@ -148,6 +151,7 @@ func Load() (*Config, error) {
 	cfg.DailyQuotaMax = intEnv("WADIST_DAILY_QUOTA_MAX", 10)
 	cfg.ProxyJanitorInterval = msEnv("WADIST_PROXY_JANITOR_INTERVAL_MS", 30000)
 	cfg.ProxyJanitorBatch = intEnv("WADIST_PROXY_JANITOR_BATCH", 256)
+	cfg.ReconcileInterval = msEnv("WADIST_RECONCILE_INTERVAL_MS", 300000)
 
 	mk, err := decodeKey32("WADIST_MASTER_KEY")
 	if err != nil {

@@ -257,6 +257,18 @@ func TestLoad_ProxyJanitorDefaults(t *testing.T) {
 	}
 }
 
+func TestLoad_ReconcileDefault(t *testing.T) {
+	t.Setenv("WADIST_POSTGRES_DSN", "postgres://x")
+	t.Setenv("WADIST_REDIS_ADDR", "x:1")
+	cfg, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.ReconcileInterval != 5*time.Minute {
+		t.Fatalf("ReconcileInterval=%v want 5m", cfg.ReconcileInterval)
+	}
+}
+
 func TestLoad_AntifpDefaults(t *testing.T) {
 	t.Setenv("WADIST_POSTGRES_DSN", "postgres://x")
 	t.Setenv("WADIST_REDIS_ADDR", "x:1")
