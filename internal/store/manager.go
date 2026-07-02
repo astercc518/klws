@@ -82,6 +82,16 @@ func newManager(ctx context.Context, cfg Config, logger waLog.Logger) (*Manager,
 
 	var container deviceContainer
 	var badgerDB *wabadger.DB
+	// closeBadger releases the Badger DB (and its exclusive on-disk dir lock) on
+	// error-return paths. It's a no-op in the pg backend (badgerDB stays nil).
+	// Every post-open error path below must call this alongside sqlDB.Close(),
+	// or a transient pool-config failure would leak the dir lock and block any
+	// later NewManager/Init on the same BadgerDir until process restart.
+	closeBadger := func() {
+		if badgerDB != nil {
+			_ = badgerDB.Close()
+		}
+	}
 	switch cfg.SessionStore {
 	case "badger":
 		bdb, err := wabadger.Open(cfg.BadgerDir)
@@ -105,6 +115,7 @@ func newManager(ctx context.Context, cfg Config, logger waLog.Logger) (*Manager,
 
 	poolCfg, err := pgxpool.ParseConfig(cfg.DSN)
 	if err != nil {
+		closeBadger()
 		_ = sqlDB.Close()
 		return nil, fmt.Errorf("parse biz pool config: %w", err)
 	}
@@ -116,6 +127,7 @@ func newManager(ctx context.Context, cfg Config, logger waLog.Logger) (*Manager,
 
 	bizPool, err := pgxpool.NewWithConfig(ctx, poolCfg)
 	if err != nil {
+		closeBadger()
 		_ = sqlDB.Close()
 		return nil, fmt.Errorf("create biz pool: %w", err)
 	}
@@ -123,6 +135,7 @@ func newManager(ctx context.Context, cfg Config, logger waLog.Logger) (*Manager,
 	lockPoolCfg, err := pgxpool.ParseConfig(cfg.DSN)
 	if err != nil {
 		bizPool.Close()
+		closeBadger()
 		_ = sqlDB.Close()
 		return nil, fmt.Errorf("parse lock pool config: %w", err)
 	}
@@ -136,6 +149,7 @@ func newManager(ctx context.Context, cfg Config, logger waLog.Logger) (*Manager,
 	lockPool, err := pgxpool.NewWithConfig(ctx, lockPoolCfg)
 	if err != nil {
 		bizPool.Close()
+		closeBadger()
 		_ = sqlDB.Close()
 		return nil, fmt.Errorf("create lock pool: %w", err)
 	}
@@ -147,6 +161,7 @@ func newManager(ctx context.Context, cfg Config, logger waLog.Logger) (*Manager,
 		if err != nil {
 			lockPool.Close()
 			bizPool.Close()
+			closeBadger()
 			_ = sqlDB.Close()
 			return nil, fmt.Errorf("parse tenant pool config: %w", err)
 		}
@@ -155,6 +170,7 @@ func newManager(ctx context.Context, cfg Config, logger waLog.Logger) (*Manager,
 		if err != nil {
 			lockPool.Close()
 			bizPool.Close()
+			closeBadger()
 			_ = sqlDB.Close()
 			return nil, fmt.Errorf("create tenant pool: %w", err)
 		}
@@ -169,6 +185,7 @@ func newManager(ctx context.Context, cfg Config, logger waLog.Logger) (*Manager,
 			}
 			lockPool.Close()
 			bizPool.Close()
+			closeBadger()
 			_ = sqlDB.Close()
 			return nil, fmt.Errorf("parse system pool config: %w", err)
 		}
@@ -180,6 +197,7 @@ func newManager(ctx context.Context, cfg Config, logger waLog.Logger) (*Manager,
 			}
 			lockPool.Close()
 			bizPool.Close()
+			closeBadger()
 			_ = sqlDB.Close()
 			return nil, fmt.Errorf("create system pool: %w", err)
 		}
