@@ -89,9 +89,8 @@ func (s *badgerStore) MigratePNToLID(ctx context.Context, pn, lid types.JID) err
 	lidUser := lid.SignalAddressUser()
 	var sets [][2][]byte
 	var dels [][]byte
-	// TODO(task7): extend MigratePNToLID to also migrate sender keys ("sk")
-	// once the SenderKeyStore lands — sqlstore migrates sender keys too; we
-	// defer since no sk store exists yet.
+	// TODO(groups-milestone): if group messaging is added, extend
+	// MigratePNToLID to also migrate sender keys ("sk") like sqlstore does.
 	for _, code := range []string{"ses", "idt"} {
 		pfx := kp(code, s.jid)
 		err := s.db.scanPrefix(pfx, func(k, v []byte) error {
