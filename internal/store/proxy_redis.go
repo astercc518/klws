@@ -6,6 +6,7 @@ import (
 	"strconv"
 	"time"
 
+	"github.com/jackc/pgx/v5/pgxpool"
 	goredis "github.com/redis/go-redis/v9"
 )
 
@@ -108,4 +109,62 @@ func (a *redisProxyAllocator) markAlive(ctx context.Context, proxyID int64, cc, 
 	pipe.ZAdd(ctx, availKey(cc), goredis.Z{Score: float64(nowMs), Member: member})
 	_, err := pipe.Exec(ctx)
 	return err
+}
+
+// rebuildFromPG rebuilds the Redis hot-index (proxy:avail:*, proxy:free,
+// proxy:meta) from the durable PG proxy_pool at boot. It first clears any
+// stale hot-index state (idempotent: safe to re-run), then seeds one entry
+// per alive proxy that still has free capacity (max_bindings >
+// current_bindings), eligible immediately (score=nowMs). Returns the count
+// of proxies seeded.
+func (a *redisProxyAllocator) rebuildFromPG(ctx context.Context, pool *pgxpool.Pool, nowMs int64) (int, error) {
+	// clear stale hot index (idempotent boot).
+	iter := a.rdb.Scan(ctx, 0, "proxy:avail:*", 0).Iterator()
+	var availKeys []string
+	for iter.Next(ctx) {
+		availKeys = append(availKeys, iter.Val())
+	}
+	if err := iter.Err(); err != nil {
+		return 0, err
+	}
+	pipe := a.rdb.TxPipeline()
+	if len(availKeys) > 0 {
+		pipe.Del(ctx, availKeys...)
+	}
+	pipe.Del(ctx, proxyFreeKey, proxyMetaKey)
+	if _, err := pipe.Exec(ctx); err != nil {
+		return 0, err
+	}
+
+	rows, err := pool.Query(ctx, `
+SELECT id, proxy_url, proxy_type::text, country_code, (max_bindings - current_bindings) AS free
+  FROM proxy_pool
+ WHERE is_alive = TRUE AND max_bindings > current_bindings`)
+	if err != nil {
+		return 0, err
+	}
+	defer rows.Close()
+
+	seed := a.rdb.TxPipeline()
+	n := 0
+	for rows.Next() {
+		var id int64
+		var url, ptype, cc string
+		var free int
+		if err := rows.Scan(&id, &url, &ptype, &cc, &free); err != nil {
+			return 0, err
+		}
+		member := itoa(id)
+		seed.HSet(ctx, proxyFreeKey, member, free)
+		seed.HSet(ctx, proxyMetaKey, member, url+"|"+ptype+"|"+cc)
+		seed.ZAdd(ctx, availKey(cc), goredis.Z{Score: float64(nowMs), Member: member})
+		n++
+	}
+	if err := rows.Err(); err != nil {
+		return 0, err
+	}
+	if _, err := seed.Exec(ctx); err != nil {
+		return 0, err
+	}
+	return n, nil
 }
