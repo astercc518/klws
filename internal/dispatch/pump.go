@@ -18,7 +18,8 @@ var ErrPumpFull = errors.New("dispatch: pump buffer full")
 // recipient stays pending and is retried on the next fill), providing natural
 // backpressure without holding a DB tx open.
 type PumpEnqueuer struct {
-	ch chan SendPayload
+	ch   chan SendPayload
+	once sync.Once
 }
 
 func NewPumpEnqueuer(buffer int) *PumpEnqueuer {
@@ -49,8 +50,11 @@ func (p *PumpEnqueuer) Len() int { return len(p.ch) }
 // Cap reports the buffer capacity.
 func (p *PumpEnqueuer) Cap() int { return cap(p.ch) }
 
-// Close closes the channel so pump workers drain and exit.
-func (p *PumpEnqueuer) Close() { close(p.ch) }
+// Close closes the channel so pump workers drain and exit. Idempotent: a
+// second (or concurrent) call is a safe no-op rather than a panic, as
+// belt-and-suspenders for the shutdown path (production wiring guarantees a
+// single caller, but Close must never be the thing that crashes shutdown).
+func (p *PumpEnqueuer) Close() { p.once.Do(func() { close(p.ch) }) }
 
 // Pump is the rolling-wave send pump: a bounded pool of workers drains
 // PumpEnqueuer's channel, each acquiring a token from a shared rate.Limiter

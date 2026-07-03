@@ -140,9 +140,27 @@ func run(ctx context.Context, cfg *config.Config) (*metrics.Server, func(), erro
 	gate := sendgate.NewSendGate(pool, adm, 3*time.Second)
 
 	asynqClient := asynq.NewClient(asynq.RedisClientOpt{Addr: cfg.RedisAddr})
-	enqueuer := dispatch.NewAsynqEnqueuer(asynqClient, "default", 3)
 
-	dispatcher := dispatch.NewDispatcher(pool, billingRepo, enqueuer, priceFor, 3*time.Second).WithMetrics(m)
+	// Dispatch driver: "asynq" (durable queue + 1s batch tick, default) or
+	// "pump" (in-memory token-bucket Rolling-Wave pump). asynq is kept around
+	// in BOTH modes for the takeover queue (see mux/asynqSrv below) — only the
+	// send path itself moves onto the in-memory pump in "pump" mode.
+	var dispatcher *dispatch.Dispatcher
+	var pe *dispatch.PumpEnqueuer
+	if cfg.DispatchMode == "pump" {
+		// Boot recovery FIRST: reclaim recipients orphaned by a prior crash
+		// (assigned to an account but never sent) before any new dispatch begins.
+		if n, err := dispatch.ReclaimOrphanedAssignments(ctx, pool); err != nil {
+			log.Printf("warn: reclaim orphaned assignments: %v", err)
+		} else if n > 0 {
+			log.Printf("pump boot: reclaimed %d orphaned assignments", n)
+		}
+		pe = dispatch.NewPumpEnqueuer(cfg.PumpBuffer)
+		dispatcher = dispatch.NewDispatcher(pool, billingRepo, pe, priceFor, 3*time.Second).WithMetrics(m)
+	} else {
+		enqueuer := dispatch.NewAsynqEnqueuer(asynqClient, "default", 3)
+		dispatcher = dispatch.NewDispatcher(pool, billingRepo, enqueuer, priceFor, 3*time.Second).WithMetrics(m)
+	}
 
 	// cluster.NewRoutingSender routes sends to live sessions; returns a clear
 	// error when no active session exists rather than silently succeeding.
@@ -164,12 +182,10 @@ func run(ctx context.Context, cfg *config.Config) (*metrics.Server, func(), erro
 			return priceRepo.PriceFor(ctx, tenantID, country, priceFor(country))
 		})
 
-	asynqSrv := asynq.NewServer(
-		asynq.RedisClientOpt{Addr: cfg.RedisAddr},
-		asynq.Config{Concurrency: cfg.AsynqConcurrency, ShutdownTimeout: cfg.ShutdownTimeout, Queues: map[string]int{"default": 6, "takeover": 1}},
-	)
-	mux := asynq.NewServeMux()
-	dispatch.RegisterSendHandler(mux, worker, func(ctx context.Context, campaignID int64) (string, string, string, []byte, error) {
+	// sendResolver loads the campaign body/media for a send. Shared by the
+	// asynq send handler (asynq mode) and the Pump (pump mode) so both drive
+	// the exact same resolution logic.
+	sendResolver := func(ctx context.Context, campaignID int64) (string, string, string, []byte, error) {
 		body, mediaSha, mime, err := mgr.CampaignSendable(ctx, campaignID)
 		if err != nil {
 			return "", "", "", nil, err
@@ -177,7 +193,24 @@ func run(ctx context.Context, cfg *config.Config) (*metrics.Server, func(), erro
 		// Media bytes are out of scope for Module A (text-first). mediaSha/mime
 		// are surfaced so the Send adapter can fail loud on media campaigns.
 		return body, mediaSha, mime, nil, nil
-	})
+	}
+
+	// asynqSrv/mux are built in BOTH modes: the takeover queue always runs on
+	// asynq (handler registered below, once `orch` exists). Only the "default"
+	// send queue's handler is mode-gated — in pump mode no send handler is ever
+	// registered, so no send task can reach asynq; the Pump owns the send path.
+	asynqSrv := asynq.NewServer(
+		asynq.RedisClientOpt{Addr: cfg.RedisAddr},
+		asynq.Config{Concurrency: cfg.AsynqConcurrency, ShutdownTimeout: cfg.ShutdownTimeout, Queues: map[string]int{"default": 6, "takeover": 1}},
+	)
+	mux := asynq.NewServeMux()
+
+	var pump *dispatch.Pump
+	if cfg.DispatchMode == "pump" {
+		pump = dispatch.NewPump(pe, worker, sendResolver, cfg.SendRate, cfg.SendWorkers)
+	} else {
+		dispatch.RegisterSendHandler(mux, worker, sendResolver)
+	}
 
 	// Delivery/read receipt recorder. Wired into each WA connection unless
 	// WADIST_RECEIPTS=off (rollback knob; the send path is unaffected either way).
@@ -382,24 +415,61 @@ func run(ctx context.Context, cfg *config.Config) (*metrics.Server, func(), erro
 		}
 	})
 
-	// Start the supervised dispatch loop: ticks every second, dispatches running
-	// campaigns. Per-tick errors are logged but do not exit the loop (transient
-	// DB errors recover on the next tick). The loop exits when lctx is cancelled.
-	sup.Go(func(lctx context.Context) error {
-		t := time.NewTicker(time.Second)
-		defer t.Stop()
-		for {
-			select {
-			case <-lctx.Done():
-				return lctx.Err()
-			case <-t.C:
-				if _, err := dispatcher.DispatchRunning(lctx, 100); err != nil {
-					log.Printf("dispatch loop: %v", err)
-					// log and continue — transient DB error; next tick retries
+	if cfg.DispatchMode == "pump" {
+		// Pump mode: pump.Run drains PumpEnqueuer's channel and runs the send
+		// pipeline; the filler below is the sole producer feeding it.
+		sup.Go(func(lctx context.Context) error { return pump.Run(lctx) })
+		// Filler: backpressure-driven top-up (no 1s pulse) — tops the buffer up
+		// to its capacity every 50ms via the same Dispatcher.DispatchRunning used
+		// by asynq mode, just fed into `pe` instead of asynq.
+		//
+		// SHUTDOWN ORDERING: this goroutine is the SOLE producer of
+		// EnqueueSend (via DispatchRunning) AND the SOLE caller of pe.Close(),
+		// and it calls Close() only AFTER its own select loop has returned
+		// (same goroutine, strictly sequential) — so a send-after-close race is
+		// structurally impossible: no other goroutine ever writes to `pe` or
+		// closes it. Do not add pe.Close() to StopIntake or any other
+		// goroutine; StopIntake stays asynqSrv.Shutdown() (it only stops
+		// takeover intake) in both modes.
+		sup.Go(func(lctx context.Context) error {
+			t := time.NewTicker(50 * time.Millisecond)
+			defer t.Stop()
+			for {
+				select {
+				case <-lctx.Done():
+					pe.Close() // stop pump workers after drain; sole closer, called post-loop
+					return lctx.Err()
+				case <-t.C:
+					room := pe.Cap() - pe.Len()
+					if room <= 0 {
+						continue
+					}
+					if _, err := dispatcher.DispatchRunning(lctx, room); err != nil {
+						log.Printf("pump filler: %v", err)
+					}
 				}
 			}
-		}
-	})
+		})
+	} else {
+		// Start the supervised dispatch loop: ticks every second, dispatches running
+		// campaigns. Per-tick errors are logged but do not exit the loop (transient
+		// DB errors recover on the next tick). The loop exits when lctx is cancelled.
+		sup.Go(func(lctx context.Context) error {
+			t := time.NewTicker(time.Second)
+			defer t.Stop()
+			for {
+				select {
+				case <-lctx.Done():
+					return lctx.Err()
+				case <-t.C:
+					if _, err := dispatcher.DispatchRunning(lctx, 100); err != nil {
+						log.Printf("dispatch loop: %v", err)
+						// log and continue — transient DB error; next tick retries
+					}
+				}
+			}
+		})
+	}
 	// Side-car ban-rate circuit breaker: auto-pauses campaigns over the
 	// admin-configured threshold. Decoupled from the dispatch engine — it only
 	// flips campaign state, which the dispatch loop above already honors. Ships
