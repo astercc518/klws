@@ -3,7 +3,11 @@ package dispatch
 import (
 	"context"
 	"errors"
+	"log"
+	"sync"
 	"time"
+
+	"golang.org/x/time/rate"
 )
 
 var ErrPumpFull = errors.New("dispatch: pump buffer full")
@@ -47,3 +51,74 @@ func (p *PumpEnqueuer) Cap() int { return cap(p.ch) }
 
 // Close closes the channel so pump workers drain and exit.
 func (p *PumpEnqueuer) Close() { close(p.ch) }
+
+// Pump is the rolling-wave send pump: a bounded pool of workers drains
+// PumpEnqueuer's channel, each acquiring a token from a shared rate.Limiter
+// (smooth τ pacing — no batch pulse) before loading the send body and running
+// the existing SendWorker.ProcessSend pipeline verbatim.
+type Pump struct {
+	pe      *PumpEnqueuer
+	w       *SendWorker
+	resolve SendBodyResolver
+	lim     *rate.Limiter
+	workers int
+}
+
+// NewPump wires a Pump. burst == workers so all workers can grab a token at
+// startup (avoiding an artificial cold-start stall), while the sustained rate
+// is capped at ratePerSec.
+func NewPump(pe *PumpEnqueuer, w *SendWorker, resolve SendBodyResolver, ratePerSec float64, workers int) *Pump {
+	if workers < 1 {
+		workers = 1
+	}
+	return &Pump{
+		pe:      pe,
+		w:       w,
+		resolve: resolve,
+		lim:     rate.NewLimiter(rate.Limit(ratePerSec), workers),
+		workers: workers,
+	}
+}
+
+// Run starts the worker pool and blocks until every worker exits.
+//
+// Shutdown contract: the channel is closed by the OWNER (production wiring)
+// after producers stop; workers keep draining already-buffered payloads even
+// after ctx is cancelled — committed-but-unsent work is never dropped, it is
+// only bounded by the caller's own shutdown timeout — and Run returns once
+// the channel is drained and every worker has exited.
+func (p *Pump) Run(ctx context.Context) error {
+	var wg sync.WaitGroup
+	for i := 0; i < p.workers; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for pl := range p.pe.C() {
+				sendCtx := ctx
+				if err := p.lim.Wait(ctx); err != nil && ctx.Err() != nil {
+					// ctx cancelled while waiting for a token: stop pacing but
+					// keep draining without a token so buffered work still
+					// completes (bounded by the upstream ShutdownTimeout).
+					sendCtx = context.Background()
+				}
+				p.process(sendCtx, pl)
+			}
+		}()
+	}
+	wg.Wait()
+	return ctx.Err()
+}
+
+// process loads the send body/media for the payload's campaign and runs the
+// existing ProcessSend pipeline. Per-send errors are logged and swallowed —
+// the pump never crashes on a single bad send.
+func (p *Pump) process(ctx context.Context, pl SendPayload) {
+	body, mediaSha, mime, raw, err := p.resolve(ctx, pl.CampaignID)
+	if err != nil {
+		log.Printf("dispatch: pump resolve campaign %d: %v", pl.CampaignID, err)
+		return
+	}
+	if err := p.w.ProcessSend(ctx, pl, body, mediaSha, mime, raw); err != nil {
+		log.Printf("dispatch: pump ProcessSend recipient %d: %v", pl.RecipientID, err)
+	}
+}
