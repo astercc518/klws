@@ -64,15 +64,26 @@ func (a *redisProxyAllocator) pick(ctx context.Context, cc string, nowMs int64) 
 	return id, meta, nil
 }
 
+// releaseLua returns a slot to proxyID and re-arms its cooldown in avail:{cc},
+// but ONLY if the proxy is still known-alive (its proxy:meta field exists). If
+// the proxy was markDead'd (meta HDEL'd) while an account was bound, release is
+// a no-op — it must NOT resurrect a dead proxy into the ring with empty meta.
+// markAlive (ReportProxySuccess) / boot-rebuild are the only revival paths.
+// KEYS=[avail:{cc}, proxy:free, proxy:meta] ARGV=[proxyID, scoreMs]
+var releaseLua = goredis.NewScript(`
+if redis.call('HEXISTS', KEYS[3], ARGV[1]) == 1 then
+  redis.call('HINCRBY', KEYS[2], ARGV[1], 1)
+  redis.call('ZADD', KEYS[1], ARGV[2], ARGV[1])
+end
+return 1`)
+
 // release returns a slot to proxyID and re-arms its cooldown in avail:{cc}
-// (score=nowMs+cooldown), so it becomes eligible again only after cooldown.
+// (score=nowMs+cooldown) — but only for a still-alive proxy (see releaseLua).
 func (a *redisProxyAllocator) release(ctx context.Context, proxyID int64, cc string, nowMs int64) error {
-	member := itoa(proxyID)
-	pipe := a.rdb.TxPipeline()
-	pipe.HIncrBy(ctx, proxyFreeKey, member, 1)
-	pipe.ZAdd(ctx, availKey(cc), goredis.Z{Score: float64(nowMs + a.cooldown.Milliseconds()), Member: member})
-	_, err := pipe.Exec(ctx)
-	return err
+	score := nowMs + a.cooldown.Milliseconds()
+	return releaseLua.Run(ctx, a.rdb,
+		[]string{availKey(cc), proxyFreeKey, proxyMetaKey},
+		itoa(proxyID), score).Err()
 }
 
 // markDead fully excludes proxyID from the hot index: removed from the

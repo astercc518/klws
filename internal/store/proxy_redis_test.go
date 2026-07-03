@@ -120,6 +120,33 @@ func TestRedisProxy_ReleaseAndDead(t *testing.T) {
 	}
 }
 
+func TestRedisProxy_ReleaseAfterDeadNoResurrect(t *testing.T) {
+	if testing.Short() {
+		t.Skip("integration")
+	}
+	ctx := context.Background()
+	rdb := newTestRedis(t)
+	a := newRedisProxyAllocator(rdb, 60*time.Second)
+
+	// proxy 13 dies while bound, gets HDEL'd from meta+free and ZREM'd.
+	seedProxyRedis(t, rdb, 13, "US", 1, "socks5://p13", 0)
+	if err := a.markDead(ctx, 13, "US"); err != nil {
+		t.Fatalf("markDead: %v", err)
+	}
+
+	// releasing the now-dead binding must NOT resurrect it (meta was deleted;
+	// resurrecting would leave it in the ring with empty meta → garbage).
+	if err := a.release(ctx, 13, "US", 1000); err != nil {
+		t.Fatalf("release: %v", err)
+	}
+	if _, err := rdb.ZScore(ctx, availKey("US"), itoa(13)).Result(); err != goredis.Nil {
+		t.Fatalf("dead proxy resurrected into ring; ZScore err = %v; want redis.Nil", err)
+	}
+	if _, _, err := a.pick(ctx, "US", 1000+10*60000); err != ErrNoProxyAvailable {
+		t.Fatalf("dead proxy must stay excluded after release; got %v", err)
+	}
+}
+
 func TestRedisProxy_MarkAliveRevives(t *testing.T) {
 	if testing.Short() {
 		t.Skip("integration")
