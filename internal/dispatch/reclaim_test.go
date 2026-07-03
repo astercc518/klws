@@ -55,3 +55,52 @@ SELECT r.assigned_jid, r.message_id, r.attempt, a.sent_today
 		t.Fatalf("second reclaim = %d,%v; want 0,nil", n2, err)
 	}
 }
+
+// TestReclaimOrphanedAssignments_MultiOrphan proves the GROUP BY aggregation
+// decrements an account's sent_today by its ORPHAN COUNT, not by 1-per-account
+// and not by 1-per-row without grouping. One account (sent_today=2) owns TWO
+// orphaned pending recipients; reclaim must return 2, null both assignments,
+// and land sent_today at exactly 0. A wrong join key or a missing GROUP BY
+// would leave sent_today at 1 (decremented once) rather than 0.
+func TestReclaimOrphanedAssignments_MultiOrphan(t *testing.T) {
+	pool, ctx := pgPool(t)
+
+	seedAccount(t, ctx, pool, "acc", "US", time.Now(), 100, 2) // sent_today=2
+	cid := seedCampaign(t, ctx, pool, "hello")
+	rid1 := seedRecipient(t, ctx, pool, cid, "+15550001111", "US")
+	rid2 := seedRecipient(t, ctx, pool, cid, "+15550002222", "US")
+
+	for _, rid := range []int64{rid1, rid2} {
+		if _, err := pool.Exec(ctx, `
+UPDATE campaign_recipients SET assigned_jid=$1, message_id=$2, attempt=1 WHERE id=$3`,
+			"acc", fmt.Sprintf("%d:%d", cid, rid), rid); err != nil {
+			t.Fatalf("seed orphan assignment rid=%d: %v", rid, err)
+		}
+	}
+
+	n, err := ReclaimOrphanedAssignments(ctx, pool)
+	if err != nil || n != 2 {
+		t.Fatalf("reclaim = %d,%v; want 2,nil", n, err)
+	}
+
+	for _, rid := range []int64{rid1, rid2} {
+		var jid, mid *string
+		if err := pool.QueryRow(ctx,
+			`SELECT assigned_jid, message_id FROM campaign_recipients WHERE id=$1`, rid).
+			Scan(&jid, &mid); err != nil {
+			t.Fatalf("query rid=%d: %v", rid, err)
+		}
+		if jid != nil || mid != nil {
+			t.Fatalf("orphan rid=%d not reset: assigned_jid=%v message_id=%v", rid, jid, mid)
+		}
+	}
+
+	var sent int
+	if err := pool.QueryRow(ctx,
+		`SELECT sent_today FROM account_devices WHERE account_jid='acc'`).Scan(&sent); err != nil {
+		t.Fatalf("query sent_today: %v", err)
+	}
+	if sent != 0 {
+		t.Fatalf("sent_today = %d; want 0 (decremented by orphan count 2, proving GROUP BY sum)", sent)
+	}
+}
