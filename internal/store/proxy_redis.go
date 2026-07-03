@@ -27,8 +27,7 @@ var pickLua = goredis.NewScript(`
 local ids = redis.call('ZRANGEBYSCORE', KEYS[1], '-inf', ARGV[1], 'LIMIT', 0, 1)
 if #ids == 0 then return {} end
 local id = ids[1]
-local free = tonumber(redis.call('HGET', KEYS[2], id) or '0') - 1
-redis.call('HSET', KEYS[2], id, free)
+local free = redis.call('HINCRBY', KEYS[2], id, -1)
 if free <= 0 then
   redis.call('ZREM', KEYS[1], id)
 else
