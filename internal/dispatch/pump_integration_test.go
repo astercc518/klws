@@ -2,6 +2,7 @@ package dispatch
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 
@@ -42,7 +43,9 @@ func TestPump_EndToEnd(t *testing.T) {
 	p := NewPump(pe, w, resolve, 1000 /*rate*/, 2 /*workers*/)
 
 	pctx, cancel := context.WithCancel(ctx)
-	go p.Run(pctx)
+	defer cancel()
+	done := make(chan error, 1)
+	go func() { done <- p.Run(pctx) }()
 
 	// One fill pass: DispatchRunning scans the running campaign, assigns all
 	// pending recipients to the healthy account, bumps sent_today, and pushes
@@ -70,6 +73,12 @@ func TestPump_EndToEnd(t *testing.T) {
 
 	cancel()
 	pe.Close()
+	// Join the pump goroutine: block until both workers drain the closed
+	// channel and exit before t.Cleanup tears down PG, and assert Run returned
+	// cleanly (nil or the expected context.Canceled from the paced Wait).
+	if err := <-done; err != nil && !errors.Is(err, context.Canceled) {
+		t.Fatalf("pump Run: %v", err)
+	}
 
 	assertAllRecipientsSent(t, ctx, pool, campaignID, len(recipientIDs))
 
