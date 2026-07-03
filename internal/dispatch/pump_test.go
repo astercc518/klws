@@ -140,3 +140,68 @@ func TestPump_RateLimitsAndProcesses(t *testing.T) {
 		t.Fatalf("Run returned err = %v; want nil or context.Canceled", err)
 	}
 }
+
+// TestPump_DrainsWhenWaitPredictsDeadline guards the deadline-PREDICT path of
+// the drain-don't-drop contract, which is distinct from plain ctx cancellation.
+//
+// rate.Limiter.Wait returns a non-nil error while ctx.Err() is still nil when
+// the ctx carries a *live* (future) deadline and the limiter predicts the
+// required wait would exceed it ("rate: Wait(n=1) would exceed context
+// deadline"). A guard of `err != nil && ctx.Err() != nil` is FALSE here, so a
+// buggy pump would (a) skip acquiring a token and (b) hand ProcessSend the
+// about-to-expire ctx — dropping committed-but-unsent buffered work.
+//
+// Construction: exhaust the limiter's startup burst token (Allow), enqueue one
+// buffered payload, then Run with a live 100ms deadline. rate=0.5/sec ⇒ the
+// next token is ~2s away, so Wait predict-errors immediately with ctx.Err()==nil.
+// resolve sleeps 300ms (>100ms) so under the buggy path the ctx is expired by
+// the time ProcessSend issues its first query → the send fails and the payload
+// never reaches 'sent'. Under the correct fix (fall back to context.Background
+// on ANY Wait error) the buffered payload completes regardless.
+func TestPump_DrainsWhenWaitPredictsDeadline(t *testing.T) {
+	if testing.Short() {
+		t.Skip("integration")
+	}
+	rec, w, pool, campaignID, recipientIDs := newRecordingWorker(t)
+	pe := NewPumpEnqueuer(8)
+	resolve := func(ctx context.Context, campaignID int64) (string, string, string, []byte, error) {
+		time.Sleep(300 * time.Millisecond) // outlast the 100ms deadline
+		return "hi", "", "", nil, nil
+	}
+	p := NewPump(pe, w, resolve, 0.5 /*rate: ~2s per token*/, 1 /*workers*/)
+	// Spend the single startup burst token so the buffered payload's Wait must
+	// predict a ~2s delay (no token left), triggering the deadline-predict error.
+	if !p.lim.Allow() {
+		t.Fatal("expected to consume the startup burst token")
+	}
+
+	pl := SendPayload{
+		TenantID: 1, CampaignID: campaignID, RecipientID: recipientIDs[0], JID: "j",
+		Phone: "15550000000", Country: "US", MessageID: "drain-0",
+	}
+	if err := pe.EnqueueSend(context.Background(), pl, 0); err != nil {
+		t.Fatalf("enqueue: %v", err)
+	}
+	pe.Close() // closed-but-non-empty: the worker must drain the buffered payload
+
+	// Live deadline in the near future: at the Wait call ctx.Err()==nil, but the
+	// limiter predicts the ~2s wait exceeds this 100ms deadline → Wait errors.
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel()
+
+	done := make(chan error, 1)
+	go func() { done <- p.Run(ctx) }()
+	<-done // Run returns once the worker drains the closed channel and exits.
+
+	var st string
+	if err := pool.QueryRow(context.Background(),
+		`SELECT state::text FROM campaign_recipients WHERE id=$1`, recipientIDs[0]).Scan(&st); err != nil {
+		t.Fatalf("load recipient state: %v", err)
+	}
+	if st != "sent" {
+		t.Fatalf("buffered payload state = %q; want \"sent\" (drain-don't-drop violated on deadline-predict path)", st)
+	}
+	if got := rec.count(); got != 1 {
+		t.Fatalf("Sender.Send called %d times; want 1 (buffered send dropped)", got)
+	}
+}

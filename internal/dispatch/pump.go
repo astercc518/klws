@@ -95,10 +95,18 @@ func (p *Pump) Run(ctx context.Context) error {
 			defer wg.Done()
 			for pl := range p.pe.C() {
 				sendCtx := ctx
-				if err := p.lim.Wait(ctx); err != nil && ctx.Err() != nil {
-					// ctx cancelled while waiting for a token: stop pacing but
-					// keep draining without a token so buffered work still
-					// completes (bounded by the upstream ShutdownTimeout).
+				if err := p.lim.Wait(ctx); err != nil {
+					// Wait only errors on ctx cancel/deadline or n>burst (n=1 is
+					// always ≤ burst here), so ANY error means: stop pacing and
+					// drain this buffered payload on a background context — never
+					// dropping committed-but-unsent work (bounded by the upstream
+					// ShutdownTimeout).
+					//
+					// This covers BOTH ctx cancellation AND the deadline-PREDICT
+					// path, where Wait returns "would exceed context deadline"
+					// while ctx.Err() is still nil: gating the fallback on
+					// ctx.Err()!=nil would there skip the token AND hand
+					// ProcessSend an about-to-expire ctx, aborting the send.
 					sendCtx = context.Background()
 				}
 				p.process(sendCtx, pl)
