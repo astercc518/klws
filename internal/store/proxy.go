@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/jackc/pgx/v5"
 	"go.mau.fi/whatsmeow"
@@ -28,6 +29,9 @@ type ProxyBinding struct {
 // FOR UPDATE SKIP LOCKED, incrementing its counters, (3) writes the binding to
 // account_devices. All in one tx — any failure rolls back the counter increment.
 func (m *Manager) BindProxy(ctx context.Context, accountJID, countryCode string) (*ProxyBinding, error) {
+	if m.proxyAlloc != nil {
+		return m.proxyAlloc.bind(ctx, m.bizPool, accountJID, countryCode, time.Now().UnixMilli())
+	}
 	var binding *ProxyBinding
 	err := pgx.BeginTxFunc(ctx, m.bizPool, pgx.TxOptions{}, func(tx pgx.Tx) error {
 		if err := releaseWithinTx(ctx, tx, accountJID); err != nil {
@@ -108,6 +112,9 @@ func releaseWithinTx(ctx context.Context, tx pgx.Tx, accountJID string) error {
 
 // ReleaseProxy returns the account's bound proxy. Idempotent.
 func (m *Manager) ReleaseProxy(ctx context.Context, accountJID string) error {
+	if m.proxyAlloc != nil {
+		return m.proxyAlloc.releaseBinding(ctx, m.bizPool, accountJID, time.Now().UnixMilli())
+	}
 	return pgx.BeginTxFunc(ctx, m.bizPool, pgx.TxOptions{}, func(tx pgx.Tx) error {
 		return releaseWithinTx(ctx, tx, accountJID)
 	})
@@ -128,6 +135,15 @@ RETURNING NOT is_alive;`
 	if err = m.bizPool.QueryRow(ctx, sql, proxyID, proxyFailureThreshold).Scan(&dead); err != nil {
 		return false, fmt.Errorf("report proxy failure: %w", err)
 	}
+	if dead && m.proxyAlloc != nil {
+		var cc string
+		if err := m.bizPool.QueryRow(ctx, `SELECT country_code FROM proxy_pool WHERE id=$1`, proxyID).Scan(&cc); err != nil {
+			return dead, fmt.Errorf("lookup country_code for markDead: %w", err)
+		}
+		if err := m.proxyAlloc.markDead(ctx, proxyID, cc); err != nil {
+			return dead, fmt.Errorf("redis markDead: %w", err)
+		}
+	}
 	return dead, nil
 }
 
@@ -139,6 +155,20 @@ func (m *Manager) ReportProxySuccess(ctx context.Context, proxyID int64, latency
 		  WHERE id=$1`, proxyID, latencyMs)
 	if err != nil {
 		return fmt.Errorf("report proxy success: %w", err)
+	}
+	if m.proxyAlloc != nil {
+		var url, ptype, cc string
+		var free int
+		err := m.bizPool.QueryRow(ctx,
+			`SELECT proxy_url, proxy_type::text, country_code, (max_bindings - current_bindings)
+			   FROM proxy_pool WHERE id=$1`, proxyID).Scan(&url, &ptype, &cc, &free)
+		if err != nil {
+			return fmt.Errorf("lookup proxy for markAlive: %w", err)
+		}
+		meta := url + "|" + ptype + "|" + cc
+		if err := m.proxyAlloc.markAlive(ctx, proxyID, cc, meta, free, time.Now().UnixMilli()); err != nil {
+			return fmt.Errorf("redis markAlive: %w", err)
+		}
 	}
 	return nil
 }

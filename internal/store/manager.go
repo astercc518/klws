@@ -8,8 +8,8 @@ import (
 	"sync"
 	"time"
 
-	_ "github.com/jackc/pgx/v5/stdlib" // 注册 "pgx" database/sql 驱动
 	"github.com/jackc/pgx/v5/pgxpool"
+	_ "github.com/jackc/pgx/v5/stdlib" // 注册 "pgx" database/sql 驱动
 
 	"go.mau.fi/whatsmeow/store"
 	"go.mau.fi/whatsmeow/store/sqlstore"
@@ -36,7 +36,8 @@ type Manager struct {
 	systemPool *pgxpool.Pool // BYPASSRLS role app_system (or bizPool fallback)
 	sqlDB      *sql.DB
 	log        waLog.Logger
-	ownership  Ownership // pluggable ownership backend; default: pgOwnership
+	ownership  Ownership            // pluggable ownership backend; default: pgOwnership
+	proxyAlloc *redisProxyAllocator // set when cfg.ProxyBackend=="redis"; nil in pg mode (default)
 }
 
 var (
@@ -215,6 +216,17 @@ func newManager(ctx context.Context, cfg Config, logger waLog.Logger) (*Manager,
 		log:        logger,
 	}
 	m.ownership = newOwnership(m)
+
+	if cfg.ProxyBackend == "redis" && cfg.Redis != nil {
+		m.proxyAlloc = newRedisProxyAllocator(cfg.Redis, cfg.ProxyCooldown)
+		rctx, rcancel := context.WithTimeout(ctx, 10*time.Second)
+		_, err := m.proxyAlloc.rebuildFromPG(rctx, m.bizPool, time.Now().UnixMilli())
+		rcancel()
+		if err != nil {
+			m.Close()
+			return nil, fmt.Errorf("rebuild redis proxy index: %w", err)
+		}
+	}
 	return m, nil
 }
 
