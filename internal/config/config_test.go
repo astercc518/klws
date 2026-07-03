@@ -269,6 +269,26 @@ func TestLoad_ReconcileDefault(t *testing.T) {
 	}
 }
 
+func TestConfig_DispatchDefaults(t *testing.T) {
+	t.Setenv("WADIST_POSTGRES_DSN", "postgres://x")
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if cfg.DispatchMode != "asynq" {
+		t.Fatalf("DispatchMode default = %q; want asynq", cfg.DispatchMode)
+	}
+	if cfg.PumpBuffer != 512 {
+		t.Fatalf("PumpBuffer default = %d; want 512", cfg.PumpBuffer)
+	}
+	if cfg.SendWorkers != cfg.AsynqConcurrency {
+		t.Fatalf("SendWorkers default = %d; want AsynqConcurrency %d", cfg.SendWorkers, cfg.AsynqConcurrency)
+	}
+	if cfg.SendRate <= 0 {
+		t.Fatalf("SendRate default = %v; want > 0", cfg.SendRate)
+	}
+}
+
 func TestLoad_AntifpDefaults(t *testing.T) {
 	t.Setenv("WADIST_POSTGRES_DSN", "postgres://x")
 	t.Setenv("WADIST_REDIS_ADDR", "x:1")

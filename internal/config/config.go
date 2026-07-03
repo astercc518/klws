@@ -65,6 +65,15 @@ type Config struct {
 	// Reconciler: periodic sweep that re-enqueues active accounts missing from
 	// the scheduler's due set (closes the scheduling loop against drift).
 	ReconcileInterval time.Duration // WADIST_RECONCILE_INTERVAL_MS default 300000ms (5m)
+	// DispatchMode selects the send driver: "asynq" (durable queue + 1s batch tick,
+	// default) or "pump" (in-memory token-bucket Rolling-Wave pump).
+	DispatchMode string // WADIST_DISPATCH_MODE default "asynq"
+	// SendRate is the global token-bucket rate (sends/sec) in pump mode.
+	SendRate float64 // WADIST_SEND_RATE default 160.0
+	// PumpBuffer is the in-memory SendPayload channel capacity in pump mode.
+	PumpBuffer int // WADIST_PUMP_BUFFER default 512
+	// SendWorkers is the number of concurrent send workers in pump mode.
+	SendWorkers int // WADIST_SEND_WORKERS default = AsynqConcurrency
 }
 
 // Load reads configuration from the environment. PostgresDSN is required;
@@ -153,6 +162,11 @@ func Load() (*Config, error) {
 	cfg.ProxyJanitorBatch = intEnv("WADIST_PROXY_JANITOR_BATCH", 256)
 	cfg.ReconcileInterval = msEnv("WADIST_RECONCILE_INTERVAL_MS", 300000)
 
+	cfg.DispatchMode = getenv("WADIST_DISPATCH_MODE", "asynq")
+	cfg.PumpBuffer = intEnv("WADIST_PUMP_BUFFER", 512)
+	cfg.SendWorkers = intEnv("WADIST_SEND_WORKERS", cfg.AsynqConcurrency)
+	cfg.SendRate = floatEnv("WADIST_SEND_RATE", 160.0)
+
 	mk, err := decodeKey32("WADIST_MASTER_KEY")
 	if err != nil {
 		return nil, err
@@ -195,6 +209,15 @@ func intEnv(key string, def int) int {
 	if v := os.Getenv(key); v != "" {
 		if n, err := strconv.Atoi(v); err == nil {
 			return n
+		}
+	}
+	return def
+}
+
+func floatEnv(key string, def float64) float64 {
+	if v := os.Getenv(key); v != "" {
+		if f, err := strconv.ParseFloat(v, 64); err == nil {
+			return f
 		}
 	}
 	return def
