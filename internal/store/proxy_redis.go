@@ -63,3 +63,38 @@ func (a *redisProxyAllocator) pick(ctx context.Context, cc string, nowMs int64) 
 	}
 	return id, meta, nil
 }
+
+// release returns a slot to proxyID and re-arms its cooldown in avail:{cc}
+// (score=nowMs+cooldown), so it becomes eligible again only after cooldown.
+func (a *redisProxyAllocator) release(ctx context.Context, proxyID int64, cc string, nowMs int64) error {
+	member := itoa(proxyID)
+	pipe := a.rdb.TxPipeline()
+	pipe.HIncrBy(ctx, proxyFreeKey, member, 1)
+	pipe.ZAdd(ctx, availKey(cc), goredis.Z{Score: float64(nowMs + a.cooldown.Milliseconds()), Member: member})
+	_, err := pipe.Exec(ctx)
+	return err
+}
+
+// markDead fully excludes proxyID from the hot index: removed from the
+// avail:{cc} ring and its free/meta hash entries deleted.
+func (a *redisProxyAllocator) markDead(ctx context.Context, proxyID int64, cc string) error {
+	member := itoa(proxyID)
+	pipe := a.rdb.TxPipeline()
+	pipe.ZRem(ctx, availKey(cc), member)
+	pipe.HDel(ctx, proxyFreeKey, member)
+	pipe.HDel(ctx, proxyMetaKey, member)
+	_, err := pipe.Exec(ctx)
+	return err
+}
+
+// markAlive (re)admits proxyID into the hot index: sets its free-slot count
+// and meta, and adds it to avail:{cc} with score=nowMs (eligible immediately).
+func (a *redisProxyAllocator) markAlive(ctx context.Context, proxyID int64, cc, meta string, freeSlots int, nowMs int64) error {
+	member := itoa(proxyID)
+	pipe := a.rdb.TxPipeline()
+	pipe.HSet(ctx, proxyFreeKey, member, freeSlots)
+	pipe.HSet(ctx, proxyMetaKey, member, meta)
+	pipe.ZAdd(ctx, availKey(cc), goredis.Z{Score: float64(nowMs), Member: member})
+	_, err := pipe.Exec(ctx)
+	return err
+}

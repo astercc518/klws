@@ -84,6 +84,72 @@ func TestRedisProxy_PickCoolsButKeepsSlot(t *testing.T) {
 	}
 }
 
+func TestRedisProxy_ReleaseAndDead(t *testing.T) {
+	if testing.Short() {
+		t.Skip("integration")
+	}
+	ctx := context.Background()
+	rdb := newTestRedis(t)
+	a := newRedisProxyAllocator(rdb, 60*time.Second)
+	cooldownMs := (60 * time.Second).Milliseconds()
+	seedProxyRedis(t, rdb, 7, "US", 1, "socks5://p7", 0)
+
+	id, _, err := a.pick(ctx, "US", 1000) // consumes the 1 slot + cools + ZREMs
+	if err != nil || id != 7 {
+		t.Fatalf("pick = %d,%v; want 7,nil", id, err)
+	}
+
+	// release makes it re-eligible after cooldown (score=1000+cooldownMs).
+	if err := a.release(ctx, 7, "US", 1000); err != nil {
+		t.Fatalf("release: %v", err)
+	}
+	if _, _, err := a.pick(ctx, "US", 1001); err != ErrNoProxyAvailable {
+		t.Fatalf("still cooling, want miss; got %v", err)
+	}
+	if _, _, err := a.pick(ctx, "US", 1000+cooldownMs+1); err != nil {
+		t.Fatalf("after cooldown pick: %v", err)
+	}
+
+	// markDead excludes it entirely.
+	seedProxyRedis(t, rdb, 9, "US", 1, "socks5://p9", 0)
+	if err := a.markDead(ctx, 9, "US"); err != nil {
+		t.Fatalf("markDead: %v", err)
+	}
+	if _, _, err := a.pick(ctx, "US", 200_000); err != ErrNoProxyAvailable {
+		t.Fatalf("dead proxy must be excluded; got %v", err)
+	}
+}
+
+func TestRedisProxy_MarkAliveRevives(t *testing.T) {
+	if testing.Short() {
+		t.Skip("integration")
+	}
+	ctx := context.Background()
+	rdb := newTestRedis(t)
+	a := newRedisProxyAllocator(rdb, 60*time.Second)
+
+	// proxy 11 starts dead: no entry anywhere.
+	if _, _, err := a.pick(ctx, "US", 1000); err != ErrNoProxyAvailable {
+		t.Fatalf("pick before markAlive err = %v; want ErrNoProxyAvailable", err)
+	}
+
+	if err := a.markAlive(ctx, 11, "US", "socks5://p11|socks5|US", 3, 1000); err != nil {
+		t.Fatalf("markAlive: %v", err)
+	}
+
+	id, meta, err := a.pick(ctx, "US", 1000)
+	if err != nil || id != 11 || meta != "socks5://p11|socks5|US" {
+		t.Fatalf("pick after markAlive = %d,%q,%v; want 11,meta,nil", id, meta, err)
+	}
+	free, err := rdb.HGet(ctx, proxyFreeKey, itoa(11)).Int()
+	if err != nil {
+		t.Fatalf("hget free: %v", err)
+	}
+	if free != 2 {
+		t.Fatalf("free = %d; want 2 (3 seeded - 1 consumed by pick)", free)
+	}
+}
+
 // seedProxyRedis writes the hot-index entries a boot-rebuild would create.
 func seedProxyRedis(t *testing.T, rdb *goredis.Client, id int64, cc string, free int, url string, nextMs int64) {
 	t.Helper()
