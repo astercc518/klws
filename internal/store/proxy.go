@@ -126,22 +126,24 @@ const proxyFailureThreshold = 5
 // ReportProxyFailure records one proxy-layer failure; auto-disables at threshold.
 // Returns whether the proxy is now considered dead.
 func (m *Manager) ReportProxyFailure(ctx context.Context, proxyID int64) (dead bool, err error) {
+	// RETURNING folds the redis-sync input (country_code) into the same atomic
+	// UPDATE, so the mirror reflects exactly this write (no TOCTOU with a later
+	// SELECT that a concurrent report could have changed underneath us).
 	const sql = `
 UPDATE proxy_pool
    SET failure_count = failure_count + 1,
        is_alive = (failure_count + 1 < $2)
  WHERE id = $1
-RETURNING NOT is_alive;`
-	if err = m.bizPool.QueryRow(ctx, sql, proxyID, proxyFailureThreshold).Scan(&dead); err != nil {
+RETURNING NOT is_alive AS dead, country_code;`
+	var cc string
+	if err = m.bizPool.QueryRow(ctx, sql, proxyID, proxyFailureThreshold).Scan(&dead, &cc); err != nil {
 		return false, fmt.Errorf("report proxy failure: %w", err)
 	}
+	// Redis is a best-effort MIRROR of the durable PG truth: a transient blip
+	// must not fail the report (boot rebuild reconciles later). Log and continue.
 	if dead && m.proxyAlloc != nil {
-		var cc string
-		if err := m.bizPool.QueryRow(ctx, `SELECT country_code FROM proxy_pool WHERE id=$1`, proxyID).Scan(&cc); err != nil {
-			return dead, fmt.Errorf("lookup country_code for markDead: %w", err)
-		}
-		if err := m.proxyAlloc.markDead(ctx, proxyID, cc); err != nil {
-			return dead, fmt.Errorf("redis markDead: %w", err)
+		if merr := m.proxyAlloc.markDead(ctx, proxyID, cc); merr != nil {
+			m.log.Errorf("redis markDead proxy %d (cc=%s) failed (pg is authoritative): %v", proxyID, cc, merr)
 		}
 	}
 	return dead, nil
@@ -149,26 +151,35 @@ RETURNING NOT is_alive;`
 
 // ReportProxySuccess clears the failure count, revives the proxy, refreshes latency.
 func (m *Manager) ReportProxySuccess(ctx context.Context, proxyID int64, latencyMs int) error {
-	_, err := m.bizPool.Exec(ctx,
+	// When the redis mirror is active, RETURNING pulls the markAlive inputs
+	// (url/type/cc/free) from the same atomic UPDATE (no TOCTOU with a follow-up
+	// SELECT). In pg mode we don't need those columns, so keep the plain Exec.
+	if m.proxyAlloc == nil {
+		if _, err := m.bizPool.Exec(ctx,
+			`UPDATE proxy_pool
+			    SET failure_count=0, is_alive=TRUE, latency_ms=$2, last_check_at=now()
+			  WHERE id=$1`, proxyID, latencyMs); err != nil {
+			return fmt.Errorf("report proxy success: %w", err)
+		}
+		return nil
+	}
+
+	var url, ptype, cc string
+	var free int
+	err := m.bizPool.QueryRow(ctx,
 		`UPDATE proxy_pool
 		    SET failure_count=0, is_alive=TRUE, latency_ms=$2, last_check_at=now()
-		  WHERE id=$1`, proxyID, latencyMs)
+		  WHERE id=$1
+		RETURNING proxy_url, proxy_type::text, country_code, (max_bindings - current_bindings)`,
+		proxyID, latencyMs).Scan(&url, &ptype, &cc, &free)
 	if err != nil {
 		return fmt.Errorf("report proxy success: %w", err)
 	}
-	if m.proxyAlloc != nil {
-		var url, ptype, cc string
-		var free int
-		err := m.bizPool.QueryRow(ctx,
-			`SELECT proxy_url, proxy_type::text, country_code, (max_bindings - current_bindings)
-			   FROM proxy_pool WHERE id=$1`, proxyID).Scan(&url, &ptype, &cc, &free)
-		if err != nil {
-			return fmt.Errorf("lookup proxy for markAlive: %w", err)
-		}
-		meta := url + "|" + ptype + "|" + cc
-		if err := m.proxyAlloc.markAlive(ctx, proxyID, cc, meta, free, time.Now().UnixMilli()); err != nil {
-			return fmt.Errorf("redis markAlive: %w", err)
-		}
+	// Best-effort mirror: a redis blip must not fail the report (boot rebuild
+	// reconciles later). Log and continue; PG is already durably updated.
+	meta := url + "|" + ptype + "|" + cc
+	if merr := m.proxyAlloc.markAlive(ctx, proxyID, cc, meta, free, time.Now().UnixMilli()); merr != nil {
+		m.log.Errorf("redis markAlive proxy %d (cc=%s) failed (pg is authoritative): %v", proxyID, cc, merr)
 	}
 	return nil
 }
