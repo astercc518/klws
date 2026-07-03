@@ -178,6 +178,8 @@ func (c *Config) Store() store.Config {
 		OwnershipBackend: c.OwnershipBackend,
 		SessionStore:     os.Getenv("WADIST_SESSION_STORE"),
 		BadgerDir:        os.Getenv("WADIST_BADGER_DIR"),
+		ProxyBackend:     os.Getenv("WADIST_PROXY_BACKEND"),
+		ProxyCooldown:    msEnvZero("WADIST_PROXY_COOLDOWN_MS"),
 		// Redis is injected by cmd/wadist after Store() returns.
 	}
 }
@@ -205,6 +207,18 @@ func msEnv(key string, def int) time.Duration {
 		}
 	}
 	return time.Duration(def) * time.Millisecond
+}
+
+// msEnvZero reads key as milliseconds and returns 0 (not a hardcoded default)
+// when the env var is empty or unparseable, so the caller's own zero-value
+// default (e.g. store.Config.withDefaults) applies instead.
+func msEnvZero(key string) time.Duration {
+	if v := os.Getenv(key); v != "" {
+		if n, err := strconv.Atoi(v); err == nil {
+			return time.Duration(n) * time.Millisecond
+		}
+	}
+	return 0
 }
 
 func getenvInt32(key string, def int32) int32 {

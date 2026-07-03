@@ -42,6 +42,12 @@ type Config struct {
 	SessionStore string
 	// BadgerDir is the on-disk directory for the Badger session store (SessionStore=="badger").
 	BadgerDir string
+	// ProxyBackend selects proxy allocation: "pg" (FOR UPDATE SKIP LOCKED, default)
+	// or "redis" (proxy:avail:{cc} ZSET cooldown ring). PG stays the durable source.
+	ProxyBackend string
+	// ProxyCooldown is how long a proxy is ineligible for re-selection after a
+	// bind/release (anti-ban: don't reuse an IP within this window).
+	ProxyCooldown time.Duration
 }
 
 func (c *Config) withDefaults() {
@@ -71,5 +77,11 @@ func (c *Config) withDefaults() {
 	}
 	if c.OwnershipTTL <= 0 {
 		c.OwnershipTTL = 30 * time.Second
+	}
+	if c.ProxyBackend == "" {
+		c.ProxyBackend = "pg"
+	}
+	if c.ProxyCooldown <= 0 {
+		c.ProxyCooldown = 60 * time.Second
 	}
 }
