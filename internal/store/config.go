@@ -33,6 +33,10 @@ type Config struct {
 	// OnShadowDivergence is called when the shadow backend detects a divergence
 	// between the pg and redis ownership states. Placeholder until Task 6.
 	OnShadowDivergence func(op string)
+	// OwnershipTTL is the Redis heartbeat key TTL for the redis/shadow ownership
+	// backends (a node is considered dead when its hb key expires). Should equal
+	// the cluster NodeStaleness. Heartbeat interval MUST be < OwnershipTTL.
+	OwnershipTTL time.Duration
 	// SessionStore selects the whatsmeow store backend: "pg" (sqlstore, default) or
 	// "badger" (local NVMe KV via internal/store/wabadger).
 	SessionStore string
@@ -64,5 +68,8 @@ func (c *Config) withDefaults() {
 	}
 	if c.BadgerDir == "" {
 		c.BadgerDir = "/var/lib/wadist/badger"
+	}
+	if c.OwnershipTTL <= 0 {
+		c.OwnershipTTL = 30 * time.Second
 	}
 }

@@ -9,8 +9,6 @@ import (
 	goredis "github.com/redis/go-redis/v9"
 )
 
-const hbTTL = 30 * time.Second // = NodeStaleness；心跳间隔应 = hbTTL/3
-
 const hbKeyPrefix = "node:hb:"
 
 func ownerKey(jid string) string  { return "owner:" + jid }
@@ -67,11 +65,19 @@ var _ LockHandle = (*redisLockHandle)(nil)
 type redisOwnership struct {
 	rdb    *goredis.Client
 	roster func(ctx context.Context) ([]string, error) // active 账号花名册（PG）
+	hbTTL  time.Duration
 }
 
-func newRedisOwnership(rdb *goredis.Client) *redisOwnership { return &redisOwnership{rdb: rdb} }
-func newRedisOwnershipWithRoster(rdb *goredis.Client, roster func(context.Context) ([]string, error)) *redisOwnership {
-	return &redisOwnership{rdb: rdb, roster: roster}
+// newRedisOwnership 保留给旧调用点（未指定 roster/TTL）；TTL 用 30s 缺省值。
+func newRedisOwnership(rdb *goredis.Client) *redisOwnership {
+	return newRedisOwnershipWithRoster(rdb, nil, 30*time.Second)
+}
+
+func newRedisOwnershipWithRoster(rdb *goredis.Client, roster func(context.Context) ([]string, error), hbTTL time.Duration) *redisOwnership {
+	if hbTTL <= 0 {
+		hbTTL = 30 * time.Second
+	}
+	return &redisOwnership{rdb: rdb, roster: roster, hbTTL: hbTTL}
 }
 
 func (o *redisOwnership) Acquire(ctx context.Context, jid, nodeID string) (LockHandle, error) {
@@ -86,7 +92,7 @@ func (o *redisOwnership) Acquire(ctx context.Context, jid, nodeID string) (LockH
 
 // Heartbeat 刷新本节点在 Redis 中的活性标记。
 func (o *redisOwnership) Heartbeat(ctx context.Context, nodeID string) error {
-	return o.rdb.Set(ctx, hbKey(nodeID), "1", hbTTL).Err()
+	return o.rdb.Set(ctx, hbKey(nodeID), "1", o.hbTTL).Err()
 }
 
 // Deregister 清理本节点在 Redis 中的所有权台账。

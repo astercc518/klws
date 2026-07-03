@@ -31,9 +31,9 @@ type Ownership interface {
 func newOwnership(m *Manager) Ownership {
 	switch m.cfg.OwnershipBackend {
 	case "redis":
-		return newRedisOwnershipWithRoster(m.cfg.Redis, m.ListActiveAccounts)
+		return newRedisOwnershipWithRoster(m.cfg.Redis, m.ListActiveAccounts, m.cfg.OwnershipTTL)
 	case "shadow":
-		return newShadowOwnership(&pgOwnership{m: m}, newRedisOwnershipWithRoster(m.cfg.Redis, m.ListActiveAccounts), m.cfg.OnShadowDivergence)
+		return newShadowOwnership(&pgOwnership{m: m}, newRedisOwnershipWithRoster(m.cfg.Redis, m.ListActiveAccounts, m.cfg.OwnershipTTL), m.cfg.OnShadowDivergence)
 	default:
 		return &pgOwnership{m: m}
 	}
