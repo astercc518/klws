@@ -3,9 +3,12 @@ package store
 
 import (
 	"context"
+	"fmt"
 	"strconv"
+	"strings"
 	"time"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 	goredis "github.com/redis/go-redis/v9"
 )
@@ -167,4 +170,84 @@ SELECT id, proxy_url, proxy_type::text, country_code, (max_bindings - current_bi
 		return 0, err
 	}
 	return n, nil
+}
+
+// parseMeta splits a "url|type|cc" proxy:meta value into its parts.
+func parseMeta(meta string) (url, ptype, cc string, ok bool) {
+	parts := strings.SplitN(meta, "|", 3)
+	if len(parts) != 3 {
+		return "", "", "", false
+	}
+	return parts[0], parts[1], parts[2], true
+}
+
+// bind picks an alive proxy with free capacity via the Redis hot index, then
+// durably writes the acquisition to PG in one tx: proxy_pool counters
+// (current_bindings+1, usage_count+1) and the account_devices binding. If the
+// PG write fails for any reason (including the account row not existing), the
+// Redis pick is released so its capacity isn't leaked, and the error is
+// returned. accountJID is assumed to be currently unbound (callers guard this
+// upstream, e.g. StickyBindProxy); this only performs the acquire side.
+func (a *redisProxyAllocator) bind(ctx context.Context, pool *pgxpool.Pool, accountJID, cc string, nowMs int64) (*ProxyBinding, error) {
+	id, meta, err := a.pick(ctx, cc, nowMs)
+	if err != nil {
+		return nil, err // ErrNoProxyAvailable on miss
+	}
+	url, ptype, mcc, ok := parseMeta(meta)
+	if !ok {
+		_ = a.release(ctx, id, cc, nowMs) // return the slot; corrupt meta
+		return nil, fmt.Errorf("proxy meta corrupt for id %d: %q", id, meta)
+	}
+	err = pgx.BeginTxFunc(ctx, pool, pgx.TxOptions{}, func(tx pgx.Tx) error {
+		if _, e := tx.Exec(ctx, `UPDATE proxy_pool SET current_bindings=current_bindings+1, usage_count=usage_count+1 WHERE id=$1`, id); e != nil {
+			return e
+		}
+		ct, e := tx.Exec(ctx, `UPDATE account_devices SET proxy_id=$1, proxy_url_cache=$2 WHERE account_jid=$3`, id, url, accountJID)
+		if e != nil {
+			return e
+		}
+		if ct.RowsAffected() == 0 {
+			return ErrAccountMissing
+		}
+		return nil
+	})
+	if err != nil {
+		_ = a.release(ctx, id, cc, nowMs) // PG failed → don't leak capacity in Redis
+		return nil, err
+	}
+	return &ProxyBinding{ProxyID: id, ProxyURL: url, ProxyType: ptype, Country: mcc}, nil
+}
+
+// releaseBinding reads the account's currently bound proxy (and its country)
+// from PG, then durably decrements the proxy's counter and clears the
+// account's binding in one tx, and finally returns the slot to the Redis hot
+// index. Idempotent: a no-op (nil error) when the account is already
+// unbound, so callers may release-then-bind unconditionally.
+func (a *redisProxyAllocator) releaseBinding(ctx context.Context, pool *pgxpool.Pool, accountJID string, nowMs int64) error {
+	var oldID *int64
+	var cc string
+	err := pool.QueryRow(ctx, `
+SELECT a.proxy_id, COALESCE(p.country_code,'')
+  FROM account_devices a LEFT JOIN proxy_pool p ON p.id=a.proxy_id
+ WHERE a.account_jid=$1`, accountJID).Scan(&oldID, &cc)
+	if err != nil {
+		if err == pgx.ErrNoRows {
+			return ErrAccountMissing
+		}
+		return err
+	}
+	if oldID == nil {
+		return nil // already unbound (idempotent)
+	}
+	err = pgx.BeginTxFunc(ctx, pool, pgx.TxOptions{}, func(tx pgx.Tx) error {
+		if _, e := tx.Exec(ctx, `UPDATE proxy_pool SET current_bindings=GREATEST(current_bindings-1,0) WHERE id=$1`, *oldID); e != nil {
+			return e
+		}
+		_, e := tx.Exec(ctx, `UPDATE account_devices SET proxy_id=NULL, proxy_url_cache=NULL WHERE account_jid=$1`, accountJID)
+		return e
+	})
+	if err != nil {
+		return err
+	}
+	return a.release(ctx, *oldID, cc, nowMs)
 }
