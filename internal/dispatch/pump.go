@@ -75,11 +75,17 @@ func NewPump(pe *PumpEnqueuer, w *SendWorker, resolve SendBodyResolver, ratePerS
 	if workers < 1 {
 		workers = 1
 	}
+	// ratePerSec<=0 means "unlimited": rate.Limit(0) would instead block every
+	// send after the initial burst is drained, so use rate.Inf.
+	lim := rate.NewLimiter(rate.Inf, workers)
+	if ratePerSec > 0 {
+		lim = rate.NewLimiter(rate.Limit(ratePerSec), workers)
+	}
 	return &Pump{
 		pe:      pe,
 		w:       w,
 		resolve: resolve,
-		lim:     rate.NewLimiter(rate.Limit(ratePerSec), workers),
+		lim:     lim,
 		workers: workers,
 	}
 }

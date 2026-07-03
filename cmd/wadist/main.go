@@ -420,11 +420,22 @@ func run(ctx context.Context, cfg *config.Config) (*metrics.Server, func(), erro
 		// pipeline; the filler below is the sole producer feeding it.
 		sup.Go(func(lctx context.Context) error { return pump.Run(lctx) })
 		// Filler: backpressure-driven top-up (no 1s pulse) — tops the buffer up
-		// to its capacity every 50ms via the same Dispatcher.DispatchRunning used
-		// by asynq mode, just fed into `pe` instead of asynq.
+		// to its capacity every 50ms via Dispatcher.DispatchRunningBudget, which
+		// (unlike DispatchRunning, used by asynq mode) caps enqueues to `room`
+		// IN TOTAL across all running campaigns. This is required in pump mode:
+		// with ≥2 running campaigns, DispatchRunning would hand each campaign
+		// the full `room` batch, and a second campaign's dispatchBatch could
+		// push more payloads than there are free channel slots, hitting
+		// ErrPumpFull mid-transaction — rolling back the DB assignment while
+		// the already-pushed channel payloads survive (channel ops aren't
+		// transactional), orphaning them (sent with sent_today never bumped)
+		// and double-assigning the rolled-back recipient. Budget-capping the
+		// total sidesteps this: a single dispatchBatch pushing at most its
+		// budget always fits, since the filler is the sole producer and only
+		// workers ever free slots.
 		//
 		// SHUTDOWN ORDERING: this goroutine is the SOLE producer of
-		// EnqueueSend (via DispatchRunning) AND the SOLE caller of pe.Close(),
+		// EnqueueSend (via DispatchRunningBudget) AND the SOLE caller of pe.Close(),
 		// and it calls Close() only AFTER its own select loop has returned
 		// (same goroutine, strictly sequential) — so a send-after-close race is
 		// structurally impossible: no other goroutine ever writes to `pe` or
@@ -444,7 +455,7 @@ func run(ctx context.Context, cfg *config.Config) (*metrics.Server, func(), erro
 					if room <= 0 {
 						continue
 					}
-					if _, err := dispatcher.DispatchRunning(lctx, room); err != nil {
+					if _, err := dispatcher.DispatchRunningBudget(lctx, room); err != nil {
 						log.Printf("pump filler: %v", err)
 					}
 				}
