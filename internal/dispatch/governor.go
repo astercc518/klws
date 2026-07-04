@@ -60,6 +60,47 @@ SELECT
 	return float64(banFailures) / float64(attempted), attempted, nil
 }
 
+// SegStat is a country's window send outcomes (definition A).
+type SegStat struct {
+	CC          string
+	Attempted   int
+	BanFailures int
+}
+
+// SegmentBanRates returns per-country attempted/ban-failure counts over the last
+// windowSec (definition A, grouped by country_code). Mirrors FleetBanRate's
+// FILTER predicates exactly, adding GROUP BY country_code. Returns one SegStat
+// per country_code seen in the window; empty slice when there is no data.
+//
+// MUST be called with a BYPASSRLS pool (e.g. store.Manager.SystemPool(), role
+// app_system). campaign_recipients has FORCE ROW LEVEL SECURITY; a
+// tenant-scoped (RLS) pool silently narrows this "fleet-wide" query to
+// whichever single tenant is bound to that session/role, giving wrong
+// (under-counted) per-segment counts with no error.
+func SegmentBanRates(ctx context.Context, pool *pgxpool.Pool, windowSec int) ([]SegStat, error) {
+	window := fmt.Sprintf("%d seconds", windowSec)
+	rows, err := pool.Query(ctx, `
+SELECT country_code,
+  count(*) FILTER (WHERE state IN ('sent','failed') AND updated_at >= now() - $1::interval),
+  count(*) FILTER (WHERE state = 'failed' AND updated_at >= now() - $1::interval AND (
+        last_error ILIKE '%wa_warning%' OR last_error ILIKE '%banned%' OR last_error ILIKE '%403%'))
+  FROM campaign_recipients
+ GROUP BY country_code`, window)
+	if err != nil {
+		return nil, fmt.Errorf("segment ban rates: %w", err)
+	}
+	defer rows.Close()
+	var out []SegStat
+	for rows.Next() {
+		var s SegStat
+		if err := rows.Scan(&s.CC, &s.Attempted, &s.BanFailures); err != nil {
+			return nil, fmt.Errorf("scan segment stat: %w", err)
+		}
+		out = append(out, s)
+	}
+	return out, rows.Err()
+}
+
 // Governor runs the AIMD control loop: on each tick it reads the fleet ban
 // rate and, when there is enough signal, nudges the pump send-rate τ via
 // setRate. It holds the current τ across ticks so each step is relative to

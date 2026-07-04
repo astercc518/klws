@@ -57,6 +57,53 @@ func seedFleetOutcomes(t *testing.T, pool *pgxpool.Pool, nSent, nBanFailed int) 
 	}
 }
 
+// seedFleetOutcomesCC is seedFleetOutcomes but pins country_code=cc on every
+// seeded recipient, so tests can assert per-country grouping (SegmentBanRates).
+func seedFleetOutcomesCC(t *testing.T, pool *pgxpool.Pool, cc string, nSent, nBanFailed int) {
+	t.Helper()
+	ctx := context.Background()
+	cid := seedCampaign(t, ctx, pool, "fleet outcome seed "+cc)
+	for i := 0; i < nSent; i++ {
+		rid := seedRecipient(t, ctx, pool, cid, fmt.Sprintf("1555000%s%04d", cc, i), cc)
+		if _, err := pool.Exec(ctx,
+			`UPDATE campaign_recipients SET state='sent', updated_at=now() WHERE id=$1`, rid); err != nil {
+			t.Fatalf("mark sent: %v", err)
+		}
+	}
+	for i := 0; i < nBanFailed; i++ {
+		rid := seedRecipient(t, ctx, pool, cid, fmt.Sprintf("1555001%s%04d", cc, i), cc)
+		if _, err := pool.Exec(ctx,
+			`UPDATE campaign_recipients SET state='failed', last_error='wa_warning: account banned', updated_at=now() WHERE id=$1`, rid); err != nil {
+			t.Fatalf("mark ban-failed: %v", err)
+		}
+	}
+}
+
+// TestSegmentBanRates asserts SegmentBanRates groups definition-A attempted/
+// ban-failure counts by country_code, mirroring FleetBanRate's fleet-wide
+// query but per segment.
+func TestSegmentBanRates(t *testing.T) {
+	pool, ctx := pgPool(t)
+	// US: 3 sent + 2 ban-failed ; GB: 5 sent + 0 ban-failed
+	seedFleetOutcomesCC(t, pool, "US", 3, 2)
+	seedFleetOutcomesCC(t, pool, "GB", 5, 0)
+
+	stats, err := SegmentBanRates(ctx, pool, 900)
+	if err != nil {
+		t.Fatalf("SegmentBanRates: %v", err)
+	}
+	m := map[string]SegStat{}
+	for _, s := range stats {
+		m[s.CC] = s
+	}
+	if m["US"].Attempted != 5 || m["US"].BanFailures != 2 {
+		t.Fatalf("US = %+v; want attempted 5 banFailures 2", m["US"])
+	}
+	if m["GB"].Attempted != 5 || m["GB"].BanFailures != 0 {
+		t.Fatalf("GB = %+v; want attempted 5 banFailures 0", m["GB"])
+	}
+}
+
 // TestGovernor_HealRecovers asserts the AIMD loop is bidirectional: a burst of
 // over-SLO ban outcomes decreases τ, and once the fleet heals (enough clean
 // sends land in the window to push banRate back below SLO) the next
