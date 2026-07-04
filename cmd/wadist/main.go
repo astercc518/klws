@@ -435,6 +435,20 @@ func run(ctx context.Context, cfg *config.Config) (*metrics.Server, func(), erro
 			gov := dispatch.NewGovernor(mgr.SystemPool(), pump.SetRate,
 				dispatch.GovParams{SLO: cfg.GovSLO, Step: cfg.GovStep, Factor: cfg.GovFactor, MinRate: cfg.GovMinRate, MaxRate: cfg.SendRate},
 				cfg.GovWindowSec, cfg.GovMinSample, cfg.SendRate /*start τ at the ceiling*/)
+
+			// Segment Governor (L3): per-country slowdown layered on top of the
+			// fleet-wide L4 governor above. Only enabled when BOTH RiskGovernor
+			// and SegmentGovernor are "on" — default off leaves gov.setSegRate
+			// nil, so the segment pass in gov.Run is a no-op (M4 behavior,
+			// zero blast radius).
+			if cfg.SegmentGovernor == "on" {
+				gov.WithSegments(pump.SetSegmentRate, dispatch.SegParams{
+					Mult: cfg.SegMult, SegSLO: cfg.SegSLO, SlowRate: cfg.SegSlowRate, MinSample: cfg.SegMinSample,
+				})
+				log.Printf("segment governor on (mult=%.1f segSLO=%.3f slow=%.1f/s minSample=%d)",
+					cfg.SegMult, cfg.SegSLO, cfg.SegSlowRate, cfg.SegMinSample)
+			}
+
 			sup.Go(func(lctx context.Context) error {
 				return gov.Run(lctx, time.Duration(cfg.GovIntervalMs)*time.Millisecond)
 			})
