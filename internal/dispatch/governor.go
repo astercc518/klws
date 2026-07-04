@@ -117,6 +117,14 @@ type SegParams struct {
 // dodge detection as its share of fleet volume grows); threshold =
 // max(baseline*Mult, SegSLO); the cc is hot when its own rate clears that
 // threshold.
+//
+// Two known limitations for future tuners (accepted, not bugs):
+//   - Sub-MinSample segments are excluded from being judged, but their counts
+//     STILL contribute to the leave-one-out "rest" pool sums (totAtt/totBan),
+//     so a tiny noisy segment can nudge every other cc's baseline.
+//   - Under multiple simultaneously-hot ccs, one severe outlier inflates the
+//     rest-baseline used to judge the others, which can mask a second,
+//     moderately-elevated cc until the outlier recovers.
 func hotSegments(stats []SegStat, p SegParams) map[string]bool {
 	var totAtt, totBan int
 	for _, s := range stats {

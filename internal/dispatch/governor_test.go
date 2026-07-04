@@ -173,6 +173,44 @@ func TestGovernor_SegmentPass(t *testing.T) {
 	}
 }
 
+// TestGovernor_SegmentRecovers asserts the uncap/recovery direction of the L3
+// pass: a cc capped while hot gets released (setSegRate(cc,0) + dropped from
+// g.capped) on the first tick after its window ban rate falls back below
+// threshold. Exercises the "was capped, no longer hot" branch (the
+// delete-while-ranging over g.capped) that the cap-only TestGovernor_SegmentPass
+// leaves unverified.
+func TestGovernor_SegmentRecovers(t *testing.T) {
+	pool, ctx := pgPool(t)
+	seg := map[string]float64{}
+	g := NewGovernor(pool, func(float64) {}, GovParams{SLO: 0.02, Step: 5, Factor: 0.5, MinRate: 1, MaxRate: 160}, 900, 3, 100).
+		WithSegments(func(cc string, r float64) { seg[cc] = r }, SegParams{Mult: 3, SegSLO: 0.05, SlowRate: 1, MinSample: 3})
+
+	// US hot → capped at SlowRate.
+	seedFleetOutcomesCC(t, pool, "US", 2, 4) // rate .667
+	if _, _, err := g.EvaluateOnce(ctx); err != nil {
+		t.Fatalf("evaluate (cap): %v", err)
+	}
+	if seg["US"] != 1 {
+		t.Fatalf("US should be capped to SlowRate 1; seg=%v", seg)
+	}
+	if !g.capped["US"] {
+		t.Fatalf("US should be tracked in capped after cap; capped=%v", g.capped)
+	}
+
+	// Heal: a flood of clean sends drops US's window ban rate below threshold
+	// (4 / (6+400) = .0099 < SegSLO .05).
+	seedFleetOutcomesCC(t, pool, "US", 400, 0)
+	if _, _, err := g.EvaluateOnce(ctx); err != nil {
+		t.Fatalf("evaluate (recover): %v", err)
+	}
+	if seg["US"] != 0 {
+		t.Fatalf("US should be uncapped (setSegRate US,0); seg=%v", seg)
+	}
+	if g.capped["US"] {
+		t.Fatalf("US should be dropped from capped after recovery; capped=%v", g.capped)
+	}
+}
+
 func TestGovernor_EvaluateOnce(t *testing.T) {
 	pool, ctx := pgPool(t)
 	var setTo float64
