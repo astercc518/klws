@@ -326,3 +326,20 @@ func TestConfig_RiskGovernorDefaults(t *testing.T) {
 		t.Fatalf("window defaults wrong: interval=%d window=%d sample=%d", cfg.GovIntervalMs, cfg.GovWindowSec, cfg.GovMinSample)
 	}
 }
+
+func TestConfig_SegmentGovernorDefaults(t *testing.T) {
+	t.Setenv("WADIST_POSTGRES_DSN", "postgres://x")
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if cfg.SegmentGovernor != "off" {
+		t.Fatalf("SegmentGovernor default = %q; want off", cfg.SegmentGovernor)
+	}
+	if cfg.SegMult != 3 || cfg.SegSLO != 0.05 || cfg.SegSlowRate != 1 {
+		t.Fatalf("seg AIMD defaults wrong: mult=%v slo=%v slow=%v", cfg.SegMult, cfg.SegSLO, cfg.SegSlowRate)
+	}
+	if cfg.SegMinSample != 10 {
+		t.Fatalf("SegMinSample = %d; want 10", cfg.SegMinSample)
+	}
+}

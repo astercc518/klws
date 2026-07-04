@@ -82,6 +82,15 @@ type Config struct {
 	// GovIntervalMs over a GovWindowSec window, skipped when attempted<GovMinSample.
 	GovSLO, GovStep, GovFactor, GovMinRate    float64
 	GovIntervalMs, GovWindowSec, GovMinSample int
+	// SegmentGovernor enables L3 per-country segment slowdown ("on") on top of the
+	// L4 risk governor, or leaves segments uncapped ("off", default). Requires
+	// RiskGovernor=="on". Only active in pump dispatch mode.
+	SegmentGovernor string
+	// A country cc is "hot" when its window ban rate >= max(fleetBaseline*SegMult,
+	// SegSLO) and its attempted >= SegMinSample; a hot cc's sends are capped at
+	// SegSlowRate/s (uncapped again on recovery).
+	SegMult, SegSLO, SegSlowRate float64
+	SegMinSample                 int
 }
 
 // Load reads configuration from the environment. PostgresDSN is required;
@@ -183,6 +192,12 @@ func Load() (*Config, error) {
 	cfg.GovIntervalMs = intEnv("WADIST_GOV_INTERVAL_MS", 20000)
 	cfg.GovWindowSec = intEnv("WADIST_GOV_WINDOW_SEC", 900)
 	cfg.GovMinSample = intEnv("WADIST_GOV_MIN_SAMPLE", 20)
+
+	cfg.SegmentGovernor = getenv("WADIST_SEGMENT_GOVERNOR", "off")
+	cfg.SegMult = floatEnv("WADIST_SEG_MULT", 3)
+	cfg.SegSLO = floatEnv("WADIST_SEG_SLO", 0.05)
+	cfg.SegSlowRate = floatEnv("WADIST_SEG_SLOW_RATE", 1)
+	cfg.SegMinSample = intEnv("WADIST_SEG_MIN_SAMPLE", 10)
 
 	mk, err := decodeKey32("WADIST_MASTER_KEY")
 	if err != nil {
