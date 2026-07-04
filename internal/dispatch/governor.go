@@ -36,6 +36,12 @@ func nextRate(current, banRate float64, p GovParams) float64 {
 // windowSec: banFailures/attempted where attempted = recent sent+failed and
 // banFailures = recent failed whose last_error carries a ban signal. Mirrors
 // riskbreaker.banRate without the campaign filter. Returns (0,0,nil) when idle.
+//
+// MUST be called with a BYPASSRLS pool (e.g. store.Manager.SystemPool(), role
+// app_system). campaign_recipients has FORCE ROW LEVEL SECURITY; a
+// tenant-scoped (RLS) pool silently narrows this "fleet-wide" query to
+// whichever single tenant is bound to that session/role, giving a wrong
+// (under-counted) ban rate with no error.
 func FleetBanRate(ctx context.Context, pool *pgxpool.Pool, windowSec int) (float64, int, error) {
 	window := fmt.Sprintf("%d seconds", windowSec)
 	var attempted, banFailures int

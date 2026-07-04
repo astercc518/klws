@@ -57,6 +57,32 @@ func seedFleetOutcomes(t *testing.T, pool *pgxpool.Pool, nSent, nBanFailed int) 
 	}
 }
 
+// TestGovernor_HealRecovers asserts the AIMD loop is bidirectional: a burst of
+// over-SLO ban outcomes decreases τ, and once the fleet heals (enough clean
+// sends land in the window to push banRate back below SLO) the next
+// EvaluateOnce increases τ by Step. Reuses the seedFleetOutcomes helper above.
+func TestGovernor_HealRecovers(t *testing.T) {
+	pool, ctx := pgPool(t)
+	var last float64
+	params := GovParams{SLO: 0.02, Step: 5, Factor: 0.5, MinRate: 1, MaxRate: 160}
+	g := NewGovernor(pool, func(r float64) { last = r }, params, 900, 3, 100)
+
+	seedFleetOutcomes(t, pool, 2, 3) // attempted=5, banFailed=3 → banRate=0.6 >= SLO → decrease
+	if r, applied, err := g.EvaluateOnce(ctx); err != nil || !applied || r != 50 {
+		t.Fatalf("decrease: r=%v applied=%v err=%v; want 50,true,nil", r, applied, err)
+	}
+
+	// Heal: add many clean sends so the window's banRate falls below SLO.
+	seedFleetOutcomes(t, pool, 300, 0)
+	r, applied, err := g.EvaluateOnce(ctx)
+	if err != nil || !applied || r != 55 { // 50 + Step(5)
+		t.Fatalf("recover: r=%v applied=%v err=%v; want 55,true,nil", r, applied, err)
+	}
+	if last != 55 {
+		t.Fatalf("setRate got %v; want 55", last)
+	}
+}
+
 func TestGovernor_EvaluateOnce(t *testing.T) {
 	pool, ctx := pgPool(t)
 	var setTo float64

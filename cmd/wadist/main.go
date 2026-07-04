@@ -419,6 +419,29 @@ func run(ctx context.Context, cfg *config.Config) (*metrics.Server, func(), erro
 		// Pump mode: pump.Run drains PumpEnqueuer's channel and runs the send
 		// pipeline; the filler below is the sole producer feeding it.
 		sup.Go(func(lctx context.Context) error { return pump.Run(lctx) })
+
+		// Risk Governor: adaptive-τ AIMD loop over the pump's send rate, driven
+		// by the fleet-wide ban rate. Only meaningful in pump mode (it holds
+		// the pump's SetRate) and only when explicitly enabled — default is
+		// off, which leaves the pump at fixed cfg.SendRate (M3 behavior, zero
+		// blast radius). asynq mode never constructs it (no pump to drive).
+		//
+		// Wired with mgr.SystemPool() (BYPASSRLS), matching riskbreaker below:
+		// FleetBanRate queries campaign_recipients, which has FORCE ROW LEVEL
+		// SECURITY. With a tenant-scoped (RLS) pool the fleet-wide aggregate
+		// would silently narrow to one tenant, so mgr.Pool() must never be
+		// used here.
+		if cfg.RiskGovernor == "on" {
+			gov := dispatch.NewGovernor(mgr.SystemPool(), pump.SetRate,
+				dispatch.GovParams{SLO: cfg.GovSLO, Step: cfg.GovStep, Factor: cfg.GovFactor, MinRate: cfg.GovMinRate, MaxRate: cfg.SendRate},
+				cfg.GovWindowSec, cfg.GovMinSample, cfg.SendRate /*start τ at the ceiling*/)
+			sup.Go(func(lctx context.Context) error {
+				return gov.Run(lctx, time.Duration(cfg.GovIntervalMs)*time.Millisecond)
+			})
+			log.Printf("risk governor on (SLO=%.3f step=%.1f factor=%.2f min=%.1f max=%.1f window=%ds interval=%dms)",
+				cfg.GovSLO, cfg.GovStep, cfg.GovFactor, cfg.GovMinRate, cfg.SendRate, cfg.GovWindowSec, cfg.GovIntervalMs)
+		}
+
 		// Filler: backpressure-driven top-up (no 1s pulse) — tops the buffer up
 		// to its capacity every 50ms via Dispatcher.DispatchRunningBudget, which
 		// (unlike DispatchRunning, used by asynq mode) caps enqueues to `room`
