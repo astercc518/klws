@@ -130,6 +130,49 @@ func TestGovernor_HealRecovers(t *testing.T) {
 	}
 }
 
+// TestHotSegments asserts the pure hot-cc detection. Each cc's baseline is the
+// rest of the fleet's ban rate (leave-one-out: cc's own counts excluded from
+// its baseline, so a hot segment can't inflate the very threshold it must
+// clear). US: rest=GB+BR → baseline=(0+2)/(20+2)=.0909, threshold=max(.2727,
+// .05)=.2727, rate .4 >= .2727 → hot. GB: rest=US+BR → baseline=(4+2)/(10+2)
+// =.5, threshold=1.5, rate 0 → not hot. BR: attempted(2)<MinSample(3) → not
+// judged at all.
+func TestHotSegments(t *testing.T) {
+	p := SegParams{Mult: 3, SegSLO: 0.05, SlowRate: 1, MinSample: 3}
+	stats := []SegStat{
+		{CC: "US", Attempted: 10, BanFailures: 4},
+		{CC: "GB", Attempted: 20, BanFailures: 0},
+		{CC: "BR", Attempted: 2, BanFailures: 2},
+	}
+	hot := hotSegments(stats, p)
+	if !hot["US"] || hot["GB"] || hot["BR"] {
+		t.Fatalf("hot = %v; want only US", hot)
+	}
+}
+
+// TestGovernor_SegmentPass asserts the L3 segment pass calls setSegRate to cap
+// a hot cc (US) at SlowRate while never touching a clean one (GB), running
+// inside a real EvaluateOnce call (so it also proves the pass is wired into
+// EvaluateOnce without disturbing L4's own return value).
+func TestGovernor_SegmentPass(t *testing.T) {
+	pool, ctx := pgPool(t)
+	seg := map[string]float64{}
+	g := NewGovernor(pool, func(float64) {}, GovParams{SLO: 0.02, Step: 5, Factor: 0.5, MinRate: 1, MaxRate: 160}, 900, 3, 100).
+		WithSegments(func(cc string, r float64) { seg[cc] = r }, SegParams{Mult: 3, SegSLO: 0.05, SlowRate: 1, MinSample: 3})
+
+	seedFleetOutcomesCC(t, pool, "US", 2, 4) // US hot (rate .667)
+	seedFleetOutcomesCC(t, pool, "GB", 10, 0)
+	if _, _, err := g.EvaluateOnce(ctx); err != nil {
+		t.Fatalf("evaluate: %v", err)
+	}
+	if seg["US"] != 1 {
+		t.Fatalf("US should be capped to SlowRate 1; seg=%v", seg)
+	}
+	if _, ok := seg["GB"]; ok {
+		t.Fatalf("GB should never be capped; seg=%v", seg)
+	}
+}
+
 func TestGovernor_EvaluateOnce(t *testing.T) {
 	pool, ctx := pgPool(t)
 	var setTo float64

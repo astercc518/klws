@@ -101,10 +101,61 @@ SELECT country_code,
 	return out, rows.Err()
 }
 
+// SegParams are the L3 (per-cc) segment-governor knobs. A cc is judged
+// against the rest of the fleet's ban rate scaled by Mult, floored at the
+// absolute SegSLO so a healthy fleet doesn't flag noise; MinSample gates
+// judgment on ccs with too little traffic to be meaningful.
+type SegParams struct {
+	Mult, SegSLO, SlowRate float64
+	MinSample              int
+}
+
+// hotSegments returns the set of ccs whose window ban rate is elevated
+// relative to the rest of the fleet. For each cc with attempted >= MinSample,
+// its baseline is computed leave-one-out (the pooled rate of every OTHER
+// stat, so a segment already going bad can't inflate its own threshold and
+// dodge detection as its share of fleet volume grows); threshold =
+// max(baseline*Mult, SegSLO); the cc is hot when its own rate clears that
+// threshold.
+func hotSegments(stats []SegStat, p SegParams) map[string]bool {
+	var totAtt, totBan int
+	for _, s := range stats {
+		totAtt += s.Attempted
+		totBan += s.BanFailures
+	}
+	hot := map[string]bool{}
+	for _, s := range stats {
+		if s.Attempted < p.MinSample {
+			continue
+		}
+		restAtt := totAtt - s.Attempted
+		restBan := totBan - s.BanFailures
+		var baseline float64
+		if restAtt > 0 {
+			baseline = float64(restBan) / float64(restAtt)
+		}
+		threshold := baseline * p.Mult
+		if p.SegSLO > threshold {
+			threshold = p.SegSLO
+		}
+		rate := float64(s.BanFailures) / float64(s.Attempted)
+		if rate >= threshold {
+			hot[s.CC] = true
+		}
+	}
+	return hot
+}
+
 // Governor runs the AIMD control loop: on each tick it reads the fleet ban
 // rate and, when there is enough signal, nudges the pump send-rate τ via
 // setRate. It holds the current τ across ticks so each step is relative to
 // the last applied value (not the original starting rate).
+//
+// Optionally (via WithSegments) it also runs an L3 per-cc segment pass each
+// tick: hot ccs get capped at a slow rate via setSegRate, and recovered ccs
+// get uncapped. This pass is independent of the L4 fleet-wide AIMD above —
+// its errors are logged and swallowed so a segment-query hiccup never blocks
+// the fleet-wide rate control.
 type Governor struct {
 	pool      *pgxpool.Pool
 	setRate   func(float64)
@@ -112,12 +163,52 @@ type Governor struct {
 	windowSec int
 	minSample int
 	current   float64
+
+	setSegRate func(cc string, r float64)
+	segParams  SegParams
+	capped     map[string]bool
 }
 
 // NewGovernor builds a Governor. current is the initial τ (= SendRate);
 // setRate is typically pump.SetRate.
 func NewGovernor(pool *pgxpool.Pool, setRate func(float64), params GovParams, windowSec, minSample int, current float64) *Governor {
 	return &Governor{pool: pool, setRate: setRate, params: params, windowSec: windowSec, minSample: minSample, current: current}
+}
+
+// WithSegments enables the L3 segment pass: setSegRate(cc, SlowRate) caps a
+// hot cc, setSegRate(cc, 0) uncaps a recovered one. Builder — returns g.
+// Without this call setSegRate stays nil, evaluateSegments is a no-op, and
+// EvaluateOnce behaves exactly as it did before Task 4 (zero blast radius).
+func (g *Governor) WithSegments(setSegRate func(cc string, r float64), p SegParams) *Governor {
+	g.setSegRate = setSegRate
+	g.segParams = p
+	g.capped = map[string]bool{}
+	return g
+}
+
+// evaluateSegments runs one L3 pass: cap hot ccs at SlowRate, uncap ccs that
+// were capped last round but are no longer hot. No-op when segments aren't
+// enabled (setSegRate nil, i.e. WithSegments was never called).
+func (g *Governor) evaluateSegments(ctx context.Context) error {
+	if g.setSegRate == nil {
+		return nil
+	}
+	stats, err := SegmentBanRates(ctx, g.pool, g.windowSec)
+	if err != nil {
+		return err
+	}
+	hot := hotSegments(stats, g.segParams)
+	for cc := range hot {
+		g.setSegRate(cc, g.segParams.SlowRate)
+		g.capped[cc] = true
+	}
+	for cc := range g.capped {
+		if !hot[cc] {
+			g.setSegRate(cc, 0) // recovered → uncap
+			delete(g.capped, cc)
+		}
+	}
+	return nil
 }
 
 // EvaluateOnce reads the fleet ban rate and, if there is enough signal
@@ -129,10 +220,17 @@ func (g *Governor) EvaluateOnce(ctx context.Context) (float64, bool, error) {
 		return g.current, false, err
 	}
 	if attempted < g.minSample {
+		if serr := g.evaluateSegments(ctx); serr != nil {
+			log.Printf("dispatch: segment governor: %v", serr)
+		}
 		return g.current, false, nil // not enough signal; leave τ unchanged
 	}
 	g.current = nextRate(g.current, banRate, g.params)
 	g.setRate(g.current)
+
+	if serr := g.evaluateSegments(ctx); serr != nil {
+		log.Printf("dispatch: segment governor: %v", serr)
+	}
 	return g.current, true, nil
 }
 
