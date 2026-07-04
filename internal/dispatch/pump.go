@@ -66,6 +66,13 @@ type Pump struct {
 	resolve SendBodyResolver
 	lim     *rate.Limiter
 	workers int
+
+	// segMu guards segLim, the per-country segment limiters set by the L3
+	// segment governor via SetSegmentRate. An absent entry means "uncapped"
+	// (only the global lim token gates that cc), so a zero-configuration
+	// Pump (empty segLim) is byte-for-byte the M4 behavior.
+	segMu  sync.RWMutex
+	segLim map[string]*rate.Limiter
 }
 
 // NewPump wires a Pump. burst == workers so all workers can grab a token at
@@ -87,6 +94,7 @@ func NewPump(pe *PumpEnqueuer, w *SendWorker, resolve SendBodyResolver, ratePerS
 		resolve: resolve,
 		lim:     lim,
 		workers: workers,
+		segLim:  map[string]*rate.Limiter{},
 	}
 }
 
@@ -119,6 +127,15 @@ func (p *Pump) Run(ctx context.Context) error {
 					// ProcessSend an about-to-expire ctx, aborting the send.
 					sendCtx = context.Background()
 				}
+				if seg := p.segLimiter(pl.Country); seg != nil {
+					// Second gate: a payload for a capped cc must clear BOTH the
+					// global token and its segment token. Same drain-on-error
+					// fallback as the global Wait above — never drop
+					// committed-but-unsent work on shutdown.
+					if err := seg.Wait(ctx); err != nil {
+						sendCtx = context.Background()
+					}
+				}
 				p.process(sendCtx, pl)
 			}
 		}()
@@ -136,6 +153,29 @@ func (p *Pump) SetRate(r float64) {
 		return
 	}
 	p.lim.SetLimit(rate.Limit(r))
+}
+
+// SetSegmentRate caps sends for a given country cc at r/s (r>0), or uncaps it
+// (r<=0 removes the limiter). Used by the L3 segment governor. Thread-safe.
+func (p *Pump) SetSegmentRate(cc string, r float64) {
+	p.segMu.Lock()
+	defer p.segMu.Unlock()
+	if r <= 0 {
+		delete(p.segLim, cc)
+		return
+	}
+	if lim, ok := p.segLim[cc]; ok {
+		lim.SetLimit(rate.Limit(r))
+		return
+	}
+	p.segLim[cc] = rate.NewLimiter(rate.Limit(r), 1)
+}
+
+// segLimiter returns the segment limiter for cc, or nil if uncapped.
+func (p *Pump) segLimiter(cc string) *rate.Limiter {
+	p.segMu.RLock()
+	defer p.segMu.RUnlock()
+	return p.segLim[cc]
 }
 
 // process loads the send body/media for the payload's campaign and runs the

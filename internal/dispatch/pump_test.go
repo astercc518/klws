@@ -108,6 +108,26 @@ func TestPump_SetRate(t *testing.T) {
 	}
 }
 
+func TestPump_SetSegmentRate(t *testing.T) {
+	pe := NewPumpEnqueuer(1)
+	p := NewPump(pe, nil, nil, 100, 2)
+	if p.segLimiter("US") != nil {
+		t.Fatalf("no segment limiter expected initially")
+	}
+	p.SetSegmentRate("US", 5)
+	lim := p.segLimiter("US")
+	if lim == nil || lim.Limit() != rate.Limit(5) {
+		t.Fatalf("US segment limiter = %v; want rate 5", lim)
+	}
+	if p.segLimiter("GB") != nil {
+		t.Fatalf("GB must be unaffected (nil)")
+	}
+	p.SetSegmentRate("US", 0) // uncap → removed
+	if p.segLimiter("US") != nil {
+		t.Fatalf("US segment limiter should be removed after SetSegmentRate(0)")
+	}
+}
+
 func TestPump_RateLimitsAndProcesses(t *testing.T) {
 	if testing.Short() {
 		t.Skip("integration")
