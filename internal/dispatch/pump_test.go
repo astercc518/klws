@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
+	"golang.org/x/time/rate"
 
 	"github.com/acme/wadist/internal/billing"
 	"github.com/acme/wadist/internal/sendgate"
@@ -91,6 +92,19 @@ func waitFor(t *testing.T, cond func() bool, timeout time.Duration) {
 	}
 	if !cond() {
 		t.Fatalf("condition not met within %s", timeout)
+	}
+}
+
+func TestPump_SetRate(t *testing.T) {
+	pe := NewPumpEnqueuer(1)
+	p := NewPump(pe, nil, nil, 100, 2) // sender/resolve nil: not exercised here
+	p.SetRate(50)
+	if got := p.lim.Limit(); got != rate.Limit(50) {
+		t.Fatalf("after SetRate(50) limit=%v; want 50", got)
+	}
+	p.SetRate(0) // <=0 → unlimited
+	if got := p.lim.Limit(); got != rate.Inf {
+		t.Fatalf("after SetRate(0) limit=%v; want Inf", got)
 	}
 }
 

@@ -127,6 +127,17 @@ func (p *Pump) Run(ctx context.Context) error {
 	return ctx.Err()
 }
 
+// SetRate updates the pump's token-bucket rate at runtime (used by the Risk
+// Governor). r<=0 means unlimited (rate.Inf), matching NewPump. Thread-safe:
+// rate.Limiter.SetLimit is mutex-guarded, safe against concurrent Wait().
+func (p *Pump) SetRate(r float64) {
+	if r <= 0 {
+		p.lim.SetLimit(rate.Inf)
+		return
+	}
+	p.lim.SetLimit(rate.Limit(r))
+}
+
 // process loads the send body/media for the payload's campaign and runs the
 // existing ProcessSend pipeline. Per-send errors are logged and swallowed —
 // the pump never crashes on a single bad send.
