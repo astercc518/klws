@@ -74,6 +74,14 @@ type Config struct {
 	PumpBuffer int // WADIST_PUMP_BUFFER default 512
 	// SendWorkers is the number of concurrent send workers in pump mode.
 	SendWorkers int // WADIST_SEND_WORKERS default = AsynqConcurrency
+	// RiskGovernor enables the adaptive-τ risk governor ("on") or leaves the pump
+	// rate fixed at SendRate ("off", default). Only active in pump dispatch mode.
+	RiskGovernor string // WADIST_RISK_GOVERNOR default "off"
+	// AIMD params: banRate>=GovSLO → τ*=GovFactor (floored at GovMinRate);
+	// banRate<GovSLO → τ+=GovStep (capped at SendRate). Evaluated every
+	// GovIntervalMs over a GovWindowSec window, skipped when attempted<GovMinSample.
+	GovSLO, GovStep, GovFactor, GovMinRate    float64
+	GovIntervalMs, GovWindowSec, GovMinSample int
 }
 
 // Load reads configuration from the environment. PostgresDSN is required;
@@ -166,6 +174,15 @@ func Load() (*Config, error) {
 	cfg.PumpBuffer = intEnv("WADIST_PUMP_BUFFER", 512)
 	cfg.SendWorkers = intEnv("WADIST_SEND_WORKERS", cfg.AsynqConcurrency)
 	cfg.SendRate = floatEnv("WADIST_SEND_RATE", 160.0)
+
+	cfg.RiskGovernor = getenv("WADIST_RISK_GOVERNOR", "off")
+	cfg.GovSLO = floatEnv("WADIST_GOV_SLO", 0.02)
+	cfg.GovStep = floatEnv("WADIST_GOV_STEP", 5)
+	cfg.GovFactor = floatEnv("WADIST_GOV_FACTOR", 0.5)
+	cfg.GovMinRate = floatEnv("WADIST_GOV_MIN_RATE", 1)
+	cfg.GovIntervalMs = intEnv("WADIST_GOV_INTERVAL_MS", 20000)
+	cfg.GovWindowSec = intEnv("WADIST_GOV_WINDOW_SEC", 900)
+	cfg.GovMinSample = intEnv("WADIST_GOV_MIN_SAMPLE", 20)
 
 	mk, err := decodeKey32("WADIST_MASTER_KEY")
 	if err != nil {

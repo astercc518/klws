@@ -309,3 +309,20 @@ func TestLoad_AntifpDefaults(t *testing.T) {
 		t.Fatalf("linger 默认 = %v", cfg.Linger)
 	}
 }
+
+func TestConfig_RiskGovernorDefaults(t *testing.T) {
+	t.Setenv("WADIST_POSTGRES_DSN", "postgres://x")
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if cfg.RiskGovernor != "off" {
+		t.Fatalf("RiskGovernor default = %q; want off", cfg.RiskGovernor)
+	}
+	if cfg.GovSLO != 0.02 || cfg.GovFactor != 0.5 || cfg.GovStep != 5 || cfg.GovMinRate != 1 {
+		t.Fatalf("AIMD defaults wrong: slo=%v step=%v factor=%v min=%v", cfg.GovSLO, cfg.GovStep, cfg.GovFactor, cfg.GovMinRate)
+	}
+	if cfg.GovIntervalMs != 20000 || cfg.GovWindowSec != 900 || cfg.GovMinSample != 20 {
+		t.Fatalf("window defaults wrong: interval=%d window=%d sample=%d", cfg.GovIntervalMs, cfg.GovWindowSec, cfg.GovMinSample)
+	}
+}
