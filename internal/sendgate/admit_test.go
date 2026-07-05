@@ -19,7 +19,7 @@ func TestAdmit_AllowsActiveHealthyWithinQuota(t *testing.T) {
 	}
 	g, ctx := newGate(t)
 	seedAccount(t, ctx, g.pool, "acc1", "active", time.Now().Add(-30*24*time.Hour), 100)
-	dec, err := g.Admit(ctx, "acc1", time.Now())
+	dec, err := g.Admit(ctx, "acc1", "US", time.Now())
 	if err != nil {
 		t.Fatalf("admit: %v", err)
 	}
@@ -34,7 +34,7 @@ func TestAdmit_DeniesBanned(t *testing.T) {
 	}
 	g, ctx := newGate(t)
 	seedAccount(t, ctx, g.pool, "acc1", "banned", time.Now().Add(-30*24*time.Hour), 100)
-	dec, err := g.Admit(ctx, "acc1", time.Now())
+	dec, err := g.Admit(ctx, "acc1", "US", time.Now())
 	if err != nil {
 		t.Fatalf("admit: %v", err)
 	}
@@ -53,7 +53,7 @@ func TestAdmit_DeniesQuarantined(t *testing.T) {
 	if _, err := g.pool.Exec(ctx, `UPDATE account_devices SET quarantined_until=$1 WHERE account_jid='acc1'`, now.Add(time.Hour)); err != nil {
 		t.Fatalf("quarantine: %v", err)
 	}
-	dec, err := g.Admit(ctx, "acc1", now)
+	dec, err := g.Admit(ctx, "acc1", "US", now)
 	if err != nil {
 		t.Fatalf("admit: %v", err)
 	}
@@ -71,12 +71,12 @@ func TestAdmit_DeniesQuotaExhausted(t *testing.T) {
 	seedAccount(t, ctx, g.pool, "acc1", "active", time.Now(), 100)
 	now := time.Now()
 	for i := 0; i < 20; i++ {
-		dec, err := g.Admit(ctx, "acc1", now.Add(time.Duration(i)*10*time.Second))
+		dec, err := g.Admit(ctx, "acc1", "US", now.Add(time.Duration(i)*10*time.Second))
 		if err != nil || !dec.Allow {
 			t.Fatalf("admit %d: dec=%+v err=%v", i, dec, err)
 		}
 	}
-	dec, err := g.Admit(ctx, "acc1", now.Add(2000*time.Second))
+	dec, err := g.Admit(ctx, "acc1", "US", now.Add(2000*time.Second))
 	if err != nil {
 		t.Fatalf("admit: %v", err)
 	}

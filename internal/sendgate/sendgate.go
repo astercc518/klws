@@ -91,8 +91,9 @@ type Decision struct {
 }
 
 // Admit is the pre-billing gate: ban state → quarantine → quota/pacing. Any
-// failed check denies WITHOUT consuming the (later) billing hold.
-func (g *SendGate) Admit(ctx context.Context, jid string, now time.Time) (Decision, error) {
+// failed check denies WITHOUT consuming the (later) billing hold. cc is the
+// recipient country code, used to key the country-segment backoff multiplier.
+func (g *SendGate) Admit(ctx context.Context, jid, cc string, now time.Time) (Decision, error) {
 	var banStatus string
 	var registeredAt *time.Time
 	var health int
@@ -120,7 +121,9 @@ SELECT ban_status::text, registered_at, health_score, quarantined_until
 		reg = *registeredAt
 	}
 	quota := EffectiveQuota(reg, health, now)
-	ticket, reason, err := g.adm.Admit(ctx, jid, quota, jitteredGap(g.baseGap), now)
+	ccKey := "backoff:cc:" + cc
+	netKey := "backoff:net:" // placeholder — /24 wiring deferred
+	ticket, reason, err := g.adm.Admit(ctx, jid, quota, jitteredGap(g.baseGap), now, ccKey, netKey)
 	if err != nil {
 		return Decision{}, err
 	}

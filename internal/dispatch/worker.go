@@ -31,7 +31,7 @@ func (w *SendWorker) ProcessSend(ctx context.Context, pl SendPayload, body, medi
 		return nil // terminal — already processed; at-least-once retry is a no-op
 	}
 
-	dec, err := w.gate.Admit(ctx, pl.JID, time.Now())
+	dec, err := w.gate.Admit(ctx, pl.JID, pl.Country, time.Now())
 	if err != nil {
 		return fmt.Errorf("admit: %w", err)
 	}

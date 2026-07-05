@@ -22,6 +22,22 @@ if redis.call('TTL', KEYS[1]) < 0 then redis.call('EXPIRE', KEYS[1], tonumber(AR
 redis.call('SET', KEYS[2], ARGV[3])
 return {1, 'ok'}`
 
+// admitLuaBackoff is admitLua with the min_gap widened by the max of two
+// segment backoff multipliers before the pacing check. KEYS[1]=daily counter,
+// KEYS[2]=last-send timestamp, KEYS[3]=cc backoff key, KEYS[4]=net backoff key.
+// ARGV: 1=daily_quota 2=min_gap_ms 3=now_ms 4=daily_ttl_seconds.
+const admitLuaBackoff = `
+local sent = tonumber(redis.call('GET', KEYS[1]) or '0')
+if sent >= tonumber(ARGV[1]) then return {0, 'daily_quota'} end
+local mult = math.max(1, tonumber(redis.call('GET', KEYS[3]) or '1'), tonumber(redis.call('GET', KEYS[4]) or '1'))
+local gap = tonumber(ARGV[2]) * mult
+local last = tonumber(redis.call('GET', KEYS[2]) or '0')
+if tonumber(ARGV[3]) - last < gap then return {0, 'pacing'} end
+redis.call('INCR', KEYS[1])
+if redis.call('TTL', KEYS[1]) < 0 then redis.call('EXPIRE', KEYS[1], tonumber(ARGV[4])) end
+redis.call('SET', KEYS[2], ARGV[3])
+return {1, 'ok'}`
+
 // backoffLua atomically multiplies a segment's backoff key by Factor (capped
 // at Max) and refreshes its TTL. The stored value is an integer multiplier
 // that admission can later use to widen that segment's min_gap.
@@ -50,9 +66,13 @@ type Admission struct {
 }
 
 func NewAdmission(rdb *goredis.Client, bp BackoffParams) *Admission {
+	script := admitLua
+	if bp.On {
+		script = admitLuaBackoff
+	}
 	return &Admission{
 		rdb:     rdb,
-		admit:   goredis.NewScript(admitLua),
+		admit:   goredis.NewScript(script),
 		backoff: goredis.NewScript(backoffLua),
 		bp:      bp,
 	}
@@ -83,7 +103,10 @@ type Ticket struct {
 
 // Admit atomically checks daily quota + pacing. On success returns a Ticket and
 // "ok"; on rejection returns (nil, reason) where reason is "daily_quota"/"pacing".
-func (a *Admission) Admit(ctx context.Context, jid string, quota int, minGap time.Duration, now time.Time) (*Ticket, string, error) {
+// ccKey/netKey are per-segment backoff multiplier keys; they are always passed
+// (4 KEYS) — when backoff is off, admit is admitLua which only references
+// KEYS[1,2], so the extra keys are harmless.
+func (a *Admission) Admit(ctx context.Context, jid string, quota int, minGap time.Duration, now time.Time, ccKey, netKey string) (*Ticket, string, error) {
 	u := now.UTC()
 	dayKey := "q:" + jid + ":" + u.Format("20060102")
 	paceKey := "p:" + jid
@@ -93,7 +116,7 @@ func (a *Admission) Admit(ctx context.Context, jid string, quota int, minGap tim
 	}
 
 	res, err := a.admit.Run(ctx, a.rdb,
-		[]string{dayKey, paceKey},
+		[]string{dayKey, paceKey, ccKey, netKey},
 		quota, minGap.Milliseconds(), u.UnixMilli(), ttl).Result()
 	if err != nil {
 		return nil, "", fmt.Errorf("admit script: %w", err)
