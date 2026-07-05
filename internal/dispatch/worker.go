@@ -77,6 +77,7 @@ func (w *SendWorker) ProcessSend(ctx context.Context, pl SendPayload, body, medi
 			if hsErr := w.gate.ApplyHealthSignal(ctx, pl.JID, "wa_warning", 6*time.Hour); hsErr != nil {
 				sendErr = fmt.Errorf("%w; health-signal: %v", sendErr, hsErr)
 			}
+			_ = w.gate.RecordSegmentWarning(ctx, pl.Country)
 			w.m.RecordHealthSignal("wa_warning")
 		} else {
 			_ = w.gate.ApplyHealthSignal(ctx, pl.JID, "undelivered", 0)

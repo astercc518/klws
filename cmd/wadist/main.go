@@ -136,8 +136,14 @@ func run(ctx context.Context, cfg *config.Config) (*metrics.Server, func(), erro
 
 	promReg.MustRegister(metrics.NewDBCollector(pool, 10*time.Second, reg))
 
-	adm := sendgate.NewAdmission(rdb, sendgate.BackoffParams{})
+	adm := sendgate.NewAdmission(rdb, sendgate.BackoffParams{On: cfg.BackoffOn, Factor: cfg.BackoffFactor, Max: cfg.BackoffMax, TTL: cfg.BackoffTTL})
 	gate := sendgate.NewSendGate(pool, adm, 3*time.Second)
+	if cfg.BackoffOn {
+		log.Printf("admission backoff on (factor=%d max=%d ttl=%s)", cfg.BackoffFactor, cfg.BackoffMax, cfg.BackoffTTL)
+	}
+	if cfg.PgPoolMode == "pgbouncer" {
+		log.Printf("pg pool mode=pgbouncer query=%s", cfg.PgQueryMode)
+	}
 
 	asynqClient := asynq.NewClient(asynq.RedisClientOpt{Addr: cfg.RedisAddr})
 

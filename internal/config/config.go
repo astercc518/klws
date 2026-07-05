@@ -104,6 +104,11 @@ type Config struct {
 	PgPoolMode string // WADIST_PG_POOL_MODE default "direct"
 	// PgQueryMode is the pgx exec mode under pgbouncer: "exec" (default) | "simple".
 	PgQueryMode string // WADIST_PG_QUERY_MODE default "exec"
+	// Admission backoff (segment-level exponential slowdown on wa_warning).
+	BackoffOn     bool          // WADIST_BACKOFF_ON default "off"
+	BackoffFactor int           // WADIST_BACKOFF_FACTOR default 2
+	BackoffMax    int           // WADIST_BACKOFF_MAX default 8
+	BackoffTTL    time.Duration // WADIST_BACKOFF_TTL_MS default 300000ms
 }
 
 // Load reads configuration from the environment. PostgresDSN is required;
@@ -220,6 +225,11 @@ func Load() (*Config, error) {
 
 	cfg.PgPoolMode = getenv("WADIST_PG_POOL_MODE", "direct")
 	cfg.PgQueryMode = getenv("WADIST_PG_QUERY_MODE", "exec")
+
+	cfg.BackoffOn = getenv("WADIST_BACKOFF_ON", "off") != "off"
+	cfg.BackoffFactor = intEnv("WADIST_BACKOFF_FACTOR", 2)
+	cfg.BackoffMax = intEnv("WADIST_BACKOFF_MAX", 8)
+	cfg.BackoffTTL = msEnv("WADIST_BACKOFF_TTL_MS", 300000)
 
 	mk, err := decodeKey32("WADIST_MASTER_KEY")
 	if err != nil {

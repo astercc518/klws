@@ -133,6 +133,16 @@ SELECT ban_status::text, registered_at, health_score, quarantined_until
 	return Decision{Allow: true, Reason: "ok", Ticket: ticket}, nil
 }
 
+// RecordSegmentWarning bumps the recipient country's admission backoff on a
+// wa_warning. No-op when backoff is disabled (Admission handles the gate) or
+// when cc is empty (avoid a shared "backoff:cc:" key across accounts).
+func (g *SendGate) RecordSegmentWarning(ctx context.Context, cc string) error {
+	if cc == "" {
+		return nil
+	}
+	return g.adm.RecordWarning(ctx, "backoff:cc:"+cc)
+}
+
 // jitteredGap returns base ± up to 40% jitter, so the send cadence looks human
 // rather than like a fixed timer. base==0 disables pacing.
 func jitteredGap(base time.Duration) time.Duration {

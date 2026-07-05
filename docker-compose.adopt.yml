@@ -1,0 +1,26 @@
+# 本机专属 override(gitignore):让 compose 的 postgres 复用现有 wadist-pg 的匿名卷,
+# 从而沿用既有数据(租户/钱包/RLS 角色/seed),无需重迁移。
+# 用法:docker compose -f docker-compose.prod.yml -f docker-compose.adopt.yml up -d
+services:
+  pgbouncer:
+    image: edoburu/pgbouncer:latest
+    restart: always
+    environment:
+      DB_HOST: postgres
+      DB_USER: app
+      DB_PASSWORD: app
+      DB_NAME: wadist
+      POOL_MODE: transaction
+      MAX_CLIENT_CONN: "1000"
+      DEFAULT_POOL_SIZE: "50"
+      AUTH_TYPE: plain
+    depends_on: [postgres]
+    ports: ["6432:6432"]
+    # NOTE: 本机未集成测;上线随 two-file(-f docker-compose.prod.yml -f docker-compose.adopt.yml)翻开。
+    # app 侧须置 WADIST_PG_POOL_MODE=pgbouncer + WADIST_OWNERSHIP_BACKEND=redis,
+    # 且 WADIST_POSTGRES_DSN 指向 pgbouncer:6432。
+
+volumes:
+  pgdata:
+    external: true
+    name: 8747bb13baf4bd999d8670585986fdfaf95a1c6f5b8149395e3b85b9eef1a94b
