@@ -26,6 +26,22 @@ type PresenceConn interface {
 	SendTyping(ctx context.Context, chatPhone string, composing bool) error
 }
 
+// Liveness is one connection's socket-liveness snapshot. Alive means the
+// underlying transport is connected and logged-in right now; Permanent means a
+// terminal WhatsApp signal (LoggedOut / StreamReplaced) has been observed, so the
+// account must not be auto-re-warmed on this node.
+type Liveness struct {
+	Alive     bool
+	Permanent bool
+}
+
+// LivenessConn is an optional capability on top of Conn: report socket liveness.
+// waConn implements it; conns that do not (test fakes without it) are treated as
+// assume-healthy at the call site (never reaped on an unprobeable conn).
+type LivenessConn interface {
+	Liveness() Liveness
+}
+
 // DeviceLockHandle is the cross-process ownership lock for an account.
 // *store.DeviceLock satisfies this structurally.
 type DeviceLockHandle interface {
@@ -51,6 +67,16 @@ func (s *Session) JID() string { return s.jid }
 
 func (s *Session) Healthy(ctx context.Context) bool {
 	return s.lock != nil && s.lock.Healthy(ctx)
+}
+
+// Liveness reports the connection's socket liveness when the underlying Conn
+// implements LivenessConn. ok=false means the capability is absent — the caller
+// should assume-healthy (never reap what it cannot probe).
+func (s *Session) Liveness() (Liveness, bool) {
+	if lc, ok := s.conn.(LivenessConn); ok {
+		return lc.Liveness(), true
+	}
+	return Liveness{}, false
 }
 
 // GracefulClose signals presence-unavailable, waits linger (if > 0), then calls

@@ -75,3 +75,31 @@ func TestSession_Close_Idempotent(t *testing.T) {
 	s.Close(context.Background()) // must not panic / double-release
 	_ = errors.New
 }
+
+// liveConn is a Conn that also implements LivenessConn, for Session.Liveness tests.
+type liveConn struct {
+	fakeConn
+	lv Liveness
+}
+
+func (c *liveConn) Liveness() Liveness { return c.lv }
+
+func TestSessionLiveness_CapabilityPresent(t *testing.T) {
+	conn := &liveConn{lv: Liveness{Alive: false, Permanent: true}}
+	s := NewSession("j1", conn, &fakeLock{})
+	lv, ok := s.Liveness()
+	if !ok {
+		t.Fatal("ok=false; want true when conn implements LivenessConn")
+	}
+	if lv.Alive || !lv.Permanent {
+		t.Fatalf("got %+v; want {Alive:false Permanent:true}", lv)
+	}
+}
+
+func TestSessionLiveness_CapabilityAbsent(t *testing.T) {
+	// plain fakeConn does NOT implement LivenessConn.
+	s := NewSession("j2", &fakeConn{}, &fakeLock{})
+	if _, ok := s.Liveness(); ok {
+		t.Fatal("ok=true; want false when conn lacks LivenessConn capability")
+	}
+}
