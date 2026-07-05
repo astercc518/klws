@@ -8,6 +8,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 	_ "github.com/jackc/pgx/v5/stdlib" // 注册 "pgx" database/sql 驱动
 
@@ -18,6 +19,19 @@ import (
 
 	"github.com/acme/wadist/internal/store/wabadger"
 )
+
+// applyQueryMode sets the pgx exec mode for PgBouncer transaction-pool
+// compatibility. direct mode leaves the pgx default (CacheStatement) untouched.
+func applyQueryMode(poolCfg *pgxpool.Config, poolMode, queryMode string) {
+	if poolMode != "pgbouncer" {
+		return
+	}
+	if queryMode == "simple" {
+		poolCfg.ConnConfig.DefaultQueryExecMode = pgx.QueryExecModeSimpleProtocol
+	} else {
+		poolCfg.ConnConfig.DefaultQueryExecMode = pgx.QueryExecModeExec
+	}
+}
 
 // deviceContainer is the subset of container behaviour Manager needs (both
 // sqlstore.Container and wabadger.Container satisfy it via store.DeviceContainer).
@@ -64,6 +78,9 @@ func NewManager(ctx context.Context, cfg Config, logger waLog.Logger) (*Manager,
 // newManager 构造一个独立 Manager(不走单例),供测试与多实例场景。
 func newManager(ctx context.Context, cfg Config, logger waLog.Logger) (*Manager, error) {
 	cfg.withDefaults()
+	if err := cfg.validate(); err != nil {
+		return nil, err
+	}
 
 	sqlDB, err := sql.Open("pgx", cfg.DSN)
 	if err != nil {
@@ -125,6 +142,7 @@ func newManager(ctx context.Context, cfg Config, logger waLog.Logger) (*Manager,
 	poolCfg.MaxConnLifetime = cfg.ConnMaxLifetime
 	poolCfg.MaxConnIdleTime = cfg.ConnMaxIdleTime
 	poolCfg.HealthCheckPeriod = 30 * time.Second
+	applyQueryMode(poolCfg, cfg.PoolMode, cfg.QueryMode)
 
 	bizPool, err := pgxpool.NewWithConfig(ctx, poolCfg)
 	if err != nil {
@@ -133,26 +151,29 @@ func newManager(ctx context.Context, cfg Config, logger waLog.Logger) (*Manager,
 		return nil, fmt.Errorf("create biz pool: %w", err)
 	}
 
-	lockPoolCfg, err := pgxpool.ParseConfig(cfg.DSN)
-	if err != nil {
-		bizPool.Close()
-		closeBadger()
-		_ = sqlDB.Close()
-		return nil, fmt.Errorf("parse lock pool config: %w", err)
-	}
-	lockPoolCfg.MaxConns = cfg.MaxLockConns
-	lockPoolCfg.MinConns = 0
-	// Use a very large lifetime so pgxpool never lifetime-reaps a pinned lock connection.
-	// pgxpool treats MaxConnLifetime=0 as time.Now() (immediately expired), so we use
-	// a 100-year sentinel instead of 0 to mean "effectively unlimited".
-	lockPoolCfg.MaxConnLifetime = 100 * 365 * 24 * time.Hour
+	var lockPool *pgxpool.Pool
+	if cfg.PoolMode != "pgbouncer" {
+		lockPoolCfg, err := pgxpool.ParseConfig(cfg.DSN)
+		if err != nil {
+			bizPool.Close()
+			closeBadger()
+			_ = sqlDB.Close()
+			return nil, fmt.Errorf("parse lock pool config: %w", err)
+		}
+		lockPoolCfg.MaxConns = cfg.MaxLockConns
+		lockPoolCfg.MinConns = 0
+		// Use a very large lifetime so pgxpool never lifetime-reaps a pinned lock connection.
+		// pgxpool treats MaxConnLifetime=0 as time.Now() (immediately expired), so we use
+		// a 100-year sentinel instead of 0 to mean "effectively unlimited".
+		lockPoolCfg.MaxConnLifetime = 100 * 365 * 24 * time.Hour
 
-	lockPool, err := pgxpool.NewWithConfig(ctx, lockPoolCfg)
-	if err != nil {
-		bizPool.Close()
-		closeBadger()
-		_ = sqlDB.Close()
-		return nil, fmt.Errorf("create lock pool: %w", err)
+		lockPool, err = pgxpool.NewWithConfig(ctx, lockPoolCfg)
+		if err != nil {
+			bizPool.Close()
+			closeBadger()
+			_ = sqlDB.Close()
+			return nil, fmt.Errorf("create lock pool: %w", err)
+		}
 	}
 
 	// RLS role pools: if DSN is provided build a dedicated pool, else fall back to bizPool.
@@ -160,16 +181,21 @@ func newManager(ctx context.Context, cfg Config, logger waLog.Logger) (*Manager,
 	if cfg.AppTenantDSN != "" {
 		tCfg, err := pgxpool.ParseConfig(cfg.AppTenantDSN)
 		if err != nil {
-			lockPool.Close()
+			if lockPool != nil {
+				lockPool.Close()
+			}
 			bizPool.Close()
 			closeBadger()
 			_ = sqlDB.Close()
 			return nil, fmt.Errorf("parse tenant pool config: %w", err)
 		}
 		tCfg.MaxConns = cfg.MaxOpenConns
+		applyQueryMode(tCfg, cfg.PoolMode, cfg.QueryMode)
 		tenantPool, err = pgxpool.NewWithConfig(ctx, tCfg)
 		if err != nil {
-			lockPool.Close()
+			if lockPool != nil {
+				lockPool.Close()
+			}
 			bizPool.Close()
 			closeBadger()
 			_ = sqlDB.Close()
@@ -184,19 +210,24 @@ func newManager(ctx context.Context, cfg Config, logger waLog.Logger) (*Manager,
 			if tenantPool != bizPool {
 				tenantPool.Close()
 			}
-			lockPool.Close()
+			if lockPool != nil {
+				lockPool.Close()
+			}
 			bizPool.Close()
 			closeBadger()
 			_ = sqlDB.Close()
 			return nil, fmt.Errorf("parse system pool config: %w", err)
 		}
 		sCfg.MaxConns = cfg.MaxOpenConns
+		applyQueryMode(sCfg, cfg.PoolMode, cfg.QueryMode)
 		systemPool, err = pgxpool.NewWithConfig(ctx, sCfg)
 		if err != nil {
 			if tenantPool != bizPool {
 				tenantPool.Close()
 			}
-			lockPool.Close()
+			if lockPool != nil {
+				lockPool.Close()
+			}
 			bizPool.Close()
 			closeBadger()
 			_ = sqlDB.Close()
