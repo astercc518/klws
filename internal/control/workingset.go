@@ -13,6 +13,7 @@ type Config struct {
 	WarmReqBatch    int
 	KeepWarmHorizon time.Duration
 	Linger          time.Duration
+	BootRamp        time.Duration // WADIST_BOOT_RAMP_MS; 0 disables the startup ramp
 }
 
 type Deps struct {
@@ -23,11 +24,13 @@ type Deps struct {
 }
 
 type WorkingSet struct {
-	rdb   *goredis.Client
-	sched *Scheduler
-	ccs   []string
-	cfg   Config
-	deps  Deps
+	rdb         *goredis.Client
+	sched       *Scheduler
+	ccs         []string
+	cfg         Config
+	deps        Deps
+	bootStartMs int64 // first Tick's nowMs, latched once (see bootStarted)
+	bootStarted bool  // true once bootStartMs has been latched
 }
 
 func NewWorkingSet(rdb *goredis.Client, sched *Scheduler, ccs []string, cfg Config, deps Deps) *WorkingSet {
@@ -49,6 +52,32 @@ func splitReq(v string) (jid, cc string) {
 func (w *WorkingSet) residentCount(ctx context.Context) int {
 	n, _ := w.rdb.SCard(ctx, residentKey).Result()
 	return int(n)
+}
+
+// effTarget is the active-warm resident ceiling for this tick. With BootRamp>0,
+// it ramps linearly from 0 to Target over [bootStart, bootStart+BootRamp] to
+// spread the post-restart reconnect burst; after the window (and always when
+// BootRamp==0) it is the full Target. bootStartMs is latched on first call
+// (bootStarted guards the latch since nowMs==0 is a valid timestamp and can't
+// double as an "unset" sentinel).
+func (w *WorkingSet) effTarget(nowMs int64) int {
+	if w.cfg.BootRamp <= 0 {
+		return w.cfg.Target
+	}
+	if !w.bootStarted {
+		w.bootStartMs = nowMs
+		w.bootStarted = true
+	}
+	elapsed := nowMs - w.bootStartMs
+	rampMs := w.cfg.BootRamp.Milliseconds()
+	if elapsed >= rampMs {
+		return w.cfg.Target
+	}
+	if elapsed <= 0 {
+		return 0
+	}
+	// ceil(Target * elapsed / rampMs)
+	return int((int64(w.cfg.Target)*elapsed + rampMs - 1) / rampMs)
 }
 
 func (w *WorkingSet) warm(ctx context.Context, jid, cc string) {
@@ -86,9 +115,10 @@ func (w *WorkingSet) Tick(ctx context.Context, nowMs int64) error {
 		w.warm(ctx, jid, cc)
 	}
 
-	// 2. ACTIVE warm: for each cc, fill resident set up to Target
+	// 2. ACTIVE warm: for each cc, fill resident set up to the (ramped) target
+	eff := w.effTarget(nowMs)
 	for _, cc := range w.ccs {
-		if w.residentCount(ctx) >= w.cfg.Target {
+		if w.residentCount(ctx) >= eff {
 			break
 		}
 		due, err := w.sched.PopDue(ctx, cc, nowMs, w.cfg.Target)
@@ -96,7 +126,7 @@ func (w *WorkingSet) Tick(ctx context.Context, nowMs int64) error {
 			return err
 		}
 		for _, jid := range due {
-			if w.residentCount(ctx) >= w.cfg.Target {
+			if w.residentCount(ctx) >= eff {
 				break
 			}
 			w.warm(ctx, jid, cc)
