@@ -99,3 +99,28 @@ func TestIncScheduleReconciled(t *testing.T) {
 		t.Fatalf("schedule_reconciled=%v want 5", got)
 	}
 }
+
+func TestIncGhostReaped(t *testing.T) {
+	m := New(prometheus.NewRegistry())
+	m.IncGhostReaped("transient")
+	m.IncGhostReaped("transient")
+	m.IncGhostReaped("permanent")
+	if got := testutil.ToFloat64(m.ghostReaped.WithLabelValues("transient")); got != 2 {
+		t.Fatalf("transient=%v; want 2", got)
+	}
+	if got := testutil.ToFloat64(m.ghostReaped.WithLabelValues("permanent")); got != 1 {
+		t.Fatalf("permanent=%v; want 1", got)
+	}
+}
+
+func TestSetGhostInFlight(t *testing.T) {
+	m := New(prometheus.NewRegistry())
+	m.SetGhostInFlight(7)
+	if got := testutil.ToFloat64(m.ghostInFlight); got != 7 {
+		t.Fatalf("in-flight=%v; want 7", got)
+	}
+	m.SetGhostInFlight(0)
+	if got := testutil.ToFloat64(m.ghostInFlight); got != 0 {
+		t.Fatalf("in-flight=%v; want 0", got)
+	}
+}

@@ -91,6 +91,15 @@ type Config struct {
 	// SegSlowRate/s (uncapped again on recovery).
 	SegMult, SegSLO, SegSlowRate float64
 	SegMinSample                 int
+	// Ghost Reaper (M6): bounded reclamation of dead/ghost whatsmeow connections.
+	// Master gate off → auto-reconnect stays on, no lifecycle handlers, no reaper
+	// loop (today's behavior). ttl≤30s per design.
+	GhostReaper string        // WADIST_GHOST_REAPER default "off"
+	GhostTTL    time.Duration // WADIST_GHOST_TTL_MS default 20000
+	GhostMax    int           // WADIST_GHOST_MAX default 128
+	GhostTick   time.Duration // WADIST_GHOST_TICK_MS default 5000
+	// BootRamp spreads the post-restart warm burst; 0 disables (default).
+	BootRamp time.Duration // WADIST_BOOT_RAMP_MS default 0
 }
 
 // Load reads configuration from the environment. PostgresDSN is required;
@@ -198,6 +207,12 @@ func Load() (*Config, error) {
 	cfg.SegSLO = floatEnv("WADIST_SEG_SLO", 0.05)
 	cfg.SegSlowRate = floatEnv("WADIST_SEG_SLOW_RATE", 1)
 	cfg.SegMinSample = intEnv("WADIST_SEG_MIN_SAMPLE", 10)
+
+	cfg.GhostReaper = getenv("WADIST_GHOST_REAPER", "off")
+	cfg.GhostTTL = msEnv("WADIST_GHOST_TTL_MS", 20000)
+	cfg.GhostMax = intEnv("WADIST_GHOST_MAX", 128)
+	cfg.GhostTick = msEnv("WADIST_GHOST_TICK_MS", 5000)
+	cfg.BootRamp = msEnvZero("WADIST_BOOT_RAMP_MS")
 
 	mk, err := decodeKey32("WADIST_MASTER_KEY")
 	if err != nil {

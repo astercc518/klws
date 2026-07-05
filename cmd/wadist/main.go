@@ -243,7 +243,7 @@ func run(ctx context.Context, cfg *config.Config) (*metrics.Server, func(), erro
 			}
 		}
 		// proxy may be nil if no proxy is bound — that's acceptable
-		conn := cluster.NewWAConn(device, logger, proxyBinding, onReceipt, false)
+		conn := cluster.NewWAConn(device, logger, proxyBinding, onReceipt, cfg.GhostReaper == "on")
 		if err := conn.Connect(fctx); err != nil {
 			return nil, err
 		}
@@ -308,6 +308,7 @@ func run(ctx context.Context, cfg *config.Config) (*metrics.Server, func(), erro
 		WarmReqBatch:    cfg.WarmReqBatch,
 		KeepWarmHorizon: cfg.KeepWarmHorizon,
 		Linger:          cfg.Linger,
+		BootRamp:        cfg.BootRamp,
 	}, deps)
 
 	// Wire RoutingSender warm-request hook: on a send miss, push jid|cc to warm:req.
@@ -344,6 +345,35 @@ func run(ctx context.Context, cfg *config.Config) (*metrics.Server, func(), erro
 		return sched.SeedDue(lctx, accts)
 	})
 	sup.Go(func(lctx context.Context) error { return ws.Run(lctx, cfg.WSTick) })
+
+	// Ghost Reaper (M6): bounded reclamation of dead whatsmeow sockets. Only when
+	// WADIST_GHOST_REAPER=on — default off keeps auto-reconnect on and runs no
+	// reaper (zero blast radius). Transient ghosts are re-warmed via warm:req
+	// (empty cc reuses the sticky proxy binding); terminal LoggedOut/StreamReplaced
+	// ghosts are marked logged_out (excluded from the active set, not re-warmed).
+	if cfg.GhostReaper == "on" {
+		reaper := node.NewGhostReaper(
+			node.GhostReaperConfig{TTL: cfg.GhostTTL, Max: cfg.GhostMax},
+			node.GhostReaperDeps{
+				Now:      time.Now,
+				Snapshot: func() []node.GhostCandidate { return node.GhostCandidatesFrom(reg.Snapshot()) },
+				Reap: func(ctx context.Context, jid string) error {
+					if s, ok := reg.Remove(jid); ok {
+						s.Close(ctx)
+					}
+					return nil
+				},
+				RequestWarm:   func(ctx context.Context, jid string) error { return rdb.RPush(ctx, "warm:req", jid+"|").Err() },
+				MarkLoggedOut: mgr.MarkAccountLoggedOut,
+				Metrics:       m,
+			},
+		)
+		sup.Go(func(lctx context.Context) error { return reaper.Run(lctx, cfg.GhostTick) })
+		log.Printf("ghost reaper on (ttl=%s max=%d tick=%s)", cfg.GhostTTL, cfg.GhostMax, cfg.GhostTick)
+	}
+	if cfg.BootRamp > 0 {
+		log.Printf("boot warm ramp on (%s)", cfg.BootRamp)
+	}
 
 	// Proxy janitor: periodic sweep that auto-rebinds accounts stuck on dead
 	// proxies (Release → Evict(linger=0) → RequestWarm) so the next WorkingSet

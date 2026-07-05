@@ -27,6 +27,8 @@ type Metrics struct {
 	lockOps             *prometheus.CounterVec // label: outcome
 	cohortSends         *prometheus.CounterVec // labels: cohort, outcome
 	ownershipDivergence *prometheus.CounterVec // label: op
+	ghostReaped         *prometheus.CounterVec // label: kind (transient|permanent)
+	ghostInFlight       prometheus.Gauge
 }
 
 func New(reg *prometheus.Registry) *Metrics {
@@ -80,11 +82,19 @@ func New(reg *prometheus.Registry) *Metrics {
 		Name: "wadist_ownership_shadow_divergence_total",
 		Help: "shadow-mode ownership decision divergences",
 	}, []string{"op"})
+	m.ghostReaped = prometheus.NewCounterVec(prometheus.CounterOpts{
+		Name: "wadist_ghost_reaped_total",
+		Help: "Ghost connections reclaimed by the reaper, by kind.",
+	}, []string{"kind"})
+	m.ghostInFlight = prometheus.NewGauge(prometheus.GaugeOpts{
+		Name: "wadist_ghost_in_flight",
+		Help: "Ghost connections reaped in the last reaper tick.",
+	})
 
 	reg.MustRegister(
 		m.sendOutcomes, m.gateDecisions, m.healthSignals, m.billingOps,
 		m.batchAssigned, m.noCapacity, m.proxyRebind, m.scheduleReconciled, m.proxyOps, m.lockOps, m.cohortSends,
-		m.ownershipDivergence,
+		m.ownershipDivergence, m.ghostReaped, m.ghostInFlight,
 	)
 	return m
 }
@@ -179,4 +189,18 @@ func (m *Metrics) ObserveOwnershipDivergence(op string) {
 		return
 	}
 	m.ownershipDivergence.WithLabelValues(op).Inc()
+}
+
+func (m *Metrics) IncGhostReaped(kind string) {
+	if m == nil {
+		return
+	}
+	m.ghostReaped.WithLabelValues(kind).Inc()
+}
+
+func (m *Metrics) SetGhostInFlight(n int) {
+	if m == nil {
+		return
+	}
+	m.ghostInFlight.Set(float64(n))
 }
