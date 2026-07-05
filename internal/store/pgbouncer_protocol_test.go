@@ -70,6 +70,29 @@ func runProtocolSmoke(t *testing.T, queryMode string) {
 	if err := m.MarkAccountLoggedOut(ctx, "jid-proto"); err != nil {
 		t.Fatalf("[%s] MarkAccountLoggedOut: %v", queryMode, err)
 	}
+
+	jid := "jid-proto"
+
+	// High-risk parameterized ::type casts — these are what can break under the
+	// simple protocol (text-encoded params + server-side cast), unlike the literal
+	// enum comparison above. Mirror the exact patterns used in production
+	// (sendgate quarantine ::interval, governor ::interval, parameterized enum cast).
+	if _, err := m.BizPool().Exec(ctx,
+		`UPDATE account_devices SET quarantined_until = now() + $2::interval WHERE account_jid = $1`,
+		jid, "3600 seconds"); err != nil {
+		t.Fatalf("[%s] ::interval param cast (quarantine): %v", queryMode, err)
+	}
+	if _, err := m.BizPool().Exec(ctx,
+		`UPDATE account_devices SET ban_status = $2::ban_status_t WHERE account_jid = $1`,
+		jid, "flagged"); err != nil {
+		t.Fatalf("[%s] ::ban_status_t param cast: %v", queryMode, err)
+	}
+	var cnt int
+	if err := m.BizPool().QueryRow(ctx,
+		`SELECT count(*) FROM account_devices WHERE updated_at >= now() - $1::interval`,
+		"900 seconds").Scan(&cnt); err != nil {
+		t.Fatalf("[%s] ::interval param cast (governor-style select): %v", queryMode, err)
+	}
 }
 
 func TestPgbouncerProtocol_Simple(t *testing.T) { runProtocolSmoke(t, "simple") }
