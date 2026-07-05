@@ -10,7 +10,7 @@ import (
 func newGate(t *testing.T) (*SendGate, context.Context) {
 	t.Helper()
 	pool, ctx := pgPool(t)
-	return NewSendGate(pool, NewAdmission(redisClient(t)), 1*time.Second), ctx
+	return NewSendGate(pool, NewAdmission(redisClient(t), BackoffParams{}), 1*time.Second), ctx
 }
 
 func TestAdmit_AllowsActiveHealthyWithinQuota(t *testing.T) {

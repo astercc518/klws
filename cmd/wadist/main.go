@@ -136,7 +136,7 @@ func run(ctx context.Context, cfg *config.Config) (*metrics.Server, func(), erro
 
 	promReg.MustRegister(metrics.NewDBCollector(pool, 10*time.Second, reg))
 
-	adm := sendgate.NewAdmission(rdb)
+	adm := sendgate.NewAdmission(rdb, sendgate.BackoffParams{})
 	gate := sendgate.NewSendGate(pool, adm, 3*time.Second)
 
 	asynqClient := asynq.NewClient(asynq.RedisClientOpt{Addr: cfg.RedisAddr})

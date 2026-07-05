@@ -27,7 +27,7 @@ func (f *fakeSender) Send(_ context.Context, jid, phone, body string, _ *MediaHa
 func newWorker(t *testing.T) (*SendWorker, context.Context, *sendgate.SendGate, *billing.Repo, *fakeSender) {
 	t.Helper()
 	pool, ctx := pgPool(t)
-	gate := sendgate.NewSendGate(pool, sendgate.NewAdmission(redisClient(t)), time.Second)
+	gate := sendgate.NewSendGate(pool, sendgate.NewAdmission(redisClient(t), sendgate.BackoffParams{}), time.Second)
 	br := billing.NewRepo(pool)
 	fs := &fakeSender{id: "wamid.1"}
 	return NewSendWorker(pool, gate, br, fs, &fakeUploader{}), ctx, gate, br, fs

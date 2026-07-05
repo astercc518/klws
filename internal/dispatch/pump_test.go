@@ -60,7 +60,7 @@ func newRecordingWorker(t *testing.T) (rec *recordingSender, w *SendWorker, pool
 	pool, ctx = pgPool(t)
 	// baseGap=0 disables sendgate's human-pacing jitter: this test exercises
 	// the Pump's own token-bucket pacing/concurrency, not sendgate's.
-	gate := sendgate.NewSendGate(pool, sendgate.NewAdmission(redisClient(t)), 0)
+	gate := sendgate.NewSendGate(pool, sendgate.NewAdmission(redisClient(t), sendgate.BackoffParams{}), 0)
 	br := billing.NewRepo(pool)
 	if err := br.Topup(ctx, 1, 1000, "seed"); err != nil {
 		t.Fatalf("topup: %v", err)

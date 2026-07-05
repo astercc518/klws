@@ -22,13 +22,56 @@ if redis.call('TTL', KEYS[1]) < 0 then redis.call('EXPIRE', KEYS[1], tonumber(AR
 redis.call('SET', KEYS[2], ARGV[3])
 return {1, 'ok'}`
 
-type Admission struct {
-	rdb   *goredis.Client
-	admit *goredis.Script
+// backoffLua atomically multiplies a segment's backoff key by Factor (capped
+// at Max) and refreshes its TTL. The stored value is an integer multiplier
+// that admission can later use to widen that segment's min_gap.
+// KEYS[1]=segment key. ARGV: 1=factor 2=max 3=ttl_ms.
+const backoffLua = `
+local cur = tonumber(redis.call('GET', KEYS[1]) or '1')
+local nv = cur * tonumber(ARGV[1])
+if nv > tonumber(ARGV[2]) then nv = tonumber(ARGV[2]) end
+redis.call('SET', KEYS[1], nv, 'PX', tonumber(ARGV[3]))
+return nv`
+
+// BackoffParams controls per-segment exponential backoff on warnings. When On
+// is false, RecordWarning is a no-op.
+type BackoffParams struct {
+	On     bool
+	Factor int
+	Max    int
+	TTL    time.Duration
 }
 
-func NewAdmission(rdb *goredis.Client) *Admission {
-	return &Admission{rdb: rdb, admit: goredis.NewScript(admitLua)}
+type Admission struct {
+	rdb     *goredis.Client
+	admit   *goredis.Script
+	backoff *goredis.Script
+	bp      BackoffParams
+}
+
+func NewAdmission(rdb *goredis.Client, bp BackoffParams) *Admission {
+	return &Admission{
+		rdb:     rdb,
+		admit:   goredis.NewScript(admitLua),
+		backoff: goredis.NewScript(backoffLua),
+		bp:      bp,
+	}
+}
+
+// RecordWarning multiplicatively increases each segment's backoff multiplier
+// (capped at bp.Max) with a fresh TTL, so admission widens that segment's
+// min_gap. No-op when backoff is disabled.
+func (a *Admission) RecordWarning(ctx context.Context, segKeys ...string) error {
+	if !a.bp.On {
+		return nil
+	}
+	for _, k := range segKeys {
+		if err := a.backoff.Run(ctx, a.rdb, []string{k},
+			a.bp.Factor, a.bp.Max, a.bp.TTL.Milliseconds()).Err(); err != nil {
+			return fmt.Errorf("record warning %s: %w", k, err)
+		}
+	}
+	return nil
 }
 
 // Ticket holds the consumed quota slot so a downstream failure can refund it.

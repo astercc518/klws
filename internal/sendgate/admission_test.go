@@ -12,7 +12,7 @@ func TestAdmission_DailyQuotaAndPacing(t *testing.T) {
 		t.Skip("integration")
 	}
 	ctx := context.Background()
-	adm := NewAdmission(redisClient(t))
+	adm := NewAdmission(redisClient(t), BackoffParams{})
 	now := time.Date(2026, 1, 30, 12, 0, 0, 0, time.UTC)
 
 	// quota=2, minGap=0 so pacing never blocks; 2 admits ok, 3rd hits daily_quota
@@ -33,7 +33,7 @@ func TestAdmission_PacingBlocks(t *testing.T) {
 		t.Skip("integration")
 	}
 	ctx := context.Background()
-	adm := NewAdmission(redisClient(t))
+	adm := NewAdmission(redisClient(t), BackoffParams{})
 	now := time.Date(2026, 1, 30, 12, 0, 0, 0, time.UTC)
 
 	if _, r, _ := adm.Admit(ctx, "acc2", 100, 5*time.Second, now); r != "ok" {
@@ -54,7 +54,7 @@ func TestTicket_ReleaseRefundsQuota(t *testing.T) {
 		t.Skip("integration")
 	}
 	ctx := context.Background()
-	adm := NewAdmission(redisClient(t))
+	adm := NewAdmission(redisClient(t), BackoffParams{})
 	now := time.Date(2026, 1, 30, 12, 0, 0, 0, time.UTC)
 
 	tk, _, _ := adm.Admit(ctx, "acc3", 1, 0, now)
