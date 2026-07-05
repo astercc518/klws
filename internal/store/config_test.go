@@ -2,6 +2,7 @@
 package store
 
 import (
+	"strings"
 	"testing"
 	"time"
 )
@@ -55,5 +56,44 @@ func TestConfig_withDefaults_lockConns(t *testing.T) {
 	c2.withDefaults()
 	if c2.MaxLockConns != 200 {
 		t.Fatalf("explicit MaxLockConns overwritten: %d", c2.MaxLockConns)
+	}
+}
+
+func TestConfigValidate_PgbouncerRequiresRedis(t *testing.T) {
+	c := Config{PoolMode: "pgbouncer", OwnershipBackend: "pg"}
+	c.withDefaults()
+	err := c.validate()
+	if err == nil || !strings.Contains(err.Error(), "redis") {
+		t.Fatalf("want error mentioning redis; got %v", err)
+	}
+}
+
+func TestConfigValidate_PgbouncerWithRedisOK(t *testing.T) {
+	c := Config{PoolMode: "pgbouncer", OwnershipBackend: "redis"}
+	c.withDefaults()
+	if err := c.validate(); err != nil {
+		t.Fatalf("pgbouncer+redis should validate; got %v", err)
+	}
+}
+
+func TestConfigValidate_CapsMaxConns(t *testing.T) {
+	c := Config{PoolMode: "pgbouncer", OwnershipBackend: "redis", MaxOpenConns: 500}
+	c.withDefaults()
+	if err := c.validate(); err != nil {
+		t.Fatalf("unexpected err: %v", err)
+	}
+	if c.MaxOpenConns != 200 {
+		t.Fatalf("MaxOpenConns=%d; want capped to 200", c.MaxOpenConns)
+	}
+}
+
+func TestConfigDefaults_DirectUnchanged(t *testing.T) {
+	c := Config{}
+	c.withDefaults()
+	if c.PoolMode != "direct" || c.QueryMode != "exec" {
+		t.Fatalf("defaults PoolMode=%q QueryMode=%q; want direct/exec", c.PoolMode, c.QueryMode)
+	}
+	if err := c.validate(); err != nil {
+		t.Fatalf("direct mode must validate; got %v", err)
 	}
 }

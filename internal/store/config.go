@@ -2,6 +2,7 @@
 package store
 
 import (
+	"fmt"
 	"time"
 
 	goredis "github.com/redis/go-redis/v9"
@@ -27,6 +28,12 @@ type Config struct {
 	AppSystemDSN string
 	// OwnershipBackend selects the ownership implementation: "pg" (default) | "redis" | "shadow".
 	OwnershipBackend string
+	// PoolMode selects the PG connection strategy: "direct" (default) or
+	// "pgbouncer" (transaction-pooled: simple/exec protocol, no lockPool,
+	// requires OwnershipBackend=="redis").
+	PoolMode string
+	// QueryMode is the pgx exec mode under pgbouncer: "exec" (default) | "simple".
+	QueryMode string
 	// Redis is the client used by the redis/shadow ownership backends.
 	// Must be non-nil when OwnershipBackend is "redis" or "shadow".
 	Redis *goredis.Client
@@ -84,4 +91,26 @@ func (c *Config) withDefaults() {
 	if c.ProxyCooldown <= 0 {
 		c.ProxyCooldown = 60 * time.Second
 	}
+	if c.PoolMode == "" {
+		c.PoolMode = "direct"
+	}
+	if c.QueryMode == "" {
+		c.QueryMode = "exec"
+	}
+}
+
+// validate enforces cross-field constraints after defaults are applied.
+// pgbouncer transaction pooling is incompatible with session-level advisory
+// locks, so it requires the redis ownership backend; MaxOpenConns is capped at
+// the PgBouncer client-conn ceiling.
+func (c *Config) validate() error {
+	if c.PoolMode == "pgbouncer" {
+		if c.OwnershipBackend != "redis" {
+			return fmt.Errorf("store: pgbouncer mode requires WADIST_OWNERSHIP_BACKEND=redis, got %q", c.OwnershipBackend)
+		}
+		if c.MaxOpenConns > 200 {
+			c.MaxOpenConns = 200
+		}
+	}
+	return nil
 }

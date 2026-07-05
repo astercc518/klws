@@ -100,6 +100,10 @@ type Config struct {
 	GhostTick   time.Duration // WADIST_GHOST_TICK_MS default 5000
 	// BootRamp spreads the post-restart warm burst; 0 disables (default).
 	BootRamp time.Duration // WADIST_BOOT_RAMP_MS default 0
+	// PgPoolMode selects the PG connection strategy: "direct" (default) or "pgbouncer".
+	PgPoolMode string // WADIST_PG_POOL_MODE default "direct"
+	// PgQueryMode is the pgx exec mode under pgbouncer: "exec" (default) | "simple".
+	PgQueryMode string // WADIST_PG_QUERY_MODE default "exec"
 }
 
 // Load reads configuration from the environment. PostgresDSN is required;
@@ -214,6 +218,9 @@ func Load() (*Config, error) {
 	cfg.GhostTick = msEnv("WADIST_GHOST_TICK_MS", 5000)
 	cfg.BootRamp = msEnvZero("WADIST_BOOT_RAMP_MS")
 
+	cfg.PgPoolMode = getenv("WADIST_PG_POOL_MODE", "direct")
+	cfg.PgQueryMode = getenv("WADIST_PG_QUERY_MODE", "exec")
+
 	mk, err := decodeKey32("WADIST_MASTER_KEY")
 	if err != nil {
 		return nil, err
@@ -241,6 +248,8 @@ func (c *Config) Store() store.Config {
 		BadgerDir:        os.Getenv("WADIST_BADGER_DIR"),
 		ProxyBackend:     os.Getenv("WADIST_PROXY_BACKEND"),
 		ProxyCooldown:    msEnvZero("WADIST_PROXY_COOLDOWN_MS"),
+		PoolMode:         c.PgPoolMode,
+		QueryMode:        c.PgQueryMode,
 		// Redis is injected by cmd/wadist after Store() returns.
 	}
 }
