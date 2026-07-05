@@ -88,6 +88,19 @@ func (m *Manager) ClaimAccount(ctx context.Context, accountJID, nodeID string) e
 	return nil
 }
 
+// MarkAccountLoggedOut sets ban_status='logged_out' so the account is excluded
+// from ListActiveAccounts (hence never re-warmed by the WorkingSet/Reconciler).
+// Used by the Ghost Reaper on a terminal LoggedOut/StreamReplaced signal.
+func (m *Manager) MarkAccountLoggedOut(ctx context.Context, jid string) error {
+	_, err := m.bizPool.Exec(ctx,
+		`UPDATE account_devices SET ban_status='logged_out', ban_checked_at=now() WHERE account_jid=$1`,
+		jid)
+	if err != nil {
+		return fmt.Errorf("mark account logged out %s: %w", jid, err)
+	}
+	return nil
+}
+
 // staleOwnedAccountsPG returns active accounts whose owner node's heartbeat is
 // older than staleness — candidates for takeover.
 // Underlying PG implementation; called via pgOwnership.StaleOwned.

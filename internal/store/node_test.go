@@ -271,6 +271,47 @@ func TestGetBoundProxy(t *testing.T) {
 	}
 }
 
+func TestMarkAccountLoggedOut_ExcludedFromActive(t *testing.T) {
+	if testing.Short() {
+		t.Skip("integration")
+	}
+	m := newTestManager(t)
+	ctx := context.Background()
+	if _, err := m.bizPool.Exec(ctx, readMigration0007(t)); err != nil {
+		t.Fatalf("apply migration 0007: %v", err)
+	}
+	seedAccountDevice(t, ctx, m, "jid-keep")
+	seedAccountDevice(t, ctx, m, "jid-gone")
+
+	before, err := m.ListActiveAccounts(ctx)
+	if err != nil {
+		t.Fatalf("list before: %v", err)
+	}
+	foundBefore := map[string]bool{}
+	for _, j := range before {
+		foundBefore[j] = true
+	}
+	if !foundBefore["jid-keep"] || !foundBefore["jid-gone"] {
+		t.Fatalf("active before=%v; want both jid-keep and jid-gone", before)
+	}
+
+	if err := m.MarkAccountLoggedOut(ctx, "jid-gone"); err != nil {
+		t.Fatalf("MarkAccountLoggedOut: %v", err)
+	}
+
+	after, err := m.ListActiveAccounts(ctx)
+	if err != nil {
+		t.Fatalf("list after: %v", err)
+	}
+	found := map[string]bool{}
+	for _, j := range after {
+		found[j] = true
+	}
+	if !found["jid-keep"] || found["jid-gone"] {
+		t.Fatalf("active filter wrong after MarkAccountLoggedOut: %v", after)
+	}
+}
+
 func TestDeregisterNode_ClearsOwnerAndRow(t *testing.T) {
 	if testing.Short() {
 		t.Skip("integration")
