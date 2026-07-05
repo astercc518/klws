@@ -243,7 +243,7 @@ func run(ctx context.Context, cfg *config.Config) (*metrics.Server, func(), erro
 			}
 		}
 		// proxy may be nil if no proxy is bound — that's acceptable
-		conn := cluster.NewWAConn(device, logger, proxyBinding, onReceipt)
+		conn := cluster.NewWAConn(device, logger, proxyBinding, onReceipt, false)
 		if err := conn.Connect(fctx); err != nil {
 			return nil, err
 		}

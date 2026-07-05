@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sync/atomic"
 	"time"
 
 	"github.com/acme/wadist/internal/dispatch"
@@ -27,16 +28,20 @@ type ReceiptFunc func(messageIDs []string, kind string, at time.Time)
 // that imports whatsmeow; everything else is fake-testable. No live-connection
 // unit test exists (requires a real WhatsApp device + 4G proxy).
 type waConn struct {
-	client *whatsmeow.Client
-	proxy  *store.ProxyBinding
+	client    *whatsmeow.Client
+	proxy     *store.ProxyBinding
+	permanent atomic.Bool // set on LoggedOut / StreamReplaced
 }
 
 // NewWAConn builds a client over a registered device store. Proxy is applied at
 // Connect time (per-account dynamic 4G proxy) before dialing. When onReceipt is
 // non-nil, a delivery/read receipt event handler is registered before connect —
 // a thin translation that forwards events.Receipt to onReceipt and nothing else.
-func NewWAConn(device *waproto.Device, logger waLog.Logger, proxy *store.ProxyBinding, onReceipt ReceiptFunc) *waConn {
+// When manageLifecycle is true, whatsmeow's built-in auto-reconnect is disabled
+// and a terminal-signal event handler is installed (see below).
+func NewWAConn(device *waproto.Device, logger waLog.Logger, proxy *store.ProxyBinding, onReceipt ReceiptFunc, manageLifecycle bool) *waConn {
 	client := whatsmeow.NewClient(device, logger)
+	c := &waConn{client: client, proxy: proxy}
 	if onReceipt != nil {
 		client.AddEventHandler(func(evt any) {
 			r, ok := evt.(*events.Receipt)
@@ -61,7 +66,20 @@ func NewWAConn(device *waproto.Device, logger waLog.Logger, proxy *store.ProxyBi
 			onReceipt(ids, kind, r.Timestamp)
 		})
 	}
-	return &waConn{client: client, proxy: proxy}
+	if manageLifecycle {
+		// Take back lifecycle control: stop whatsmeow's invisible auto-reconnect
+		// so a half-dead socket surfaces as a ghost instead of self-healing while
+		// leaking FDs/goroutines/proxy sockets. Terminal signals set Permanent so
+		// the reaper marks the account logged-out rather than re-warming it.
+		client.EnableAutoReconnect = false
+		client.AddEventHandler(func(evt any) {
+			switch evt.(type) {
+			case *events.LoggedOut, *events.StreamReplaced:
+				c.permanent.Store(true)
+			}
+		})
+	}
+	return c
 }
 
 var _ Conn = (*waConn)(nil)
@@ -78,6 +96,17 @@ func (c *waConn) Connect(_ context.Context) error {
 }
 
 func (c *waConn) Disconnect() { c.client.Disconnect() }
+
+var _ LivenessConn = (*waConn)(nil)
+
+// Liveness reports the whatsmeow socket state: Alive iff connected AND logged-in
+// right now; Permanent iff a terminal LoggedOut/StreamReplaced was observed.
+func (c *waConn) Liveness() Liveness {
+	return Liveness{
+		Alive:     c.client.IsConnected() && c.client.IsLoggedIn(),
+		Permanent: c.permanent.Load(),
+	}
+}
 
 var _ PresenceConn = (*waConn)(nil)
 
