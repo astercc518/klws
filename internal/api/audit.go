@@ -3,7 +3,10 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"log"
+	"strings"
+	"time"
 
 	"github.com/gin-gonic/gin"
 	"github.com/jackc/pgx/v5"
@@ -80,4 +83,80 @@ func (s *Server) recordAuditTx(ctx context.Context, tx pgx.Tx, e auditEvent) err
 		return nil
 	}
 	return s.deps.Audit.RecordTx(ctx, tx, toAuditEntry(e))
+}
+
+// auditFilter is the parsed, validated query for the audit list endpoint.
+type auditFilter struct {
+	Action   string
+	ActorID  int64
+	TenantID int64
+	Since    time.Time // zero = unset
+	Until    time.Time // zero = unset
+	Limit    int
+	Offset   int
+}
+
+const auditSelectBase = `
+SELECT a.id, a.occurred_at::text, a.tenant_id, t.name, a.actor_id, u.email,
+       a.action, a.resource_type, a.resource_id, a.details
+  FROM audit_log a
+  LEFT JOIN tenants t        ON t.id = a.tenant_id
+  LEFT JOIN console_users u  ON u.id = a.actor_id`
+
+// buildAuditWhere returns the " WHERE ..." clause (or "") and its positional args.
+func buildAuditWhere(f auditFilter) (string, []any) {
+	var conds []string
+	var args []any
+	add := func(tmpl string, val any) {
+		args = append(args, val)
+		conds = append(conds, fmt.Sprintf(tmpl, len(args)))
+	}
+	if f.Action != "" {
+		add("a.action = $%d", f.Action)
+	}
+	if f.ActorID != 0 {
+		add("a.actor_id = $%d", f.ActorID)
+	}
+	if f.TenantID != 0 {
+		add("a.tenant_id = $%d", f.TenantID)
+	}
+	if !f.Since.IsZero() {
+		add("a.occurred_at >= $%d", f.Since)
+	}
+	if !f.Until.IsZero() {
+		add("a.occurred_at <= $%d", f.Until)
+	}
+	if len(conds) == 0 {
+		return "", args
+	}
+	return " WHERE " + strings.Join(conds, " AND "), args
+}
+
+func clampLimit(n int) int {
+	if n <= 0 {
+		return 100
+	}
+	if n > 500 {
+		return 500
+	}
+	return n
+}
+
+// buildAuditListSQL returns the full ordered/paginated list query and its args.
+func buildAuditListSQL(f auditFilter) (string, []any) {
+	where, args := buildAuditWhere(f)
+	off := f.Offset
+	if off < 0 {
+		off = 0
+	}
+	args = append(args, clampLimit(f.Limit), off)
+	q := auditSelectBase + where +
+		fmt.Sprintf(" ORDER BY a.id DESC LIMIT $%d OFFSET $%d", len(args)-1, len(args))
+	return q, args
+}
+
+// buildAuditCountSQL returns the total-count query for the same filter.
+func buildAuditCountSQL(f auditFilter) (string, []any) {
+	where, args := buildAuditWhere(f)
+	return "SELECT count(*) FROM audit_log a" + where, args
 }
