@@ -6,6 +6,7 @@ import {
   Smartphone,
   ScrollText,
   SlidersHorizontal,
+  ReceiptText,
   type LucideIcon,
 } from "lucide-react";
 
@@ -37,6 +38,7 @@ export const NAV_GROUPS: NavGroup[] = [
     items: [
       { href: "/admin/tenants", label: "租户与财务", en: "Tenants", icon: Building2 },
       { href: "/admin/users", label: "用户管理", en: "Users", icon: UserCog },
+      { href: "/admin/ledger", label: "财务流水", en: "Ledger", icon: ReceiptText },
     ],
   },
   {
