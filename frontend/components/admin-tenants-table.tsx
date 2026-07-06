@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { MoreHorizontal, Wallet, Tag, SlidersHorizontal, Users, UserCog, Lock, Plus } from "lucide-react";
+import { MoreHorizontal, Wallet, Tag, SlidersHorizontal, Users, UserCog, Lock, Unlock, Pencil, Plus } from "lucide-react";
 import { toast } from "sonner";
 import { api, ApiError } from "@/lib/api";
 import { Button } from "@/components/ui/button";
@@ -78,6 +78,8 @@ export function AdminTenantsTable() {
   const [pricingTarget, setPricingTarget] = useState<Row | null>(null);
   const [createOpen, setCreateOpen] = useState(false);
   const [assignTarget, setAssignTarget] = useState<Row | null>(null);
+  const [editNameTarget, setEditNameTarget] = useState<Row | null>(null);
+  const [statusBusyId, setStatusBusyId] = useState<number | null>(null);
   const [salesUsers, setSalesUsers] = useState<AdminUser[]>([]);
   const [salesById, setSalesById] = useState<Map<number, string>>(new Map());
 
@@ -121,6 +123,24 @@ export function AdminTenantsTable() {
   useEffect(() => {
     load();
   }, [load]);
+
+  const toggleStatus = useCallback(
+    async (r: Row) => {
+      if (!r.tenant_id || !r.tenant || statusBusyId === r.tenant_id) return;
+      const next = r.tenant.status === "suspended" ? "active" : "suspended";
+      setStatusBusyId(r.tenant_id);
+      try {
+        await api.post(`/admin/tenants/${r.tenant_id}/status`, { status: next });
+        toast.success(next === "suspended" ? "已挂起" : "已恢复", { description: r.tenant.name });
+        load();
+      } catch (e) {
+        toast.error("操作失败", { description: e instanceof ApiError ? e.message : "请重试" });
+      } finally {
+        setStatusBusyId(null);
+      }
+    },
+    [load, statusBusyId],
+  );
 
   const visible = useMemo(() => {
     if (!rows) return null;
@@ -274,6 +294,26 @@ export function AdminTenantsTable() {
                   <UserCog className="size-4" />
                   指派销售 Assign
                 </DropdownMenuItem>
+                <DropdownMenuItem onClick={() => setEditNameTarget(r)}>
+                  <Pencil className="size-4" />
+                  编辑名称
+                </DropdownMenuItem>
+                <DropdownMenuItem
+                  onClick={() => toggleStatus(r)}
+                  disabled={statusBusyId === r.tenant_id}
+                >
+                  {r.tenant?.status === "suspended" ? (
+                    <>
+                      <Unlock className="size-4" />
+                      恢复
+                    </>
+                  ) : (
+                    <>
+                      <Lock className="size-4" />
+                      挂起
+                    </>
+                  )}
+                </DropdownMenuItem>
               </DropdownMenuContent>
             </DropdownMenu>
           );
@@ -284,6 +324,7 @@ export function AdminTenantsTable() {
       <PricingDialog target={pricingTarget} onClose={() => setPricingTarget(null)} onDone={load} />
       <CreateTenantDialog open={createOpen} onClose={() => setCreateOpen(false)} onDone={load} />
       <AssignSalesDialog target={assignTarget} salesUsers={salesUsers} onClose={() => setAssignTarget(null)} onDone={load} />
+      <EditTenantDialog target={editNameTarget} onClose={() => setEditNameTarget(null)} onDone={load} />
     </>
   );
 }
@@ -523,6 +564,66 @@ function CreateTenantDialog({ open, onClose, onDone }: { open: boolean; onClose:
         <DialogFooter>
           <DialogClose render={<Button variant="ghost" />}>取消</DialogClose>
           <Button onClick={submit} disabled={!valid}>{busy ? "创建中…" : "确认创建"}</Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Edit tenant name dialog → PUT /admin/tenants/:id
+// ---------------------------------------------------------------------------
+
+function EditTenantDialog({
+  target,
+  onClose,
+  onDone,
+}: {
+  target: Row | null;
+  onClose: () => void;
+  onDone: () => void;
+}) {
+  const [name, setName] = useState("");
+  const [busy, setBusy] = useState(false);
+
+  // Reset fields whenever a new target opens the dialog.
+  useEffect(() => {
+    if (target) setName(target.tenant?.name ?? "");
+  }, [target]);
+
+  const valid = name.trim().length > 0 && !busy;
+
+  async function submit() {
+    if (!target?.tenant_id) return;
+    setBusy(true);
+    try {
+      await api.put(`/admin/tenants/${target.tenant_id}`, { name: name.trim() });
+      toast.success("名称已更新", { description: name.trim() });
+      onClose();
+      onDone();
+    } catch (e) {
+      toast.error("更新失败", { description: e instanceof ApiError ? e.message : "请重试" });
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <Dialog open={target != null} onOpenChange={(o) => !o && onClose()}>
+      <DialogContent className="sm:max-w-md">
+        <DialogHeader>
+          <DialogTitle>编辑租户名称</DialogTitle>
+          <DialogDescription>
+            修改 <span className="font-mono">{target?.tenant?.name}</span> 的显示名称。
+          </DialogDescription>
+        </DialogHeader>
+        <div className="space-y-2 py-1">
+          <label htmlFor="edit-tenant-name" className="text-sm font-medium">租户名称</label>
+          <Input id="edit-tenant-name" value={name} onChange={(e) => setName(e.target.value)} placeholder="Acme Corp" />
+        </div>
+        <DialogFooter>
+          <DialogClose render={<Button variant="ghost" />}>取消</DialogClose>
+          <Button onClick={submit} disabled={!valid}>{busy ? "保存中…" : "确认保存"}</Button>
         </DialogFooter>
       </DialogContent>
     </Dialog>
