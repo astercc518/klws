@@ -12,10 +12,13 @@ import {
   Network,
   ChevronDown,
   Unplug,
+  Pencil,
+  Trash2,
 } from "lucide-react";
 import { toast } from "sonner";
 import { api, ApiError } from "@/lib/api";
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { ProDataTable, type Column } from "@/components/admin/pro-data-table";
 import { StatusBadge, type StatusTone } from "@/components/admin/status-badge";
@@ -170,6 +173,8 @@ export function AdminDevices() {
   const [proxies, setProxies] = useState<Proxy[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [proxyTarget, setProxyTarget] = useState<Device | null>(null);
+  const [editTarget, setEditTarget] = useState<Device | null>(null);
+  const [deleteTarget, setDeleteTarget] = useState<Device | null>(null);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -341,6 +346,14 @@ export function AdminDevices() {
                 <Network className="size-4" />
                 配置网络
               </DropdownMenuItem>
+              <DropdownMenuItem onClick={() => setEditTarget(d)}>
+                <Pencil className="size-4" />
+                编辑 Edit
+              </DropdownMenuItem>
+              <DropdownMenuItem variant="destructive" onClick={() => setDeleteTarget(d)}>
+                <Trash2 className="size-4" />
+                删除 Delete
+              </DropdownMenuItem>
             </DropdownMenuContent>
           </DropdownMenu>
         )}
@@ -352,6 +365,8 @@ export function AdminDevices() {
         onClose={() => setProxyTarget(null)}
         onDone={refresh}
       />
+      <EditDeviceDialog target={editTarget} onClose={() => setEditTarget(null)} onDone={load} />
+      <DeleteDeviceDialog target={deleteTarget} onClose={() => setDeleteTarget(null)} onDone={load} />
     </>
   );
 }
@@ -587,6 +602,154 @@ function ProxyDialog({
               {busy ? "提交中…" : "确认绑定"}
             </Button>
           </div>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+function EditDeviceDialog({
+  target,
+  onClose,
+  onDone,
+}: {
+  target: Device | null;
+  onClose: () => void;
+  onDone: () => void;
+}) {
+  const [tenantId, setTenantId] = useState("");
+  const [phone, setPhone] = useState("");
+  const [tags, setTags] = useState("");
+  const [busy, setBusy] = useState(false);
+
+  // Reset fields whenever a new target opens the dialog.
+  useEffect(() => {
+    if (target) {
+      setTenantId(String(target.tenant_id));
+      setPhone(target.phone_number);
+      setTags(target.tags.join(", "));
+    }
+  }, [target]);
+
+  const tenantIdNum = Number(tenantId);
+  const valid = tenantId.trim().length > 0 && Number.isInteger(tenantIdNum) && tenantIdNum > 0 && phone.trim().length > 0 && !busy;
+
+  async function submit() {
+    if (!target) return;
+    setBusy(true);
+    try {
+      const parsedTags = tags
+        .split(/[,\s]+/)
+        .map((t) => t.trim())
+        .filter(Boolean);
+      await api.put(`/admin/resources/devices/${target.id}`, {
+        tenant_id: tenantIdNum,
+        phone_number: phone.trim(),
+        tags: parsedTags,
+      });
+      toast.success("设备已更新", { description: target.account_jid });
+      onClose();
+      onDone();
+    } catch (e) {
+      toast.error("更新失败", { description: e instanceof ApiError ? e.message : "请重试" });
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <Dialog open={target != null} onOpenChange={(o) => !o && onClose()}>
+      <DialogContent className="sm:max-w-md">
+        <DialogHeader>
+          <DialogTitle>编辑设备</DialogTitle>
+          <DialogDescription>
+            修改 <span className="font-mono text-xs">{target?.account_jid}</span> 的归属租户、手机号与标签。
+          </DialogDescription>
+        </DialogHeader>
+        <div className="space-y-4 py-1">
+          <div className="flex gap-3">
+            <div className="space-y-2">
+              <label htmlFor="edit-dv-tenant" className="text-sm font-medium">租户 ID</label>
+              <Input
+                id="edit-dv-tenant"
+                type="number"
+                min={1}
+                value={tenantId}
+                onChange={(e) => setTenantId(e.target.value)}
+                className="w-28 font-mono"
+              />
+            </div>
+            <div className="flex-1 space-y-2">
+              <label htmlFor="edit-dv-phone" className="text-sm font-medium">手机号</label>
+              <Input
+                id="edit-dv-phone"
+                value={phone}
+                onChange={(e) => setPhone(e.target.value)}
+                className="font-mono"
+              />
+            </div>
+          </div>
+          <div className="space-y-2">
+            <label htmlFor="edit-dv-tags" className="text-sm font-medium">标签</label>
+            <Input
+              id="edit-dv-tags"
+              value={tags}
+              onChange={(e) => setTags(e.target.value)}
+              placeholder="US-Marketing, Tier1"
+              className="font-mono"
+            />
+          </div>
+        </div>
+        <DialogFooter>
+          <DialogClose render={<Button variant="ghost" />}>取消</DialogClose>
+          <Button onClick={submit} disabled={!valid}>{busy ? "保存中…" : "确认保存"}</Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+function DeleteDeviceDialog({
+  target,
+  onClose,
+  onDone,
+}: {
+  target: Device | null;
+  onClose: () => void;
+  onDone: () => void;
+}) {
+  const [busy, setBusy] = useState(false);
+
+  async function submit() {
+    if (!target) return;
+    setBusy(true);
+    try {
+      await api.delete(`/admin/resources/devices/${target.id}`);
+      toast.success("设备已删除", { description: target.account_jid });
+      onClose();
+      onDone();
+    } catch (e) {
+      toast.error("删除失败", { description: e instanceof ApiError ? e.message : "请重试" });
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <Dialog open={target != null} onOpenChange={(o) => !o && onClose()}>
+      <DialogContent className="sm:max-w-md">
+        <DialogHeader>
+          <DialogTitle>删除设备</DialogTitle>
+          <DialogDescription>
+            确认删除设备 <span className="font-mono text-xs">{target?.account_jid}</span>
+            ?此操作不可撤销,若已绑定代理会自动释放。
+          </DialogDescription>
+        </DialogHeader>
+        <DialogFooter>
+          <DialogClose render={<Button variant="ghost" />}>取消</DialogClose>
+          <Button variant="destructive" onClick={submit} disabled={busy}>
+            {busy ? "删除中…" : "确认删除"}
+          </Button>
         </DialogFooter>
       </DialogContent>
     </Dialog>
