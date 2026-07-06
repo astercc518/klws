@@ -462,12 +462,45 @@ type deviceRow struct {
 	ProxyURL        *string  `json:"proxy_url"`
 }
 
+type deviceStats struct {
+	Total     int64 `json:"total"`
+	Online    int64 `json:"online"`
+	Banned    int64 `json:"banned"`
+	Flagged   int64 `json:"flagged"`
+	LoggedOut int64 `json:"logged_out"`
+}
+
+func parseDeviceFilter(c *gin.Context) deviceFilter {
+	f := deviceFilter{Q: c.Query("q"), BanStatus: c.Query("ban_status")}
+	if v := c.Query("online"); v == "true" {
+		b := true
+		f.Online = &b
+	} else if v == "false" {
+		b := false
+		f.Online = &b
+	}
+	if n, err := strconv.Atoi(c.Query("limit")); err == nil {
+		f.Limit = n
+	}
+	if n, err := strconv.Atoi(c.Query("offset")); err == nil && n > 0 {
+		f.Offset = n
+	}
+	return f
+}
+
 // handleAdminListDevices: GET /api/v1/admin/resources/devices (cross-tenant).
 func (s *Server) handleAdminListDevices(c *gin.Context) {
-	rows, err := s.deps.Mgr.SystemPool().Query(c.Request.Context(), `
+	ctx := c.Request.Context()
+	f := parseDeviceFilter(c)
+	where, args := buildDeviceWhere(f)
+
+	listArgs := append(append([]any{}, args...), clampPage(f.Limit, 20, 200), f.Offset)
+	list := `
 SELECT id, tenant_id, account_jid, phone_number, ban_status::text, owner_node, last_connected_at::text,
        tags, proxy_id, proxy_url_cache
-  FROM account_devices ORDER BY id DESC LIMIT 500`)
+  FROM account_devices` + where +
+		fmt.Sprintf(" ORDER BY id DESC LIMIT $%d OFFSET $%d", len(args)+1, len(args)+2)
+	rows, err := s.systemPool().Query(ctx, list, listArgs...)
 	if err != nil {
 		fail(c, http.StatusInternalServerError, "list devices")
 		return
@@ -483,7 +516,30 @@ SELECT id, tenant_id, account_jid, phone_number, ban_status::text, owner_node, l
 		}
 		out = append(out, d)
 	}
-	ok(c, out)
+	if err := rows.Err(); err != nil {
+		fail(c, http.StatusInternalServerError, "iterate devices")
+		return
+	}
+
+	var total int64
+	if err := s.systemPool().QueryRow(ctx, `SELECT count(*) FROM account_devices`+where, args...).Scan(&total); err != nil {
+		fail(c, http.StatusInternalServerError, "count devices")
+		return
+	}
+
+	var st deviceStats
+	if err := s.systemPool().QueryRow(ctx, `
+SELECT count(*),
+       count(*) FILTER (WHERE owner_node IS NOT NULL),
+       count(*) FILTER (WHERE ban_status = 'banned'),
+       count(*) FILTER (WHERE ban_status = 'flagged'),
+       count(*) FILTER (WHERE ban_status = 'logged_out')
+  FROM account_devices`).Scan(&st.Total, &st.Online, &st.Banned, &st.Flagged, &st.LoggedOut); err != nil {
+		fail(c, http.StatusInternalServerError, "device stats")
+		return
+	}
+
+	ok(c, gin.H{"rows": out, "total": total, "stats": st})
 }
 
 // handleAdminImportDevices: POST /api/v1/admin/resources/devices
