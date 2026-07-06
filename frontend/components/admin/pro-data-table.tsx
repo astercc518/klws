@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Search, ChevronLeft, ChevronRight } from "lucide-react";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -23,20 +23,30 @@ export interface Column<T> {
   cellClassName?: string;
 }
 
+/** Server-driven mode: the parent owns paging/search and fetches each page. */
+export interface ServerMode {
+  total: number;
+  page: number; // 0-based
+  pageSize: number;
+  onPageChange: (page: number) => void;
+  query: string;
+  onQueryChange: (q: string) => void;
+  loading?: boolean;
+}
+
 interface ProDataTableProps<T> {
   data: T[] | null;
   columns: Column<T>[];
   getRowKey: (row: T) => string | number;
-  /** Enables the toolbar search box; `accessor` builds the haystack per row. */
+  /** Client-mode search box; ignored when `server` is set. */
   search?: { placeholder?: string; accessor: (row: T) => string };
-  /** Extra toolbar controls on the right (filter dropdowns, import buttons). */
   toolbar?: React.ReactNode;
   pageSize?: number;
-  /** Shown when data loaded but is empty (or filtered to nothing). */
   emptyState?: React.ReactNode;
-  /** Shown in place of the body while data is null. */
   error?: string | null;
   rowActions?: (row: T) => React.ReactNode;
+  /** When set, the table is server-driven: no local filter/slice. */
+  server?: ServerMode;
 }
 
 const alignClass = (a?: "left" | "right") => (a === "right" ? "text-right" : "text-left");
@@ -51,31 +61,56 @@ export function ProDataTable<T>({
   emptyState,
   error,
   rowActions,
+  server,
 }: ProDataTableProps<T>) {
   const [query, setQuery] = useState("");
   const [page, setPage] = useState(0);
 
+  // Server mode: debounce the search input, then notify the parent.
+  const [serverInput, setServerInput] = useState(server?.query ?? "");
+  useEffect(() => {
+    if (!server) return;
+    const id = setTimeout(() => {
+      if (serverInput !== server.query) server.onQueryChange(serverInput);
+    }, 300);
+    return () => clearTimeout(id);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [serverInput]);
+
   const filtered = useMemo(() => {
     if (!data) return [];
+    if (server) return data; // server already returns the current page
     const q = query.trim().toLowerCase();
     if (!q || !search) return data;
     return data.filter((row) => search.accessor(row).toLowerCase().includes(q));
-  }, [data, query, search]);
+  }, [data, query, search, server]);
 
-  const pageCount = Math.max(1, Math.ceil(filtered.length / pageSize));
-  const current = Math.min(page, pageCount - 1);
-  const start = current * pageSize;
-  const rows = filtered.slice(start, start + pageSize);
+  const effPageSize = server ? server.pageSize : pageSize;
+  const total = server ? server.total : filtered.length;
+  const pageCount = Math.max(1, Math.ceil(total / effPageSize));
+  const current = server ? server.page : Math.min(page, pageCount - 1);
+  const start = current * effPageSize;
+  const rows = server ? filtered : filtered.slice(start, start + effPageSize);
   const colSpan = columns.length + (rowActions ? 1 : 0);
+  const showSkeleton = data === null || (server?.loading ?? false);
 
   function changeQuery(v: string) {
-    setQuery(v);
-    setPage(0); // re-filtering invalidates the current page offset
+    if (server) {
+      setServerInput(v);
+    } else {
+      setQuery(v);
+      setPage(0);
+    }
+  }
+  const queryValue = server ? serverInput : query;
+
+  function goTo(p: number) {
+    if (server) server.onPageChange(p);
+    else setPage(p);
   }
 
   return (
     <Card className="gap-0 p-0">
-      {/* Toolbar */}
       {(search || toolbar) && (
         <div className="flex flex-wrap items-center gap-2 border-b px-3 py-2.5">
           {search && (
@@ -83,7 +118,7 @@ export function ProDataTable<T>({
               <Search className="size-3.5 shrink-0" />
               <input
                 type="search"
-                value={query}
+                value={queryValue}
                 onChange={(e) => changeQuery(e.target.value)}
                 placeholder={search.placeholder ?? "搜索…"}
                 className="min-w-0 flex-1 bg-transparent text-sm text-foreground outline-none placeholder:text-muted-foreground/70"
@@ -94,7 +129,6 @@ export function ProDataTable<T>({
         </div>
       )}
 
-      {/* Body */}
       <Table>
         <TableHeader>
           <TableRow className="bg-muted/30 hover:bg-muted/30">
@@ -120,7 +154,7 @@ export function ProDataTable<T>({
                 加载失败:{error}
               </TableCell>
             </TableRow>
-          ) : !data ? (
+          ) : showSkeleton ? (
             Array.from({ length: 5 }).map((_, i) => (
               <TableRow key={i} className="hover:bg-transparent">
                 <TableCell colSpan={colSpan} className="py-2">
@@ -131,8 +165,8 @@ export function ProDataTable<T>({
           ) : rows.length === 0 ? (
             <TableRow className="hover:bg-transparent">
               <TableCell colSpan={colSpan} className="py-12 text-center text-sm text-muted-foreground">
-                {query.trim()
-                  ? `没有匹配「${query.trim()}」的结果`
+                {queryValue.trim()
+                  ? `没有匹配「${queryValue.trim()}」的结果`
                   : (emptyState ?? "暂无数据")}
               </TableCell>
             </TableRow>
@@ -156,11 +190,10 @@ export function ProDataTable<T>({
         </TableBody>
       </Table>
 
-      {/* Pagination footer */}
-      {data && filtered.length > 0 && (
+      {!showSkeleton && !error && total > 0 && (
         <div className="flex items-center justify-between gap-3 border-t px-3 py-2.5">
           <span className="font-mono text-xs tabular-nums text-muted-foreground">
-            {start + 1}–{Math.min(start + pageSize, filtered.length)} / {filtered.length}
+            {start + 1}–{Math.min(start + effPageSize, total)} / {total}
           </span>
           {pageCount > 1 && (
             <div className="flex items-center gap-1">
@@ -169,7 +202,7 @@ export function ProDataTable<T>({
                 size="icon-sm"
                 aria-label="上一页"
                 disabled={current === 0}
-                onClick={() => setPage(current - 1)}
+                onClick={() => goTo(current - 1)}
               >
                 <ChevronLeft className="size-4" />
               </Button>
@@ -181,7 +214,7 @@ export function ProDataTable<T>({
                 size="icon-sm"
                 aria-label="下一页"
                 disabled={current >= pageCount - 1}
-                onClick={() => setPage(current + 1)}
+                onClick={() => goTo(current + 1)}
               >
                 <ChevronRight className="size-4" />
               </Button>
