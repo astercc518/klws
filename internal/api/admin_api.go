@@ -19,6 +19,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 
 	"github.com/acme/wadist/internal/console"
 )
@@ -216,6 +217,62 @@ func (s *Server) handleAdminCreateUser(c *gin.Context) {
 	}
 	s.recordAudit(c.Request.Context(), auditEvent{ActorID: actorID(c),
 		Action: "user.create", ResourceType: "user", ResourceID: id,
+		Details: map[string]any{"email": req.Email, "role": req.Role, "tenant_id": req.TenantID}})
+	ok(c, gin.H{"id": id, "email": req.Email, "role": req.Role, "tenant_id": req.TenantID})
+}
+
+// isUniqueViolation reports whether err is a Postgres 23505 unique-constraint error.
+func isUniqueViolation(err error) bool {
+	var pgErr *pgconn.PgError
+	return errors.As(err, &pgErr) && pgErr.Code == "23505"
+}
+
+// handleAdminUpdateUser: PUT /api/v1/admin/users/:id {email, role, tenant_id?}.
+// Same role/tenant rule as create: customer needs a tenant; admin/sales none.
+func (s *Server) handleAdminUpdateUser(c *gin.Context) {
+	id, err := strconv.ParseInt(c.Param("id"), 10, 64)
+	if err != nil || id <= 0 {
+		fail(c, http.StatusBadRequest, "invalid user id")
+		return
+	}
+	var req struct {
+		Email    string `json:"email" binding:"required,email"`
+		Role     string `json:"role" binding:"required"`
+		TenantID *int64 `json:"tenant_id"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		fail(c, http.StatusBadRequest, "invalid body (email, role required)")
+		return
+	}
+	switch console.Role(req.Role) {
+	case console.RoleAdmin, console.RoleSales:
+		req.TenantID = nil
+	case console.RoleCustomer:
+		if req.TenantID == nil || *req.TenantID <= 0 {
+			fail(c, http.StatusBadRequest, "customer requires a tenant_id")
+			return
+		}
+	default:
+		fail(c, http.StatusBadRequest, "role must be admin, sales, or customer")
+		return
+	}
+	tag, err := s.systemPool().Exec(c.Request.Context(),
+		`UPDATE console_users SET email=$1, role=$2, tenant_id=$3, updated_at=now() WHERE id=$4`,
+		req.Email, req.Role, req.TenantID, id)
+	if err != nil {
+		if isUniqueViolation(err) {
+			fail(c, http.StatusConflict, "email already exists")
+			return
+		}
+		fail(c, http.StatusInternalServerError, "update user failed")
+		return
+	}
+	if tag.RowsAffected() == 0 {
+		fail(c, http.StatusNotFound, "user not found")
+		return
+	}
+	s.recordAudit(c.Request.Context(), auditEvent{ActorID: actorID(c),
+		Action: "user.update", ResourceType: "user", ResourceID: id,
 		Details: map[string]any{"email": req.Email, "role": req.Role, "tenant_id": req.TenantID}})
 	ok(c, gin.H{"id": id, "email": req.Email, "role": req.Role, "tenant_id": req.TenantID})
 }
