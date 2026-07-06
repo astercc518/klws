@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { Plus, Globe, Wifi, WifiOff, Activity } from "lucide-react";
+import { Plus, Globe, Wifi, WifiOff, Activity, MoreHorizontal, Pencil, Trash2 } from "lucide-react";
 import { toast } from "sonner";
 import { api, ApiError } from "@/lib/api";
 import { Button } from "@/components/ui/button";
@@ -11,6 +11,12 @@ import { ProDataTable, type Column } from "@/components/admin/pro-data-table";
 import { StatusBadge } from "@/components/admin/status-badge";
 import { MetricCardGroup, StatCard } from "@/components/admin/stat-card";
 import { RowAvatar } from "@/components/admin/row-avatar";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import {
   Dialog,
   DialogClose,
@@ -61,6 +67,8 @@ export function AdminProxies() {
   const [alive, setAlive] = useState<"all" | "true" | "false">("all");
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
+  const [editTarget, setEditTarget] = useState<Proxy | null>(null);
+  const [deleteTarget, setDeleteTarget] = useState<Proxy | null>(null);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -181,7 +189,27 @@ export function AdminProxies() {
             <ImportProxiesDialog onDone={load} />
           </div>
         }
+        rowActions={(p) => (
+          <DropdownMenu>
+            <DropdownMenuTrigger render={<Button variant="ghost" size="icon-sm" aria-label="操作" />}>
+              <MoreHorizontal className="size-4" />
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end">
+              <DropdownMenuItem onClick={() => setEditTarget(p)}>
+                <Pencil className="size-4" />
+                编辑
+              </DropdownMenuItem>
+              <DropdownMenuItem variant="destructive" onClick={() => setDeleteTarget(p)}>
+                <Trash2 className="size-4" />
+                删除
+              </DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
+        )}
       />
+
+      <EditProxyDialog target={editTarget} onClose={() => setEditTarget(null)} onDone={load} />
+      <DeleteProxyDialog target={deleteTarget} onClose={() => setDeleteTarget(null)} onDone={load} />
     </>
   );
 }
@@ -272,6 +300,158 @@ function ImportProxiesDialog({ onDone }: { onDone: () => void }) {
           <DialogClose render={<Button variant="ghost" />}>取消</DialogClose>
           <Button onClick={submit} disabled={!valid}>
             {busy ? "导入中…" : `确认导入 ${parsed.length} 条`}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+function EditProxyDialog({
+  target,
+  onClose,
+  onDone,
+}: {
+  target: Proxy | null;
+  onClose: () => void;
+  onDone: () => void;
+}) {
+  const [type, setType] = useState("socks5");
+  const [country, setCountry] = useState("");
+  const [maxBindings, setMaxBindings] = useState("1");
+  const [busy, setBusy] = useState(false);
+
+  // Reset fields whenever a new target opens the dialog.
+  useEffect(() => {
+    if (target) {
+      setType(target.proxy_type);
+      setCountry(target.country_code);
+      setMaxBindings(String(target.max_bindings));
+    }
+  }, [target]);
+
+  const maxBindingsNum = Number(maxBindings);
+  const valid =
+    country.trim().length === 2 &&
+    Number.isInteger(maxBindingsNum) &&
+    maxBindingsNum >= 1 &&
+    !busy;
+
+  async function submit() {
+    if (!target) return;
+    setBusy(true);
+    try {
+      await api.put(`/admin/resources/proxies/${target.id}`, {
+        proxy_type: type,
+        country_code: country.trim().toUpperCase(),
+        max_bindings: maxBindingsNum,
+      });
+      toast.success("代理已更新", { description: target.proxy_url });
+      onClose();
+      onDone();
+    } catch (e) {
+      toast.error("更新失败", { description: e instanceof ApiError ? e.message : "请重试" });
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <Dialog open={target != null} onOpenChange={(o) => !o && onClose()}>
+      <DialogContent className="sm:max-w-md">
+        <DialogHeader>
+          <DialogTitle>编辑代理</DialogTitle>
+          <DialogDescription>
+            修改 <span className="font-mono text-xs">{target?.proxy_url}</span> 的类型、国家与最大绑定数。
+          </DialogDescription>
+        </DialogHeader>
+        <div className="space-y-4 py-1">
+          <div className="flex gap-3">
+            <div className="space-y-2">
+              <label htmlFor="edit-px-type" className="text-sm font-medium">类型</label>
+              <select
+                id="edit-px-type"
+                value={type}
+                onChange={(e) => setType(e.target.value)}
+                className="h-9 rounded-md border bg-transparent px-3 font-mono text-sm"
+              >
+                <option value="socks5">socks5</option>
+                <option value="http">http</option>
+                <option value="https">https</option>
+              </select>
+            </div>
+            <div className="space-y-2">
+              <label htmlFor="edit-px-country" className="text-sm font-medium">国家 ISO-2</label>
+              <Input
+                id="edit-px-country"
+                value={country}
+                onChange={(e) => setCountry(e.target.value)}
+                maxLength={2}
+                className="w-24 font-mono uppercase"
+              />
+            </div>
+          </div>
+          <div className="space-y-2">
+            <label htmlFor="edit-px-max" className="text-sm font-medium">最大绑定数</label>
+            <Input
+              id="edit-px-max"
+              type="number"
+              min={1}
+              value={maxBindings}
+              onChange={(e) => setMaxBindings(e.target.value)}
+              className="w-32 font-mono"
+            />
+          </div>
+        </div>
+        <DialogFooter>
+          <DialogClose render={<Button variant="ghost" />}>取消</DialogClose>
+          <Button onClick={submit} disabled={!valid}>{busy ? "保存中…" : "确认保存"}</Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+function DeleteProxyDialog({
+  target,
+  onClose,
+  onDone,
+}: {
+  target: Proxy | null;
+  onClose: () => void;
+  onDone: () => void;
+}) {
+  const [busy, setBusy] = useState(false);
+
+  async function submit() {
+    if (!target) return;
+    setBusy(true);
+    try {
+      await api.delete(`/admin/resources/proxies/${target.id}`);
+      toast.success("代理已删除", { description: target.proxy_url });
+      onClose();
+      onDone();
+    } catch (e) {
+      toast.error("删除失败", { description: e instanceof ApiError ? e.message : "请重试" });
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <Dialog open={target != null} onOpenChange={(o) => !o && onClose()}>
+      <DialogContent className="sm:max-w-md">
+        <DialogHeader>
+          <DialogTitle>删除代理</DialogTitle>
+          <DialogDescription>
+            确认删除代理 <span className="font-mono text-xs">{target?.proxy_url}</span>
+            ?此操作不可撤销,已绑定的设备将自动解绑。
+          </DialogDescription>
+        </DialogHeader>
+        <DialogFooter>
+          <DialogClose render={<Button variant="ghost" />}>取消</DialogClose>
+          <Button variant="destructive" onClick={submit} disabled={busy}>
+            {busy ? "删除中…" : "确认删除"}
           </Button>
         </DialogFooter>
       </DialogContent>
