@@ -1,15 +1,15 @@
 import { PageHeader } from "@/components/admin/page-header";
-import { AdminCampaigns } from "@/components/admin-campaigns";
+import { AdminAuditTabs } from "@/components/admin-audit-tabs";
 
 export default function AdminAuditPage() {
   return (
     <div className="mx-auto max-w-7xl">
       <PageHeader
         eyebrow="God View · Risk"
-        title="风控与任务监控"
-        description="全平台所有租户的群发任务。可强制终止运行中的任务,并恢复被风控自动熔断的任务。"
+        title="风控与审计"
+        description="平台操作审计日志与全租户群发任务监控。"
       />
-      <AdminCampaigns />
+      <AdminAuditTabs />
     </div>
   );
 }
