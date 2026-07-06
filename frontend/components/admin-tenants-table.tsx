@@ -45,9 +45,11 @@ interface AdminTenant {
   balance: number;
   frozen: number;
 }
-/** A user row joined with its tenant wallet (customers only). */
+/** A user row joined with its tenant wallet, OR a placeholder for a tenant that
+ *  has no console user yet (placeholder=true, email empty). */
 interface Row extends AdminUser {
   tenant?: AdminTenant;
+  placeholder?: boolean;
 }
 
 const usd = (smallest: number) =>
@@ -74,6 +76,8 @@ export function AdminTenantsTable() {
   const [roleFilter, setRoleFilter] = useState<RoleFilter>("all");
   const [topupTarget, setTopupTarget] = useState<Row | null>(null);
   const [pricingTarget, setPricingTarget] = useState<Row | null>(null);
+  const [salesUsers, setSalesUsers] = useState<AdminUser[]>([]);
+  const [salesById, setSalesById] = useState<Map<number, string>>(new Map());
 
   const load = useCallback(async () => {
     try {
@@ -82,12 +86,29 @@ export function AdminTenantsTable() {
         api.get<AdminTenant[]>("/admin/tenants"),
       ]);
       const byTenant = new Map(tenants.map((t) => [t.id, t]));
-      setRows(
-        users.map((u) => ({
-          ...u,
-          tenant: u.tenant_id != null ? byTenant.get(u.tenant_id) : undefined,
-        })),
-      );
+      setSalesById(new Map(users.filter((u) => u.role === "sales").map((u) => [u.id, u.email])));
+      setSalesUsers(users.filter((u) => u.role === "sales"));
+
+      const userRows: Row[] = users.map((u) => ({
+        ...u,
+        tenant: u.tenant_id != null ? byTenant.get(u.tenant_id) : undefined,
+      }));
+
+      // Tenants that no user references → placeholder rows (decision A).
+      const usedTenantIds = new Set(users.map((u) => u.tenant_id).filter((x): x is number => x != null));
+      const orphanRows: Row[] = tenants
+        .filter((t) => !usedTenantIds.has(t.id))
+        .map((t) => ({
+          id: -t.id, // synthetic; getRowKey uses tenant_id for placeholders
+          email: "",
+          role: "customer" as const,
+          tenant_id: t.id,
+          disabled: false,
+          tenant: t,
+          placeholder: true,
+        }));
+
+      setRows([...userRows, ...orphanRows]);
     } catch (e) {
       if (!(e instanceof ApiError && e.status === 401)) {
         setError(e instanceof ApiError ? e.message : "加载失败");
@@ -110,15 +131,17 @@ export function AdminTenantsTable() {
     if (!rows) return null;
     let customers = 0;
     let sales = 0;
+    const seenTenants = new Map<number, AdminTenant>();
+    for (const r of rows) {
+      if (!r.placeholder && r.role === "customer") customers++;
+      if (!r.placeholder && r.role === "sales") sales++;
+      if (r.tenant) seenTenants.set(r.tenant.id, r.tenant);
+    }
     let balance = 0;
     let frozen = 0;
-    for (const r of rows) {
-      if (r.role === "customer") customers++;
-      if (r.role === "sales") sales++;
-      if (r.tenant) {
-        balance += r.tenant.balance;
-        frozen += r.tenant.frozen;
-      }
+    for (const t of seenTenants.values()) {
+      balance += t.balance;
+      frozen += t.frozen;
     }
     return { customers, sales, balance, frozen };
   }, [rows]);
@@ -127,12 +150,15 @@ export function AdminTenantsTable() {
     {
       key: "email",
       header: "账号",
-      cell: (r) => (
-        <div className="flex items-center gap-2.5">
-          <RowAvatar text={r.email} />
-          <span className="font-mono text-sm">{r.email}</span>
-        </div>
-      ),
+      cell: (r) =>
+        r.placeholder ? (
+          <span className="text-sm italic text-muted-foreground">(未开通账号)</span>
+        ) : (
+          <div className="flex items-center gap-2.5">
+            <RowAvatar text={r.email} />
+            <span className="font-mono text-sm">{r.email}</span>
+          </div>
+        ),
     },
     {
       key: "role",
@@ -145,6 +171,15 @@ export function AdminTenantsTable() {
       cell: (r) => (
         <span className="text-sm text-muted-foreground">{r.tenant ? r.tenant.name : "—"}</span>
       ),
+    },
+    {
+      key: "sales_owner",
+      header: "销售归属",
+      cell: (r) => {
+        const id = r.tenant?.sales_owner_id;
+        const email = id != null ? salesById.get(id) : undefined;
+        return <span className="text-sm text-muted-foreground">{email ?? (r.tenant ? "未指派" : "—")}</span>;
+      },
     },
     {
       key: "balance",
@@ -183,7 +218,7 @@ export function AdminTenantsTable() {
         data={visible}
         error={error}
         columns={columns}
-        getRowKey={(r) => `${r.role}-${r.id}`}
+        getRowKey={(r) => (r.placeholder ? `t${r.tenant_id}` : `u${r.id}`)}
         search={{ placeholder: "搜索账号或租户…", accessor: (r) => `${r.email} ${r.tenant?.name ?? ""}` }}
         emptyState="暂无账号"
         toolbar={
