@@ -10,9 +10,12 @@
 package api
 
 import (
+	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"strconv"
+	"time"
 
 	"github.com/gin-gonic/gin"
 	"github.com/jackc/pgx/v5"
@@ -981,4 +984,101 @@ func (s *Server) handleAdminResetUserPassword(c *gin.Context) {
 		return
 	}
 	ok(c, gin.H{"id": id, "password_reset": true})
+}
+
+// ---------------------------------------------------------------------------
+// Audit log (read-only)
+
+type auditRow struct {
+	ID           int64           `json:"id"`
+	OccurredAt   string          `json:"occurred_at"`
+	TenantID     *int64          `json:"tenant_id"`
+	TenantName   *string         `json:"tenant_name"`
+	ActorID      *int64          `json:"actor_id"`
+	ActorEmail   *string         `json:"actor_email"`
+	Action       string          `json:"action"`
+	ResourceType *string         `json:"resource_type"`
+	ResourceID   *int64          `json:"resource_id"`
+	Details      json.RawMessage `json:"details"`
+}
+
+// parseAuditFilter reads the optional query params for the audit list.
+func parseAuditFilter(c *gin.Context) (auditFilter, error) {
+	f := auditFilter{Action: c.Query("action")}
+	if v := c.Query("actor_id"); v != "" {
+		n, err := strconv.ParseInt(v, 10, 64)
+		if err != nil {
+			return f, fmt.Errorf("bad actor_id")
+		}
+		f.ActorID = n
+	}
+	if v := c.Query("tenant_id"); v != "" {
+		n, err := strconv.ParseInt(v, 10, 64)
+		if err != nil {
+			return f, fmt.Errorf("bad tenant_id")
+		}
+		f.TenantID = n
+	}
+	if v := c.Query("since"); v != "" {
+		ts, err := time.Parse(time.RFC3339, v)
+		if err != nil {
+			return f, fmt.Errorf("bad since (want RFC3339)")
+		}
+		f.Since = ts
+	}
+	if v := c.Query("until"); v != "" {
+		ts, err := time.Parse(time.RFC3339, v)
+		if err != nil {
+			return f, fmt.Errorf("bad until (want RFC3339)")
+		}
+		f.Until = ts
+	}
+	if v := c.Query("limit"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil {
+			f.Limit = n
+		}
+	}
+	if v := c.Query("offset"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil {
+			f.Offset = n
+		}
+	}
+	return f, nil
+}
+
+// handleAdminListAudit: GET /api/v1/admin/audit — filtered, paginated audit log
+// with actor-email and tenant-name joins.
+func (s *Server) handleAdminListAudit(c *gin.Context) {
+	f, err := parseAuditFilter(c)
+	if err != nil {
+		fail(c, http.StatusBadRequest, err.Error())
+		return
+	}
+	ctx := c.Request.Context()
+	listSQL, listArgs := buildAuditListSQL(f)
+	rows, err := s.systemPool().Query(ctx, listSQL, listArgs...)
+	if err != nil {
+		fail(c, http.StatusInternalServerError, "audit query")
+		return
+	}
+	defer rows.Close()
+	out := make([]auditRow, 0)
+	for rows.Next() {
+		var r auditRow
+		var details []byte
+		if err := rows.Scan(&r.ID, &r.OccurredAt, &r.TenantID, &r.TenantName,
+			&r.ActorID, &r.ActorEmail, &r.Action, &r.ResourceType, &r.ResourceID, &details); err != nil {
+			fail(c, http.StatusInternalServerError, "scan audit")
+			return
+		}
+		r.Details = details
+		out = append(out, r)
+	}
+	countSQL, countArgs := buildAuditCountSQL(f)
+	var total int64
+	if err := s.systemPool().QueryRow(ctx, countSQL, countArgs...).Scan(&total); err != nil {
+		fail(c, http.StatusInternalServerError, "audit count")
+		return
+	}
+	ok(c, gin.H{"rows": out, "total": total})
 }
