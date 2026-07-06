@@ -1,5 +1,6 @@
 import type { LucideIcon } from "lucide-react";
 import { ArrowUpRight, ArrowDownRight, Minus } from "lucide-react";
+import Link from "next/link";
 import { cn } from "@/lib/utils";
 
 /** Accent hues — same family the landing Features/Stats use, so a metric tile
@@ -31,6 +32,9 @@ export interface StatCardProps {
   icon: LucideIcon;
   accent?: Accent;
   trend?: Trend;
+  /** When set, the whole tile becomes a link to this route and shows a
+   *  drill-down arrow (only if no trend chip occupies the top-right). */
+  href?: string;
 }
 
 const TREND_ICON = { up: ArrowUpRight, down: ArrowDownRight, flat: Minus } as const;
@@ -42,17 +46,17 @@ function trendIntent(t: Trend): "positive" | "negative" | "neutral" {
   return "neutral";
 }
 
-export function StatCard({ label, value, sub, icon: Icon, accent = "neutral", trend }: StatCardProps) {
+export function StatCard({ label, value, sub, icon: Icon, accent = "neutral", trend, href }: StatCardProps) {
   const intent = trend ? trendIntent(trend) : "neutral";
   const TrendIcon = trend ? TREND_ICON[trend.direction] : null;
 
-  return (
-    <div className="rounded-2xl border border-border/70 bg-card p-5 shadow-sm ring-1 ring-foreground/5 transition-shadow hover:shadow-md">
+  const inner = (
+    <>
       <div className="flex items-start justify-between gap-3">
         <span className={cn("flex size-10 items-center justify-center rounded-xl", TILE[accent])}>
           <Icon className="size-5" strokeWidth={1.9} />
         </span>
-        {trend && TrendIcon && (
+        {trend && TrendIcon ? (
           <span
             className={cn(
               "inline-flex items-center gap-0.5 rounded-full px-2 py-0.5 font-mono text-xs font-medium tabular-nums ring-1 ring-inset",
@@ -66,14 +70,27 @@ export function StatCard({ label, value, sub, icon: Icon, accent = "neutral", tr
             <TrendIcon className="size-3" strokeWidth={2.25} />
             {trend.value}
           </span>
-        )}
+        ) : href ? (
+          <ArrowUpRight className="size-4 text-muted-foreground/50 transition-colors group-hover:text-foreground" />
+        ) : null}
       </div>
 
       <div className="mt-4 font-mono text-3xl font-semibold tabular-nums tracking-tight">{value}</div>
       <div className="mt-1 text-sm font-medium text-foreground/90">{label}</div>
       {sub && <div className="mt-0.5 font-mono text-xs tabular-nums text-muted-foreground">{sub}</div>}
-    </div>
+    </>
   );
+
+  const base = "rounded-2xl border border-border/70 bg-card p-5 shadow-sm ring-1 ring-foreground/5 transition-shadow hover:shadow-md";
+
+  if (href) {
+    return (
+      <Link href={href} className={cn(base, "group block focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring")}>
+        {inner}
+      </Link>
+    );
+  }
+  return <div className={base}>{inner}</div>;
 }
 
 /** Responsive grid wrapper for a row of StatCards. Defaults to 4 columns. */
