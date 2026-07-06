@@ -41,16 +41,28 @@ export function AdminMetrics() {
 
   useEffect(() => {
     let alive = true;
-    api
-      .get<AdminStats>("/admin/stats")
-      .then((d) => alive && setStats(d))
-      .catch((e) => {
-        if (alive && !(e instanceof ApiError && e.status === 401)) {
-          setError(e instanceof ApiError ? e.message : "加载失败");
-        }
-      });
+
+    const fetchStats = (isRefresh: boolean) => {
+      api
+        .get<AdminStats>("/admin/stats")
+        .then((d) => {
+          if (alive) setStats(d);
+        })
+        .catch((e) => {
+          if (!alive) return;
+          // Only a first-load failure surfaces; refresh errors are ignored so
+          // the dashboard doesn't flicker to an error card on a transient blip.
+          if (!isRefresh && !(e instanceof ApiError && e.status === 401)) {
+            setError(e instanceof ApiError ? e.message : "加载失败");
+          }
+        });
+    };
+
+    fetchStats(false);
+    const id = setInterval(() => fetchStats(true), 15_000);
     return () => {
       alive = false;
+      clearInterval(id);
     };
   }, []);
 
@@ -78,6 +90,7 @@ export function AdminMetrics() {
         value={usd(stats.consumed)}
         sub={`累计充值 ${usd(stats.total_topup)}`}
         icon={Banknote}
+        href="/admin/ledger"
       />
       <StatCard
         accent="emerald"
@@ -86,6 +99,7 @@ export function AdminMetrics() {
         sub={`封禁/标记 ${nf.format(stats.accounts_banned)}`}
         icon={Smartphone}
         trend={activeTrend(stats.accounts_active, stats.accounts_total)}
+        href="/admin/devices"
       />
       <StatCard
         accent="blue"
@@ -93,6 +107,7 @@ export function AdminMetrics() {
         value={nf.format(stats.queue_backlog)}
         sub="待发送收件人"
         icon={ListChecks}
+        href="/admin/audit"
       />
       <StatCard
         accent="rose"
@@ -101,6 +116,7 @@ export function AdminMetrics() {
         sub="banned+flagged / 总账号"
         icon={ShieldAlert}
         trend={banTrend(stats.ban_rate)}
+        href="/admin/devices"
       />
     </MetricCardGroup>
   );
