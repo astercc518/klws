@@ -14,6 +14,7 @@ import (
 	goredis "github.com/redis/go-redis/v9"
 
 	"github.com/acme/wadist/internal/api"
+	"github.com/acme/wadist/internal/audit"
 	"github.com/acme/wadist/internal/billing"
 	"github.com/acme/wadist/internal/config"
 	"github.com/acme/wadist/internal/console"
@@ -80,6 +81,7 @@ func run(ctx context.Context) (*api.Server, func(), error) {
 		Users:      users,
 		Tenants:    tenants,
 		Sessions:   sessions,
+		Audit:      audit.NewAuditWriter(mgr.SystemPool()),
 		SessionKey: webCfg.SessionKey,               // same HMAC key as the old console cookie
 		BlindKey:   baseCfg.BlindIndexKey,           // same blind-index key for recipient dedup
 		CORSOrigin: os.Getenv("WADIST_CORS_ORIGIN"), // empty -> defaults to http://localhost:3000

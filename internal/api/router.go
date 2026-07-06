@@ -14,7 +14,9 @@ import (
 	"sync/atomic"
 
 	"github.com/gin-gonic/gin"
+	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/acme/wadist/internal/audit"
 	"github.com/acme/wadist/internal/billing"
 	"github.com/acme/wadist/internal/console"
 	"github.com/acme/wadist/internal/pricing"
@@ -31,6 +33,7 @@ type Deps struct {
 	Users    *console.UserRepo     // login / Authenticate (BYPASSRLS system pool)
 	Tenants  *console.TenantRepo   // tenant registry (admin/sales)
 	Sessions *console.SessionStore // Redis-backed sessions (shared with console)
+	Audit    *audit.AuditWriter    // append-only audit_log writer (shared with billing)
 
 	SessionKey []byte // HMAC key for signing/verifying the session token
 	BlindKey   []byte // HMAC blind-index key (campaign recipient dedup/suppression)
@@ -44,6 +47,11 @@ type Server struct {
 	ready atomic.Bool
 	srv   *http.Server
 	ln    net.Listener
+
+	// sysPool, when non-nil, overrides deps.Mgr.SystemPool() for the audit READ
+	// endpoint — set ONLY by tests so it can run against a raw pool without a
+	// full store.Manager.
+	sysPool *pgxpool.Pool
 }
 
 // NewServer wires the dependencies. Call Router() to get the gin.Engine.
