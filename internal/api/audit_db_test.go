@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -86,3 +87,61 @@ func TestHandleAdminListAudit(t *testing.T) {
 		t.Errorf("limit paging: %v", pg)
 	}
 }
+
+func seedRunningCampaign(t *testing.T, ctx context.Context, s *Server, tenantID int64) int64 {
+	t.Helper()
+	var tmpl, camp int64
+	if err := s.systemPool().QueryRow(ctx,
+		`INSERT INTO campaign_templates (tenant_id, kind, body) VALUES ($1,'text','hi') RETURNING id`, tenantID).Scan(&tmpl); err != nil {
+		t.Fatalf("seed template: %v", err)
+	}
+	if err := s.systemPool().QueryRow(ctx,
+		`INSERT INTO campaigns (tenant_id, template_id, state) VALUES ($1,$2,'running') RETURNING id`, tenantID, tmpl).Scan(&camp); err != nil {
+		t.Fatalf("seed campaign: %v", err)
+	}
+	return camp
+}
+
+func TestHandleAdminStopCampaign_auditAtomic(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	ctx := context.Background()
+	pool := testPool(t)
+	s := &Server{sysPool: pool, deps: Deps{Audit: audit.NewAuditWriter(pool)}}
+	tid, _ := seedTenantUser(t, ctx, s, "op@acme.test")
+	camp := seedRunningCampaign(t, ctx, s, tid)
+
+	stop := func() int {
+		w := httptest.NewRecorder()
+		c, _ := gin.CreateTestContext(w)
+		c.Request = httptest.NewRequest(http.MethodPost, "/admin/campaigns/stop", nil)
+		c.Params = gin.Params{{Key: "id", Value: strconvI(camp)}}
+		s.handleAdminStopCampaign(c)
+		return w.Code
+	}
+
+	if code := stop(); code != http.StatusOK {
+		t.Fatalf("first stop status = %d", code)
+	}
+	// state paused + exactly one campaign.stop audit row.
+	var state string
+	s.systemPool().QueryRow(ctx, `SELECT state::text FROM campaigns WHERE id=$1`, camp).Scan(&state)
+	if state != "paused" {
+		t.Errorf("state = %q, want paused", state)
+	}
+	var n int
+	s.systemPool().QueryRow(ctx, `SELECT count(*) FROM audit_log WHERE action='campaign.stop' AND resource_id=$1`, camp).Scan(&n)
+	if n != 1 {
+		t.Errorf("want 1 stop audit row, got %d", n)
+	}
+
+	// Second stop: already paused → 409 and NO new audit row.
+	if code := stop(); code != http.StatusConflict {
+		t.Errorf("second stop status = %d, want 409", code)
+	}
+	s.systemPool().QueryRow(ctx, `SELECT count(*) FROM audit_log WHERE action='campaign.stop' AND resource_id=$1`, camp).Scan(&n)
+	if n != 1 {
+		t.Errorf("no-op stop must not audit; count now %d", n)
+	}
+}
+
+func strconvI(v int64) string { return fmt.Sprintf("%d", v) }

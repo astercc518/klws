@@ -857,21 +857,37 @@ SELECT c.id, c.tenant_id, c.state::text, c.total, c.sent, c.failed, c.created_at
 
 // handleAdminStopCampaign: POST /api/v1/admin/campaigns/:id/stop. Force-pauses a
 // running campaign by flipping its state to 'paused' — the dispatcher only
-// processes 'running', so it stops picking this campaign up. This is a plain
-// control-plane UPDATE; no dispatch/billing engine code is touched.
+// processes 'running', so it stops picking this campaign up. The state flip and
+// its audit row are written atomically in one tx; a no-op stop (already
+// paused/not found) audits nothing. No dispatch/billing engine code is touched.
 func (s *Server) handleAdminStopCampaign(c *gin.Context) {
 	id, err := strconv.ParseInt(c.Param("id"), 10, 64)
 	if err != nil {
 		fail(c, http.StatusBadRequest, "bad campaign id")
 		return
 	}
-	tag, err := s.deps.Mgr.SystemPool().Exec(c.Request.Context(),
-		`UPDATE campaigns SET state='paused' WHERE id=$1 AND state='running'`, id)
+	ctx := c.Request.Context()
+	paused := false
+	err = pgx.BeginTxFunc(ctx, s.systemPool(), pgx.TxOptions{}, func(tx pgx.Tx) error {
+		var tenantID int64
+		e := tx.QueryRow(ctx,
+			`UPDATE campaigns SET state='paused' WHERE id=$1 AND state='running' RETURNING tenant_id`, id).
+			Scan(&tenantID)
+		if errors.Is(e, pgx.ErrNoRows) {
+			return nil // not running / not found; paused stays false
+		}
+		if e != nil {
+			return e
+		}
+		paused = true
+		return s.recordAuditTx(ctx, tx, auditEvent{TenantID: tenantID, ActorID: actorID(c),
+			Action: "campaign.stop", ResourceType: "campaign", ResourceID: id})
+	})
 	if err != nil {
 		fail(c, http.StatusInternalServerError, "stop campaign failed")
 		return
 	}
-	if tag.RowsAffected() == 0 {
+	if !paused {
 		fail(c, http.StatusConflict, "campaign not found or not in 'running' state")
 		return
 	}
@@ -889,13 +905,9 @@ func (s *Server) handleAdminResumeCampaign(c *gin.Context) {
 		fail(c, http.StatusBadRequest, "bad campaign id")
 		return
 	}
-	var actorID *int64
-	if sd := sessionFrom(c); sd != nil {
-		actorID = &sd.UserID
-	}
 	ctx := c.Request.Context()
 	resumed := false
-	err = pgx.BeginTxFunc(ctx, s.deps.Mgr.SystemPool(), pgx.TxOptions{}, func(tx pgx.Tx) error {
+	err = pgx.BeginTxFunc(ctx, s.systemPool(), pgx.TxOptions{}, func(tx pgx.Tx) error {
 		var tenantID int64
 		err := tx.QueryRow(ctx,
 			`UPDATE campaigns SET state='running' WHERE id=$1 AND state='paused' RETURNING tenant_id`, id).
@@ -909,10 +921,8 @@ func (s *Server) handleAdminResumeCampaign(c *gin.Context) {
 		resumed = true
 		// Audit the resume so AutoTripped (latest circuit_break vs latest resume)
 		// reads correctly afterwards, and operators have a trail.
-		_, err = tx.Exec(ctx, `
-INSERT INTO audit_log (tenant_id, actor_id, action, resource_type, resource_id, details)
-VALUES ($1, $2, 'campaign.resume', 'campaign', $3, '{}'::jsonb)`, tenantID, actorID, id)
-		return err
+		return s.recordAuditTx(ctx, tx, auditEvent{TenantID: tenantID, ActorID: actorID(c),
+			Action: "campaign.resume", ResourceType: "campaign", ResourceID: id})
 	})
 	if err != nil {
 		fail(c, http.StatusInternalServerError, "resume campaign failed")
