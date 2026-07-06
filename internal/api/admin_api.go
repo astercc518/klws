@@ -15,10 +15,12 @@ import (
 	"fmt"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/gin-gonic/gin"
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 
 	"github.com/acme/wadist/internal/console"
 )
@@ -148,6 +150,66 @@ func (s *Server) handleAdminCreateTenant(c *gin.Context) {
 	ok(c, gin.H{"id": id, "name": req.Name, "status": "active"})
 }
 
+// handleAdminUpdateTenant: PUT /api/v1/admin/tenants/:id {name}.
+func (s *Server) handleAdminUpdateTenant(c *gin.Context) {
+	id, err := strconv.ParseInt(c.Param("id"), 10, 64)
+	if err != nil || id <= 0 {
+		fail(c, http.StatusBadRequest, "invalid tenant id")
+		return
+	}
+	var req struct {
+		Name string `json:"name" binding:"required"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		fail(c, http.StatusBadRequest, "name is required")
+		return
+	}
+	tag, err := s.systemPool().Exec(c.Request.Context(),
+		`UPDATE tenants SET name=$1, updated_at=now() WHERE id=$2`, req.Name, id)
+	if err != nil {
+		fail(c, http.StatusInternalServerError, "update tenant failed")
+		return
+	}
+	if tag.RowsAffected() == 0 {
+		fail(c, http.StatusNotFound, "tenant not found")
+		return
+	}
+	s.recordAudit(c.Request.Context(), auditEvent{TenantID: id, ActorID: actorID(c),
+		Action: "tenant.update", ResourceType: "tenant", ResourceID: id,
+		Details: map[string]any{"name": req.Name}})
+	ok(c, gin.H{"id": id, "name": req.Name})
+}
+
+// handleAdminSetTenantStatus: POST /api/v1/admin/tenants/:id/status {status}.
+func (s *Server) handleAdminSetTenantStatus(c *gin.Context) {
+	id, err := strconv.ParseInt(c.Param("id"), 10, 64)
+	if err != nil || id <= 0 {
+		fail(c, http.StatusBadRequest, "invalid tenant id")
+		return
+	}
+	var req struct {
+		Status string `json:"status" binding:"required"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil || (req.Status != "active" && req.Status != "suspended") {
+		fail(c, http.StatusBadRequest, "status must be 'active' or 'suspended'")
+		return
+	}
+	tag, err := s.systemPool().Exec(c.Request.Context(),
+		`UPDATE tenants SET status=$1, updated_at=now() WHERE id=$2`, req.Status, id)
+	if err != nil {
+		fail(c, http.StatusInternalServerError, "update status failed")
+		return
+	}
+	if tag.RowsAffected() == 0 {
+		fail(c, http.StatusNotFound, "tenant not found")
+		return
+	}
+	s.recordAudit(c.Request.Context(), auditEvent{TenantID: id, ActorID: actorID(c),
+		Action: "tenant.status", ResourceType: "tenant", ResourceID: id,
+		Details: map[string]any{"status": req.Status}})
+	ok(c, gin.H{"id": id, "status": req.Status})
+}
+
 type adminUserRow struct {
 	ID       int64  `json:"id"`
 	Email    string `json:"email"`
@@ -216,6 +278,62 @@ func (s *Server) handleAdminCreateUser(c *gin.Context) {
 	}
 	s.recordAudit(c.Request.Context(), auditEvent{ActorID: actorID(c),
 		Action: "user.create", ResourceType: "user", ResourceID: id,
+		Details: map[string]any{"email": req.Email, "role": req.Role, "tenant_id": req.TenantID}})
+	ok(c, gin.H{"id": id, "email": req.Email, "role": req.Role, "tenant_id": req.TenantID})
+}
+
+// isUniqueViolation reports whether err is a Postgres 23505 unique-constraint error.
+func isUniqueViolation(err error) bool {
+	var pgErr *pgconn.PgError
+	return errors.As(err, &pgErr) && pgErr.Code == "23505"
+}
+
+// handleAdminUpdateUser: PUT /api/v1/admin/users/:id {email, role, tenant_id?}.
+// Same role/tenant rule as create: customer needs a tenant; admin/sales none.
+func (s *Server) handleAdminUpdateUser(c *gin.Context) {
+	id, err := strconv.ParseInt(c.Param("id"), 10, 64)
+	if err != nil || id <= 0 {
+		fail(c, http.StatusBadRequest, "invalid user id")
+		return
+	}
+	var req struct {
+		Email    string `json:"email" binding:"required,email"`
+		Role     string `json:"role" binding:"required"`
+		TenantID *int64 `json:"tenant_id"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		fail(c, http.StatusBadRequest, "invalid body (email, role required)")
+		return
+	}
+	switch console.Role(req.Role) {
+	case console.RoleAdmin, console.RoleSales:
+		req.TenantID = nil
+	case console.RoleCustomer:
+		if req.TenantID == nil || *req.TenantID <= 0 {
+			fail(c, http.StatusBadRequest, "customer requires a tenant_id")
+			return
+		}
+	default:
+		fail(c, http.StatusBadRequest, "role must be admin, sales, or customer")
+		return
+	}
+	tag, err := s.systemPool().Exec(c.Request.Context(),
+		`UPDATE console_users SET email=$1, role=$2, tenant_id=$3, updated_at=now() WHERE id=$4`,
+		req.Email, req.Role, req.TenantID, id)
+	if err != nil {
+		if isUniqueViolation(err) {
+			fail(c, http.StatusConflict, "email already exists")
+			return
+		}
+		fail(c, http.StatusInternalServerError, "update user failed")
+		return
+	}
+	if tag.RowsAffected() == 0 {
+		fail(c, http.StatusNotFound, "user not found")
+		return
+	}
+	s.recordAudit(c.Request.Context(), auditEvent{ActorID: actorID(c),
+		Action: "user.update", ResourceType: "user", ResourceID: id,
 		Details: map[string]any{"email": req.Email, "role": req.Role, "tenant_id": req.TenantID}})
 	ok(c, gin.H{"id": id, "email": req.Email, "role": req.Role, "tenant_id": req.TenantID})
 }
@@ -500,6 +618,80 @@ VALUES ($1, $2, $3) ON CONFLICT (proxy_url) DO NOTHING`, p.URL, typ, p.Country)
 	ok(c, gin.H{"submitted": len(req.Proxies), "imported": imported, "skipped": len(req.Proxies) - imported})
 }
 
+// handleAdminUpdateProxy: PUT /api/v1/admin/resources/proxies/:id
+// {proxy_type, country_code, max_bindings}. proxy_url is immutable.
+func (s *Server) handleAdminUpdateProxy(c *gin.Context) {
+	id, err := strconv.ParseInt(c.Param("id"), 10, 64)
+	if err != nil || id <= 0 {
+		fail(c, http.StatusBadRequest, "invalid proxy id")
+		return
+	}
+	var req struct {
+		ProxyType   string `json:"proxy_type" binding:"required"`
+		CountryCode string `json:"country_code" binding:"required"`
+		MaxBindings int    `json:"max_bindings" binding:"required"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		fail(c, http.StatusBadRequest, "proxy_type, country_code, max_bindings are required")
+		return
+	}
+	if req.ProxyType != "socks5" && req.ProxyType != "http" && req.ProxyType != "https" {
+		fail(c, http.StatusBadRequest, "proxy_type must be socks5, http or https")
+		return
+	}
+	if len(req.CountryCode) != 2 || req.MaxBindings < 1 {
+		fail(c, http.StatusBadRequest, "country_code must be 2 chars and max_bindings >= 1")
+		return
+	}
+	// The WHERE guard rejects lowering max_bindings below current_bindings
+	// (which would violate chk_bindings).
+	tag, err := s.systemPool().Exec(c.Request.Context(),
+		`UPDATE proxy_pool SET proxy_type=$1::proxy_type_t, country_code=$2, max_bindings=$3, updated_at=now()
+		   WHERE id=$4 AND $3 >= current_bindings`,
+		req.ProxyType, strings.ToUpper(req.CountryCode), req.MaxBindings, id)
+	if err != nil {
+		fail(c, http.StatusInternalServerError, "update proxy failed")
+		return
+	}
+	if tag.RowsAffected() == 0 {
+		// distinguish not-found from max_bindings-too-low
+		var exists bool
+		s.systemPool().QueryRow(c.Request.Context(), `SELECT EXISTS(SELECT 1 FROM proxy_pool WHERE id=$1)`, id).Scan(&exists)
+		if exists {
+			fail(c, http.StatusBadRequest, "max_bindings below current bindings")
+		} else {
+			fail(c, http.StatusNotFound, "proxy not found")
+		}
+		return
+	}
+	s.recordAudit(c.Request.Context(), auditEvent{ActorID: actorID(c),
+		Action: "proxy.update", ResourceType: "proxy", ResourceID: id,
+		Details: map[string]any{"proxy_type": req.ProxyType, "country_code": strings.ToUpper(req.CountryCode), "max_bindings": req.MaxBindings}})
+	ok(c, gin.H{"id": id})
+}
+
+// handleAdminDeleteProxy: DELETE /api/v1/admin/resources/proxies/:id.
+// FK ON DELETE SET NULL nulls account_devices.proxy_id automatically.
+func (s *Server) handleAdminDeleteProxy(c *gin.Context) {
+	id, err := strconv.ParseInt(c.Param("id"), 10, 64)
+	if err != nil || id <= 0 {
+		fail(c, http.StatusBadRequest, "invalid proxy id")
+		return
+	}
+	tag, err := s.systemPool().Exec(c.Request.Context(), `DELETE FROM proxy_pool WHERE id=$1`, id)
+	if err != nil {
+		fail(c, http.StatusInternalServerError, "delete proxy failed")
+		return
+	}
+	if tag.RowsAffected() == 0 {
+		fail(c, http.StatusNotFound, "proxy not found")
+		return
+	}
+	s.recordAudit(c.Request.Context(), auditEvent{ActorID: actorID(c),
+		Action: "proxy.delete", ResourceType: "proxy", ResourceID: id})
+	ok(c, gin.H{"id": id, "deleted": true})
+}
+
 type deviceRow struct {
 	ID              int64    `json:"id"`
 	TenantID        int64    `json:"tenant_id"`
@@ -760,6 +952,111 @@ func (s *Server) handleAdminUnbindDeviceProxy(c *gin.Context) {
 	s.recordAudit(ctx, auditEvent{ActorID: actorID(c),
 		Action: "device.unbind_proxy", ResourceType: "device", ResourceID: id})
 	ok(c, gin.H{"device_id": id, "proxy_id": nil})
+}
+
+// handleAdminUpdateDevice: PUT /api/v1/admin/resources/devices/:id
+// {tenant_id?, phone_number?, tags?}. account_jid is immutable. Only provided
+// fields update.
+func (s *Server) handleAdminUpdateDevice(c *gin.Context) {
+	id, err := strconv.ParseInt(c.Param("id"), 10, 64)
+	if err != nil || id <= 0 {
+		fail(c, http.StatusBadRequest, "invalid device id")
+		return
+	}
+	var req struct {
+		TenantID *int64    `json:"tenant_id"`
+		Phone    *string   `json:"phone_number"`
+		Tags     *[]string `json:"tags"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		fail(c, http.StatusBadRequest, "invalid body")
+		return
+	}
+	ctx := c.Request.Context()
+	if req.TenantID != nil {
+		var exists bool
+		s.systemPool().QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM tenants WHERE id=$1)`, *req.TenantID).Scan(&exists)
+		if !exists {
+			fail(c, http.StatusBadRequest, "tenant_id does not exist")
+			return
+		}
+	}
+	var sets []string
+	var args []any
+	details := map[string]any{}
+	if req.TenantID != nil {
+		args = append(args, *req.TenantID)
+		sets = append(sets, fmt.Sprintf("tenant_id=$%d", len(args)))
+		details["tenant_id"] = *req.TenantID
+	}
+	if req.Phone != nil {
+		args = append(args, *req.Phone)
+		sets = append(sets, fmt.Sprintf("phone_number=$%d", len(args)))
+		details["phone_number"] = *req.Phone
+	}
+	if req.Tags != nil {
+		args = append(args, *req.Tags)
+		sets = append(sets, fmt.Sprintf("tags=$%d", len(args)))
+		details["tags"] = *req.Tags
+	}
+	if len(sets) == 0 {
+		fail(c, http.StatusBadRequest, "no fields to update")
+		return
+	}
+	args = append(args, id)
+	q := "UPDATE account_devices SET " + strings.Join(sets, ", ") + ", updated_at=now() WHERE id=$" + strconv.Itoa(len(args))
+	tag, err := s.systemPool().Exec(ctx, q, args...)
+	if err != nil {
+		fail(c, http.StatusInternalServerError, "update device failed")
+		return
+	}
+	if tag.RowsAffected() == 0 {
+		fail(c, http.StatusNotFound, "device not found")
+		return
+	}
+	s.recordAudit(ctx, auditEvent{ActorID: actorID(c),
+		Action: "device.update", ResourceType: "device", ResourceID: id, Details: details})
+	ok(c, gin.H{"id": id})
+}
+
+// handleAdminDeleteDevice: DELETE /api/v1/admin/resources/devices/:id. In one tx:
+// release the bound proxy's slot (if any), delete the row, audit.
+func (s *Server) handleAdminDeleteDevice(c *gin.Context) {
+	id, err := strconv.ParseInt(c.Param("id"), 10, 64)
+	if err != nil || id <= 0 {
+		fail(c, http.StatusBadRequest, "invalid device id")
+		return
+	}
+	ctx := c.Request.Context()
+	err = pgx.BeginTxFunc(ctx, s.systemPool(), pgx.TxOptions{}, func(tx pgx.Tx) error {
+		var proxyID *int64
+		e := tx.QueryRow(ctx, `SELECT proxy_id FROM account_devices WHERE id=$1 FOR UPDATE`, id).Scan(&proxyID)
+		if errors.Is(e, pgx.ErrNoRows) {
+			return errDeviceNotFound
+		}
+		if e != nil {
+			return e
+		}
+		if proxyID != nil {
+			if _, e := tx.Exec(ctx, `UPDATE proxy_pool SET current_bindings=GREATEST(current_bindings-1,0) WHERE id=$1`, *proxyID); e != nil {
+				return e
+			}
+		}
+		if _, e := tx.Exec(ctx, `DELETE FROM account_devices WHERE id=$1`, id); e != nil {
+			return e
+		}
+		return s.recordAuditTx(ctx, tx, auditEvent{ActorID: actorID(c),
+			Action: "device.delete", ResourceType: "device", ResourceID: id})
+	})
+	switch {
+	case errors.Is(err, errDeviceNotFound):
+		fail(c, http.StatusNotFound, "device not found")
+		return
+	case err != nil:
+		fail(c, http.StatusInternalServerError, "delete device failed")
+		return
+	}
+	ok(c, gin.H{"id": id, "deleted": true})
 }
 
 // ---------------------------------------------------------------------------

@@ -128,8 +128,11 @@ func (s *Server) Router() *gin.Engine {
 
 		admin.GET("/tenants", s.handleAdminListTenants)
 		admin.POST("/tenants", s.handleAdminCreateTenant)
+		admin.PUT("/tenants/:id", s.handleAdminUpdateTenant)
+		admin.POST("/tenants/:id/status", s.handleAdminSetTenantStatus)
 		admin.GET("/users", s.handleAdminListUsers)
 		admin.POST("/users", s.handleAdminCreateUser)
+		admin.PUT("/users/:id", s.handleAdminUpdateUser)
 		admin.POST("/users/:id/disable", s.handleAdminSetUserDisabled)
 		admin.POST("/users/:id/password", s.handleAdminResetUserPassword)
 		admin.POST("/sales/:id/assign", s.handleAdminAssignSales)
@@ -140,10 +143,14 @@ func (s *Server) Router() *gin.Engine {
 
 		admin.GET("/resources/proxies", s.handleAdminListProxies)
 		admin.POST("/resources/proxies", s.handleAdminImportProxies)
+		admin.PUT("/resources/proxies/:id", s.handleAdminUpdateProxy)
+		admin.DELETE("/resources/proxies/:id", s.handleAdminDeleteProxy)
 		admin.GET("/resources/devices", s.handleAdminListDevices)
 		admin.POST("/resources/devices", s.handleAdminImportDevices)
 		admin.POST("/resources/devices/:id/proxy", s.handleAdminBindDeviceProxy)
 		admin.DELETE("/resources/devices/:id/proxy", s.handleAdminUnbindDeviceProxy)
+		admin.PUT("/resources/devices/:id", s.handleAdminUpdateDevice)
+		admin.DELETE("/resources/devices/:id", s.handleAdminDeleteDevice)
 
 		admin.GET("/settings/risk", s.handleAdminGetRiskConfig)
 		admin.PUT("/settings/risk", s.handleAdminUpdateRiskConfig)
