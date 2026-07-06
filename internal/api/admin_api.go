@@ -15,6 +15,7 @@ import (
 	"fmt"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -615,6 +616,80 @@ VALUES ($1, $2, $3) ON CONFLICT (proxy_url) DO NOTHING`, p.URL, typ, p.Country)
 		Action: "proxy.import", ResourceType: "proxy",
 		Details: map[string]any{"submitted": len(req.Proxies), "imported": imported, "skipped": len(req.Proxies) - imported}})
 	ok(c, gin.H{"submitted": len(req.Proxies), "imported": imported, "skipped": len(req.Proxies) - imported})
+}
+
+// handleAdminUpdateProxy: PUT /api/v1/admin/resources/proxies/:id
+// {proxy_type, country_code, max_bindings}. proxy_url is immutable.
+func (s *Server) handleAdminUpdateProxy(c *gin.Context) {
+	id, err := strconv.ParseInt(c.Param("id"), 10, 64)
+	if err != nil || id <= 0 {
+		fail(c, http.StatusBadRequest, "invalid proxy id")
+		return
+	}
+	var req struct {
+		ProxyType   string `json:"proxy_type" binding:"required"`
+		CountryCode string `json:"country_code" binding:"required"`
+		MaxBindings int    `json:"max_bindings" binding:"required"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		fail(c, http.StatusBadRequest, "proxy_type, country_code, max_bindings are required")
+		return
+	}
+	if req.ProxyType != "socks5" && req.ProxyType != "http" && req.ProxyType != "https" {
+		fail(c, http.StatusBadRequest, "proxy_type must be socks5, http or https")
+		return
+	}
+	if len(req.CountryCode) != 2 || req.MaxBindings < 1 {
+		fail(c, http.StatusBadRequest, "country_code must be 2 chars and max_bindings >= 1")
+		return
+	}
+	// The WHERE guard rejects lowering max_bindings below current_bindings
+	// (which would violate chk_bindings).
+	tag, err := s.systemPool().Exec(c.Request.Context(),
+		`UPDATE proxy_pool SET proxy_type=$1::proxy_type_t, country_code=$2, max_bindings=$3, updated_at=now()
+		   WHERE id=$4 AND $3 >= current_bindings`,
+		req.ProxyType, strings.ToUpper(req.CountryCode), req.MaxBindings, id)
+	if err != nil {
+		fail(c, http.StatusInternalServerError, "update proxy failed")
+		return
+	}
+	if tag.RowsAffected() == 0 {
+		// distinguish not-found from max_bindings-too-low
+		var exists bool
+		s.systemPool().QueryRow(c.Request.Context(), `SELECT EXISTS(SELECT 1 FROM proxy_pool WHERE id=$1)`, id).Scan(&exists)
+		if exists {
+			fail(c, http.StatusBadRequest, "max_bindings below current bindings")
+		} else {
+			fail(c, http.StatusNotFound, "proxy not found")
+		}
+		return
+	}
+	s.recordAudit(c.Request.Context(), auditEvent{ActorID: actorID(c),
+		Action: "proxy.update", ResourceType: "proxy", ResourceID: id,
+		Details: map[string]any{"proxy_type": req.ProxyType, "country_code": strings.ToUpper(req.CountryCode), "max_bindings": req.MaxBindings}})
+	ok(c, gin.H{"id": id})
+}
+
+// handleAdminDeleteProxy: DELETE /api/v1/admin/resources/proxies/:id.
+// FK ON DELETE SET NULL nulls account_devices.proxy_id automatically.
+func (s *Server) handleAdminDeleteProxy(c *gin.Context) {
+	id, err := strconv.ParseInt(c.Param("id"), 10, 64)
+	if err != nil || id <= 0 {
+		fail(c, http.StatusBadRequest, "invalid proxy id")
+		return
+	}
+	tag, err := s.systemPool().Exec(c.Request.Context(), `DELETE FROM proxy_pool WHERE id=$1`, id)
+	if err != nil {
+		fail(c, http.StatusInternalServerError, "delete proxy failed")
+		return
+	}
+	if tag.RowsAffected() == 0 {
+		fail(c, http.StatusNotFound, "proxy not found")
+		return
+	}
+	s.recordAudit(c.Request.Context(), auditEvent{ActorID: actorID(c),
+		Action: "proxy.delete", ResourceType: "proxy", ResourceID: id})
+	ok(c, gin.H{"id": id, "deleted": true})
 }
 
 type deviceRow struct {

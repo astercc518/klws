@@ -151,3 +151,71 @@ func TestHandleAdminSetTenantStatus(t *testing.T) {
 		t.Errorf("missing tenant want 404")
 	}
 }
+
+func TestHandleAdminUpdateProxy(t *testing.T) {
+	s, ctx := newCrudServer(t)
+	seedProxy(t, ctx, s, "socks5://9.9.9.9:1080", "US", "socks5", true)
+	var pid int64
+	s.systemPool().QueryRow(ctx, `SELECT id FROM proxy_pool WHERE proxy_url='socks5://9.9.9.9:1080'`).Scan(&pid)
+	// bump current_bindings to 2 with max 5 (via a direct set + matching max)
+	s.systemPool().Exec(ctx, `UPDATE proxy_pool SET max_bindings=5, current_bindings=2 WHERE id=$1`, pid)
+
+	// valid edit (max_bindings 3 >= current 2)
+	w := doJSON(t, s, s.handleAdminUpdateProxy, http.MethodPut, "/admin/resources/proxies/x", itoa(pid),
+		`{"proxy_type":"http","country_code":"DE","max_bindings":3}`)
+	if w.Code != http.StatusOK {
+		t.Fatalf("edit status %d body %s", w.Code, w.Body.String())
+	}
+	var typ, cc string
+	var mb int
+	s.systemPool().QueryRow(ctx, `SELECT proxy_type::text, country_code, max_bindings FROM proxy_pool WHERE id=$1`, pid).Scan(&typ, &cc, &mb)
+	if typ != "http" || cc != "DE" || mb != 3 {
+		t.Errorf("proxy not updated: %s %s %d", typ, cc, mb)
+	}
+	var n int
+	s.systemPool().QueryRow(ctx, `SELECT count(*) FROM audit_log WHERE action='proxy.update' AND resource_id=$1`, pid).Scan(&n)
+	if n != 1 {
+		t.Errorf("want 1 proxy.update audit, got %d", n)
+	}
+
+	// max_bindings below current (1 < 2) → 400
+	if doJSON(t, s, s.handleAdminUpdateProxy, http.MethodPut, "/admin/resources/proxies/x", itoa(pid),
+		`{"proxy_type":"http","country_code":"DE","max_bindings":1}`).Code != http.StatusBadRequest {
+		t.Errorf("max_bindings<current want 400")
+	}
+	// missing id → 404
+	if doJSON(t, s, s.handleAdminUpdateProxy, http.MethodPut, "/admin/resources/proxies/x", "999999",
+		`{"proxy_type":"http","country_code":"DE","max_bindings":3}`).Code != http.StatusNotFound {
+		t.Errorf("missing proxy want 404")
+	}
+}
+
+func TestHandleAdminDeleteProxy(t *testing.T) {
+	s, ctx := newCrudServer(t)
+	tid, _ := seedTenantUser(t, ctx, s, "px-del@acme.test")
+	seedProxy(t, ctx, s, "socks5://8.8.8.8:1080", "US", "socks5", true)
+	var pid int64
+	s.systemPool().QueryRow(ctx, `SELECT id FROM proxy_pool WHERE proxy_url='socks5://8.8.8.8:1080'`).Scan(&pid)
+	// a device bound to this proxy → after delete, its proxy_id should be NULL (ON DELETE SET NULL)
+	seedDevice(t, ctx, s, tid, "d-px@wa", "555", "active", "")
+	s.systemPool().Exec(ctx, `UPDATE account_devices SET proxy_id=$1 WHERE account_jid='d-px@wa'`, pid)
+
+	w := doJSON(t, s, s.handleAdminDeleteProxy, http.MethodDelete, "/admin/resources/proxies/x", itoa(pid), "")
+	if w.Code != http.StatusOK {
+		t.Fatalf("delete status %d body %s", w.Code, w.Body.String())
+	}
+	var exists bool
+	s.systemPool().QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM proxy_pool WHERE id=$1)`, pid).Scan(&exists)
+	if exists {
+		t.Errorf("proxy should be deleted")
+	}
+	var devProxy *int64
+	s.systemPool().QueryRow(ctx, `SELECT proxy_id FROM account_devices WHERE account_jid='d-px@wa'`).Scan(&devProxy)
+	if devProxy != nil {
+		t.Errorf("bound device proxy_id should be nulled, got %v", *devProxy)
+	}
+	// second delete → 404
+	if doJSON(t, s, s.handleAdminDeleteProxy, http.MethodDelete, "/admin/resources/proxies/x", itoa(pid), "").Code != http.StatusNotFound {
+		t.Errorf("re-delete want 404")
+	}
+}
