@@ -149,6 +149,8 @@ func (s *Server) Router() *gin.Engine {
 		admin.POST("/resources/devices", s.handleAdminImportDevices)
 		admin.POST("/resources/devices/:id/proxy", s.handleAdminBindDeviceProxy)
 		admin.DELETE("/resources/devices/:id/proxy", s.handleAdminUnbindDeviceProxy)
+		admin.PUT("/resources/devices/:id", s.handleAdminUpdateDevice)
+		admin.DELETE("/resources/devices/:id", s.handleAdminDeleteDevice)
 
 		admin.GET("/settings/risk", s.handleAdminGetRiskConfig)
 		admin.PUT("/settings/risk", s.handleAdminUpdateRiskConfig)

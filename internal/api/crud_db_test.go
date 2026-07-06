@@ -219,3 +219,81 @@ func TestHandleAdminDeleteProxy(t *testing.T) {
 		t.Errorf("re-delete want 404")
 	}
 }
+
+func TestHandleAdminUpdateDevice(t *testing.T) {
+	s, ctx := newCrudServer(t)
+	tid, _ := seedTenantUser(t, ctx, s, "dv-edit@acme.test")
+	seedDevice(t, ctx, s, tid, "dv1@wa", "111", "active", "")
+	var did int64
+	s.systemPool().QueryRow(ctx, `SELECT id FROM account_devices WHERE account_jid='dv1@wa'`).Scan(&did)
+
+	// edit phone + tags
+	w := doJSON(t, s, s.handleAdminUpdateDevice, http.MethodPut, "/admin/resources/devices/x", itoa(did),
+		`{"phone_number":"222","tags":["vip","us"]}`)
+	if w.Code != http.StatusOK {
+		t.Fatalf("edit status %d body %s", w.Code, w.Body.String())
+	}
+	var phone string
+	var tags []string
+	s.systemPool().QueryRow(ctx, `SELECT phone_number, tags FROM account_devices WHERE id=$1`, did).Scan(&phone, &tags)
+	if phone != "222" || len(tags) != 2 {
+		t.Errorf("device not updated: %s %v", phone, tags)
+	}
+	var n int
+	s.systemPool().QueryRow(ctx, `SELECT count(*) FROM audit_log WHERE action='device.update' AND resource_id=$1`, did).Scan(&n)
+	if n != 1 {
+		t.Errorf("want 1 device.update audit, got %d", n)
+	}
+	// tenant_id that doesn't exist → 400
+	if doJSON(t, s, s.handleAdminUpdateDevice, http.MethodPut, "/admin/resources/devices/x", itoa(did), `{"tenant_id":999999}`).Code != http.StatusBadRequest {
+		t.Errorf("bad tenant want 400")
+	}
+	// no fields → 400
+	if doJSON(t, s, s.handleAdminUpdateDevice, http.MethodPut, "/admin/resources/devices/x", itoa(did), `{}`).Code != http.StatusBadRequest {
+		t.Errorf("no fields want 400")
+	}
+	// missing id → 404
+	if doJSON(t, s, s.handleAdminUpdateDevice, http.MethodPut, "/admin/resources/devices/x", "999999", `{"phone_number":"9"}`).Code != http.StatusNotFound {
+		t.Errorf("missing device want 404")
+	}
+}
+
+func TestHandleAdminDeleteDevice_releasesBinding(t *testing.T) {
+	s, ctx := newCrudServer(t)
+	tid, _ := seedTenantUser(t, ctx, s, "dv-del@acme.test")
+	seedProxy(t, ctx, s, "socks5://7.7.7.7:1080", "US", "socks5", true)
+	var pid int64
+	s.systemPool().QueryRow(ctx, `SELECT id FROM proxy_pool WHERE proxy_url='socks5://7.7.7.7:1080'`).Scan(&pid)
+	// bind a device to the proxy at bindings=1
+	seedDevice(t, ctx, s, tid, "dv-bound@wa", "333", "active", "")
+	s.systemPool().Exec(ctx, `UPDATE proxy_pool SET current_bindings=1 WHERE id=$1`, pid)
+	s.systemPool().Exec(ctx, `UPDATE account_devices SET proxy_id=$1 WHERE account_jid='dv-bound@wa'`, pid)
+	var did int64
+	s.systemPool().QueryRow(ctx, `SELECT id FROM account_devices WHERE account_jid='dv-bound@wa'`).Scan(&did)
+
+	w := doJSON(t, s, s.handleAdminDeleteDevice, http.MethodDelete, "/admin/resources/devices/x", itoa(did), "")
+	if w.Code != http.StatusOK {
+		t.Fatalf("delete status %d body %s", w.Code, w.Body.String())
+	}
+	// device gone
+	var exists bool
+	s.systemPool().QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM account_devices WHERE id=$1)`, did).Scan(&exists)
+	if exists {
+		t.Errorf("device should be deleted")
+	}
+	// proxy binding released
+	var cb int
+	s.systemPool().QueryRow(ctx, `SELECT current_bindings FROM proxy_pool WHERE id=$1`, pid).Scan(&cb)
+	if cb != 0 {
+		t.Errorf("proxy current_bindings should be 0, got %d", cb)
+	}
+	// audit + 404 on re-delete
+	var n int
+	s.systemPool().QueryRow(ctx, `SELECT count(*) FROM audit_log WHERE action='device.delete' AND resource_id=$1`, did).Scan(&n)
+	if n != 1 {
+		t.Errorf("want 1 device.delete audit, got %d", n)
+	}
+	if doJSON(t, s, s.handleAdminDeleteDevice, http.MethodDelete, "/admin/resources/devices/x", itoa(did), "").Code != http.StatusNotFound {
+		t.Errorf("re-delete want 404")
+	}
+}

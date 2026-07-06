@@ -954,6 +954,111 @@ func (s *Server) handleAdminUnbindDeviceProxy(c *gin.Context) {
 	ok(c, gin.H{"device_id": id, "proxy_id": nil})
 }
 
+// handleAdminUpdateDevice: PUT /api/v1/admin/resources/devices/:id
+// {tenant_id?, phone_number?, tags?}. account_jid is immutable. Only provided
+// fields update.
+func (s *Server) handleAdminUpdateDevice(c *gin.Context) {
+	id, err := strconv.ParseInt(c.Param("id"), 10, 64)
+	if err != nil || id <= 0 {
+		fail(c, http.StatusBadRequest, "invalid device id")
+		return
+	}
+	var req struct {
+		TenantID *int64    `json:"tenant_id"`
+		Phone    *string   `json:"phone_number"`
+		Tags     *[]string `json:"tags"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		fail(c, http.StatusBadRequest, "invalid body")
+		return
+	}
+	ctx := c.Request.Context()
+	if req.TenantID != nil {
+		var exists bool
+		s.systemPool().QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM tenants WHERE id=$1)`, *req.TenantID).Scan(&exists)
+		if !exists {
+			fail(c, http.StatusBadRequest, "tenant_id does not exist")
+			return
+		}
+	}
+	var sets []string
+	var args []any
+	details := map[string]any{}
+	if req.TenantID != nil {
+		args = append(args, *req.TenantID)
+		sets = append(sets, fmt.Sprintf("tenant_id=$%d", len(args)))
+		details["tenant_id"] = *req.TenantID
+	}
+	if req.Phone != nil {
+		args = append(args, *req.Phone)
+		sets = append(sets, fmt.Sprintf("phone_number=$%d", len(args)))
+		details["phone_number"] = *req.Phone
+	}
+	if req.Tags != nil {
+		args = append(args, *req.Tags)
+		sets = append(sets, fmt.Sprintf("tags=$%d", len(args)))
+		details["tags"] = *req.Tags
+	}
+	if len(sets) == 0 {
+		fail(c, http.StatusBadRequest, "no fields to update")
+		return
+	}
+	args = append(args, id)
+	q := "UPDATE account_devices SET " + strings.Join(sets, ", ") + ", updated_at=now() WHERE id=$" + strconv.Itoa(len(args))
+	tag, err := s.systemPool().Exec(ctx, q, args...)
+	if err != nil {
+		fail(c, http.StatusInternalServerError, "update device failed")
+		return
+	}
+	if tag.RowsAffected() == 0 {
+		fail(c, http.StatusNotFound, "device not found")
+		return
+	}
+	s.recordAudit(ctx, auditEvent{ActorID: actorID(c),
+		Action: "device.update", ResourceType: "device", ResourceID: id, Details: details})
+	ok(c, gin.H{"id": id})
+}
+
+// handleAdminDeleteDevice: DELETE /api/v1/admin/resources/devices/:id. In one tx:
+// release the bound proxy's slot (if any), delete the row, audit.
+func (s *Server) handleAdminDeleteDevice(c *gin.Context) {
+	id, err := strconv.ParseInt(c.Param("id"), 10, 64)
+	if err != nil || id <= 0 {
+		fail(c, http.StatusBadRequest, "invalid device id")
+		return
+	}
+	ctx := c.Request.Context()
+	err = pgx.BeginTxFunc(ctx, s.systemPool(), pgx.TxOptions{}, func(tx pgx.Tx) error {
+		var proxyID *int64
+		e := tx.QueryRow(ctx, `SELECT proxy_id FROM account_devices WHERE id=$1 FOR UPDATE`, id).Scan(&proxyID)
+		if errors.Is(e, pgx.ErrNoRows) {
+			return errDeviceNotFound
+		}
+		if e != nil {
+			return e
+		}
+		if proxyID != nil {
+			if _, e := tx.Exec(ctx, `UPDATE proxy_pool SET current_bindings=GREATEST(current_bindings-1,0) WHERE id=$1`, *proxyID); e != nil {
+				return e
+			}
+		}
+		if _, e := tx.Exec(ctx, `DELETE FROM account_devices WHERE id=$1`, id); e != nil {
+			return e
+		}
+		return s.recordAuditTx(ctx, tx, auditEvent{ActorID: actorID(c),
+			Action: "device.delete", ResourceType: "device", ResourceID: id})
+	})
+	switch {
+	case errors.Is(err, errDeviceNotFound):
+		fail(c, http.StatusNotFound, "device not found")
+		return
+	case err != nil:
+		fail(c, http.StatusInternalServerError, "delete device failed")
+		return
+	}
+	ok(c, gin.H{"id": id, "deleted": true})
+}
+
 // ---------------------------------------------------------------------------
 // Risk / anti-ban policy (control-plane). Persists the admin's intended global
 // strategy to system_risk_config via the BYPASSRLS SystemPool. This is a
