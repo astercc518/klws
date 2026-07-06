@@ -22,30 +22,38 @@
 
 ---
 
-### Task 1: Audit helper core + pure-arg test + Server pool seam
+### Task 1: Audit helper (wraps internal/audit.AuditWriter) + Deps wiring + pure test
 
-Central helper so 12+ handlers don't repeat INSERT SQL, plus a test-only pool seam so the DB tests (Task 3+) don't need a full `store.Manager`.
+Central `Server` helper that REUSES the existing `internal/audit.AuditWriter` (same append-only INSERT, already used by billing and constructed in the composition root) — no second copy of the audit SQL. Plus a test-only `sysPool` seam used later by the read endpoint (Task 3).
 
 **Files:**
 - Create: `internal/api/audit.go`
-- Modify: `internal/api/router.go` (add one field to `Server`)
+- Modify: `internal/api/router.go` (add `Audit *audit.AuditWriter` to `Deps`; add `sysPool` seam to `Server`)
+- Modify: `cmd/console/main.go` (inject the AuditWriter into `api.Deps`)
 - Test: `internal/api/audit_test.go`
 
 **Interfaces:**
-- Produces (used by Tasks 2–5): `type auditEvent struct{ TenantID, ActorID int64; Action, ResourceType string; ResourceID int64; Details any }`; `func actorID(c *gin.Context) int64`; `func auditArgs(e auditEvent) []any`; `func (s *Server) systemPool() *pgxpool.Pool`; `func (s *Server) recordAudit(ctx context.Context, e auditEvent)`; `func (s *Server) recordAuditTx(ctx context.Context, tx pgx.Tx, e auditEvent) error`.
-- Consumes: existing `sessionFrom(c) *sessionData` (has `.UserID`), `s.deps.Mgr.SystemPool()`.
+- Produces (used by Tasks 3–5): `type auditEvent struct{ TenantID, ActorID int64; Action, ResourceType string; ResourceID int64; Details any }`; `func actorID(c *gin.Context) int64`; `func toAuditEntry(e auditEvent) audit.AuditEntry`; `func (s *Server) systemPool() *pgxpool.Pool`; `func (s *Server) recordAudit(ctx context.Context, e auditEvent)`; `func (s *Server) recordAuditTx(ctx context.Context, tx pgx.Tx, e auditEvent) error`; field `Deps.Audit *audit.AuditWriter`.
+- Consumes: existing `internal/audit.AuditWriter` (`Record`/`RecordTx`; `AuditEntry{TenantID, ActorID, ResourceID int64; Action, ResourceType string; Details []byte}`); `sessionFrom(c) *sessionData` (`.UserID`); `audit.NewAuditWriter(pool)`.
 
-- [ ] **Step 1: Add the test-only pool seam to `Server`**
+- [ ] **Step 1: Add `Deps.Audit` + the `sysPool` seam in `router.go`**
 
-In `internal/api/router.go`, add a field to the `Server` struct (after `deps Deps`):
+In `internal/api/router.go`, add to the `Deps` struct (after the `Sessions` field):
 
 ```go
-	// sysPool, when non-nil, overrides deps.Mgr.SystemPool() — set ONLY by tests
-	// so audit read/write can run against a raw pool without a full store.Manager.
+	Audit *audit.AuditWriter // append-only audit_log writer (shared with billing)
+```
+
+Add to the `Server` struct (after `deps Deps`):
+
+```go
+	// sysPool, when non-nil, overrides deps.Mgr.SystemPool() for the audit READ
+	// endpoint — set ONLY by tests so it can run against a raw pool without a
+	// full store.Manager.
 	sysPool *pgxpool.Pool
 ```
 
-Add the pgxpool import to `router.go` if not already present: `"github.com/jackc/pgx/v5/pgxpool"`.
+Add imports to `router.go` if missing: `"github.com/jackc/pgx/v5/pgxpool"` and `"github.com/acme/wadist/internal/audit"`.
 
 - [ ] **Step 2: Write the failing pure-arg test**
 
@@ -59,52 +67,35 @@ import (
 	"testing"
 )
 
-func TestAuditArgs(t *testing.T) {
-	// Zero ids → nil (SQL NULL); empty resource_type → nil; details marshaled.
-	args := auditArgs(auditEvent{
-		TenantID: 7, ActorID: 0, Action: "finance.topup",
+func TestToAuditEntry(t *testing.T) {
+	e := toAuditEntry(auditEvent{
+		TenantID: 7, ActorID: 3, Action: "finance.topup",
 		ResourceType: "tenant", ResourceID: 7,
 		Details: map[string]any{"amount": 100, "ref": "x"},
 	})
-	if len(args) != 6 {
-		t.Fatalf("want 6 args, got %d", len(args))
+	if e.TenantID != 7 || e.ActorID != 3 || e.ResourceID != 7 {
+		t.Errorf("ids not passed through: %+v", e)
 	}
-	if args[0] != int64(7) {
-		t.Errorf("tenant arg = %v, want 7", args[0])
-	}
-	if args[1] != nil {
-		t.Errorf("zero actor should be nil, got %v", args[1])
-	}
-	if args[2] != "finance.topup" {
-		t.Errorf("action = %v", args[2])
-	}
-	if args[3] != "tenant" {
-		t.Errorf("resource_type = %v", args[3])
-	}
-	details, ok := args[5].([]byte)
-	if !ok {
-		t.Fatalf("details arg not []byte: %T", args[5])
+	if e.Action != "finance.topup" || e.ResourceType != "tenant" {
+		t.Errorf("action/resource_type wrong: %+v", e)
 	}
 	var m map[string]any
-	if err := json.Unmarshal(details, &m); err != nil || m["ref"] != "x" {
-		t.Errorf("details json = %s (err %v)", details, err)
+	if err := json.Unmarshal(e.Details, &m); err != nil || m["ref"] != "x" {
+		t.Errorf("details json = %s (err %v)", e.Details, err)
 	}
 
-	// nil Details → "{}"; empty resource_type → nil.
-	args = auditArgs(auditEvent{Action: "user.password_reset"})
-	if args[3] != nil {
-		t.Errorf("empty resource_type should be nil, got %v", args[3])
-	}
-	if string(args[5].([]byte)) != "{}" {
-		t.Errorf("nil details should marshal to {}, got %s", args[5])
+	// nil Details → nil bytes (AuditWriter maps nil → SQL NULL).
+	e = toAuditEntry(auditEvent{Action: "user.password_reset"})
+	if e.Details != nil {
+		t.Errorf("nil details should stay nil, got %s", e.Details)
 	}
 }
 ```
 
 - [ ] **Step 3: Run test to verify it fails**
 
-Run: `go test ./internal/api/ -run TestAuditArgs`
-Expected: FAIL — `undefined: auditArgs` / `auditEvent`.
+Run: `go test ./internal/api/ -run TestToAuditEntry`
+Expected: FAIL — `undefined: toAuditEntry` / `auditEvent`.
 
 - [ ] **Step 4: Implement `internal/api/audit.go`**
 
@@ -114,26 +105,24 @@ package api
 import (
 	"context"
 	"encoding/json"
-	"fmt"
 	"log"
 
 	"github.com/gin-gonic/gin"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
+
+	"github.com/acme/wadist/internal/audit"
 )
 
-const auditInsertSQL = `
-INSERT INTO audit_log (tenant_id, actor_id, action, resource_type, resource_id, details)
-VALUES ($1, $2, $3, $4, $5, $6)`
-
-// auditEvent is one row to append to audit_log. Zero id fields → SQL NULL.
+// auditEvent is the api-layer convenience shape for one audit row. Details is
+// any JSON-serializable value; it is marshaled by toAuditEntry.
 type auditEvent struct {
-	TenantID     int64  // 0 → NULL
-	ActorID      int64  // 0 → NULL
-	Action       string // required, e.g. "finance.topup"
-	ResourceType string // "" → NULL
-	ResourceID   int64  // 0 → NULL
-	Details      any    // JSON-marshaled; nil / marshal-error → "{}"
+	TenantID     int64
+	ActorID      int64
+	Action       string
+	ResourceType string
+	ResourceID   int64
+	Details      any
 }
 
 // actorID returns the acting session user id, or 0 when unauthenticated.
@@ -144,38 +133,28 @@ func actorID(c *gin.Context) int64 {
 	return 0
 }
 
-// auditArgs maps an event to the 6 positional INSERT args.
-func auditArgs(e auditEvent) []any {
+// toAuditEntry converts an auditEvent to the audit package's AuditEntry,
+// marshaling Details to JSON bytes (nil / marshal-error → nil → SQL NULL). The
+// AuditWriter maps zero ids and empty resource_type to NULL.
+func toAuditEntry(e auditEvent) audit.AuditEntry {
 	var details []byte
 	if e.Details != nil {
 		if b, err := json.Marshal(e.Details); err == nil {
 			details = b
 		}
 	}
-	if details == nil {
-		details = []byte("{}")
-	}
-	return []any{
-		nilIfZero(e.TenantID), nilIfZero(e.ActorID), e.Action,
-		nilIfEmpty(e.ResourceType), nilIfZero(e.ResourceID), details,
+	return audit.AuditEntry{
+		TenantID:     e.TenantID,
+		ActorID:      e.ActorID,
+		ResourceID:   e.ResourceID,
+		Action:       e.Action,
+		ResourceType: e.ResourceType,
+		Details:      details,
 	}
 }
 
-func nilIfZero(v int64) any {
-	if v == 0 {
-		return nil
-	}
-	return v
-}
-
-func nilIfEmpty(s string) any {
-	if s == "" {
-		return nil
-	}
-	return s
-}
-
-// systemPool returns the BYPASSRLS pool. sysPool is a test-only override.
+// systemPool returns the BYPASSRLS pool for the audit READ endpoint. sysPool is
+// a test-only override.
 func (s *Server) systemPool() *pgxpool.Pool {
 	if s.sysPool != nil {
 		return s.sysPool
@@ -183,34 +162,49 @@ func (s *Server) systemPool() *pgxpool.Pool {
 	return s.deps.Mgr.SystemPool()
 }
 
-// recordAudit appends best-effort AFTER the action committed. On failure it logs
-// and returns — it never fails the caller's already-committed action.
+// recordAudit appends best-effort AFTER the action committed, via the shared
+// AuditWriter. On failure it logs and returns — it never fails the caller's
+// already-committed action. No-op if no writer is wired.
 func (s *Server) recordAudit(ctx context.Context, e auditEvent) {
-	if _, err := s.systemPool().Exec(ctx, auditInsertSQL, auditArgs(e)...); err != nil {
+	if s.deps.Audit == nil {
+		return
+	}
+	if err := s.deps.Audit.Record(ctx, toAuditEntry(e)); err != nil {
 		log.Printf("[audit] record %s: %v", e.Action, err)
 	}
 }
 
-// recordAuditTx appends within an existing tx (atomic with the action). Returns
-// the error so the caller can roll the whole action back on audit failure.
+// recordAuditTx appends within an existing tx (atomic with the action) via the
+// shared AuditWriter. Returns the error so the caller can roll back. No-op (nil)
+// if no writer is wired.
 func (s *Server) recordAuditTx(ctx context.Context, tx pgx.Tx, e auditEvent) error {
-	if _, err := tx.Exec(ctx, auditInsertSQL, auditArgs(e)...); err != nil {
-		return fmt.Errorf("audit %s: %w", e.Action, err)
+	if s.deps.Audit == nil {
+		return nil
 	}
-	return nil
+	return s.deps.Audit.RecordTx(ctx, tx, toAuditEntry(e))
 }
 ```
 
-- [ ] **Step 5: Run test to verify it passes + build**
+- [ ] **Step 5: Wire the AuditWriter into `api.Deps` in `cmd/console/main.go`**
 
-Run: `go test ./internal/api/ -run TestAuditArgs && go build ./... && go vet ./internal/api/...`
+In `cmd/console/main.go`, inside the `api.NewServer(api.Deps{...})` literal (around line 76), add the field:
+
+```go
+		Audit:      audit.NewAuditWriter(mgr.SystemPool()),
+```
+
+Add the import `"github.com/acme/wadist/internal/audit"` to `cmd/console/main.go` if not present.
+
+- [ ] **Step 6: Run test to verify it passes + build**
+
+Run: `go test ./internal/api/ -run TestToAuditEntry && go build ./... && go vet ./internal/api/...`
 Expected: PASS, clean build/vet.
 
-- [ ] **Step 6: Commit**
+- [ ] **Step 7: Commit**
 
 ```bash
-git add internal/api/audit.go internal/api/audit_test.go internal/api/router.go
-git commit -m "feat(api): audit helper (recordAudit/recordAuditTx) + Server pool seam
+git add internal/api/audit.go internal/api/audit_test.go internal/api/router.go cmd/console/main.go
+git commit -m "feat(api): audit helper reusing internal/audit.AuditWriter + Deps wiring
 
 Co-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>"
 ```
@@ -506,6 +500,8 @@ import (
 	"testing"
 
 	"github.com/gin-gonic/gin"
+
+	"github.com/acme/wadist/internal/audit"
 )
 
 // seedTenantUser inserts a tenant + an admin console user, returning their ids.
@@ -526,7 +522,8 @@ func seedTenantUser(t *testing.T, ctx context.Context, s *Server, email string) 
 func TestHandleAdminListAudit(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	ctx := context.Background()
-	s := &Server{sysPool: testPool(t)}
+	pool := testPool(t)
+	s := &Server{sysPool: pool, deps: Deps{Audit: audit.NewAuditWriter(pool)}}
 	tid, uid := seedTenantUser(t, ctx, s, "admin@acme.test")
 
 	// Two distinct audit events.
@@ -871,7 +868,8 @@ func seedRunningCampaign(t *testing.T, ctx context.Context, s *Server, tenantID 
 func TestHandleAdminStopCampaign_auditAtomic(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	ctx := context.Background()
-	s := &Server{sysPool: testPool(t)}
+	pool := testPool(t)
+	s := &Server{sysPool: pool, deps: Deps{Audit: audit.NewAuditWriter(pool)}}
 	tid, _ := seedTenantUser(t, ctx, s, "op@acme.test")
 	camp := seedRunningCampaign(t, ctx, s, tid)
 
