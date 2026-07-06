@@ -387,13 +387,44 @@ type proxyRow struct {
 	BoundDevices int `json:"bound_devices"`
 }
 
+type proxyStats struct {
+	Total int64 `json:"total"`
+	Alive int64 `json:"alive"`
+	Dead  int64 `json:"dead"`
+}
+
+func parseProxyFilter(c *gin.Context) proxyFilter {
+	f := proxyFilter{Q: c.Query("q"), ProxyType: c.Query("proxy_type")}
+	if v := c.Query("alive"); v == "true" {
+		b := true
+		f.Alive = &b
+	} else if v == "false" {
+		b := false
+		f.Alive = &b
+	}
+	if n, err := strconv.Atoi(c.Query("limit")); err == nil {
+		f.Limit = n
+	}
+	if n, err := strconv.Atoi(c.Query("offset")); err == nil && n > 0 {
+		f.Offset = n
+	}
+	return f
+}
+
 // handleAdminListProxies: GET /api/v1/admin/resources/proxies.
 func (s *Server) handleAdminListProxies(c *gin.Context) {
-	rows, err := s.deps.Mgr.SystemPool().Query(c.Request.Context(), `
+	ctx := c.Request.Context()
+	f := parseProxyFilter(c)
+	where, args := buildProxyWhere(f)
+
+	listArgs := append(append([]any{}, args...), clampPage(f.Limit, 20, 200), f.Offset)
+	list := `
 SELECT p.id, p.proxy_url, p.proxy_type::text, p.country_code, p.is_alive,
        p.current_bindings, p.max_bindings, p.failure_count,
        (SELECT count(*)::int FROM account_devices a WHERE a.proxy_id = p.id) AS bound_devices
-  FROM proxy_pool p ORDER BY p.id DESC LIMIT 500`)
+  FROM proxy_pool p` + where +
+		fmt.Sprintf(" ORDER BY p.id DESC LIMIT $%d OFFSET $%d", len(args)+1, len(args)+2)
+	rows, err := s.systemPool().Query(ctx, list, listArgs...)
 	if err != nil {
 		fail(c, http.StatusInternalServerError, "list proxies")
 		return
@@ -402,13 +433,33 @@ SELECT p.id, p.proxy_url, p.proxy_type::text, p.country_code, p.is_alive,
 	out := make([]proxyRow, 0)
 	for rows.Next() {
 		var p proxyRow
-		if err := rows.Scan(&p.ID, &p.URL, &p.Type, &p.Country, &p.IsAlive, &p.CurrentBindings, &p.MaxBindings, &p.FailureCount, &p.BoundDevices); err != nil {
+		if err := rows.Scan(&p.ID, &p.URL, &p.Type, &p.Country, &p.IsAlive,
+			&p.CurrentBindings, &p.MaxBindings, &p.FailureCount, &p.BoundDevices); err != nil {
 			fail(c, http.StatusInternalServerError, "scan proxy")
 			return
 		}
 		out = append(out, p)
 	}
-	ok(c, out)
+	if err := rows.Err(); err != nil {
+		fail(c, http.StatusInternalServerError, "iterate proxies")
+		return
+	}
+
+	var total int64
+	if err := s.systemPool().QueryRow(ctx, `SELECT count(*) FROM proxy_pool p`+where, args...).Scan(&total); err != nil {
+		fail(c, http.StatusInternalServerError, "count proxies")
+		return
+	}
+
+	var st proxyStats
+	if err := s.systemPool().QueryRow(ctx, `
+SELECT count(*), count(*) FILTER (WHERE is_alive), count(*) FILTER (WHERE NOT is_alive)
+  FROM proxy_pool`).Scan(&st.Total, &st.Alive, &st.Dead); err != nil {
+		fail(c, http.StatusInternalServerError, "proxy stats")
+		return
+	}
+
+	ok(c, gin.H{"rows": out, "total": total, "stats": st})
 }
 
 // handleAdminImportProxies: POST /api/v1/admin/resources/proxies

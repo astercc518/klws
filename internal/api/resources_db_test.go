@@ -90,3 +90,59 @@ func TestHandleAdminListDevices_pagination(t *testing.T) {
 		t.Errorf("stats must be unfiltered, got %v", filteredStats["total"])
 	}
 }
+
+func seedProxy(t *testing.T, ctx context.Context, s *Server, url, country, ptype string, alive bool) {
+	t.Helper()
+	if _, err := s.systemPool().Exec(ctx,
+		`INSERT INTO proxy_pool (proxy_url, country_code, proxy_type, is_alive) VALUES ($1,$2,$3::proxy_type_t,$4)`,
+		url, country, ptype, alive); err != nil {
+		t.Fatalf("seed proxy: %v", err)
+	}
+}
+
+func TestHandleAdminListProxies_pagination(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	ctx := context.Background()
+	s := &Server{sysPool: testPool(t)}
+
+	seedProxy(t, ctx, s, "socks5://1.1.1.1:1080", "US", "socks5", true)
+	seedProxy(t, ctx, s, "socks5://2.2.2.2:1080", "US", "socks5", true)
+	seedProxy(t, ctx, s, "http://3.3.3.3:8080", "DE", "http", false)
+
+	call := func(q string) map[string]any {
+		w := httptest.NewRecorder()
+		c, _ := gin.CreateTestContext(w)
+		c.Request = httptest.NewRequest(http.MethodGet, "/admin/resources/proxies"+q, nil)
+		s.handleAdminListProxies(c)
+		if w.Code != http.StatusOK {
+			t.Fatalf("status %d body %s", w.Code, w.Body.String())
+		}
+		var env struct{ Data map[string]any `json:"data"` }
+		if err := json.Unmarshal(w.Body.Bytes(), &env); err != nil {
+			t.Fatalf("decode: %v", err)
+		}
+		return env.Data
+	}
+
+	all := call("")
+	if all["total"].(float64) != 3 {
+		t.Errorf("total = %v want 3", all["total"])
+	}
+	stats := all["stats"].(map[string]any)
+	if stats["total"].(float64) != 3 || stats["alive"].(float64) != 2 || stats["dead"].(float64) != 1 {
+		t.Errorf("stats = %v", stats)
+	}
+	if call("?alive=true")["total"].(float64) != 2 {
+		t.Errorf("alive filter wrong")
+	}
+	if call("?proxy_type=http")["total"].(float64) != 1 {
+		t.Errorf("type filter wrong")
+	}
+	if call("?q=DE")["total"].(float64) != 1 {
+		t.Errorf("q filter wrong")
+	}
+	pg := call("?limit=1")
+	if len(pg["rows"].([]any)) != 1 || pg["total"].(float64) != 3 {
+		t.Errorf("limit paging wrong")
+	}
+}
