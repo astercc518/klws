@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { MoreHorizontal, Wallet, Tag, SlidersHorizontal, Users, UserCog, Lock } from "lucide-react";
+import { MoreHorizontal, Wallet, Tag, SlidersHorizontal, Users, UserCog, Lock, Plus } from "lucide-react";
 import { toast } from "sonner";
 import { api, ApiError } from "@/lib/api";
 import { Button } from "@/components/ui/button";
@@ -76,6 +76,8 @@ export function AdminTenantsTable() {
   const [roleFilter, setRoleFilter] = useState<RoleFilter>("all");
   const [topupTarget, setTopupTarget] = useState<Row | null>(null);
   const [pricingTarget, setPricingTarget] = useState<Row | null>(null);
+  const [createOpen, setCreateOpen] = useState(false);
+  const [assignTarget, setAssignTarget] = useState<Row | null>(null);
   const [salesUsers, setSalesUsers] = useState<AdminUser[]>([]);
   const [salesById, setSalesById] = useState<Map<number, string>>(new Map());
 
@@ -222,26 +224,32 @@ export function AdminTenantsTable() {
         search={{ placeholder: "搜索账号或租户…", accessor: (r) => `${r.email} ${r.tenant?.name ?? ""}` }}
         emptyState="暂无账号"
         toolbar={
-          <DropdownMenu>
-            <DropdownMenuTrigger render={<Button variant="outline" size="sm" className="gap-1.5" />}>
-              <SlidersHorizontal className="size-3.5" />
-              {activeRoleLabel}
-            </DropdownMenuTrigger>
-            <DropdownMenuContent align="end" className="w-44">
-              <DropdownMenuLabel>按角色筛选</DropdownMenuLabel>
-              <DropdownMenuSeparator />
-              <DropdownMenuRadioGroup
-                value={roleFilter}
-                onValueChange={(v) => setRoleFilter(v as RoleFilter)}
-              >
-                {ROLE_FILTERS.map((f) => (
-                  <DropdownMenuRadioItem key={f.value} value={f.value}>
-                    {f.label}
-                  </DropdownMenuRadioItem>
-                ))}
-              </DropdownMenuRadioGroup>
-            </DropdownMenuContent>
-          </DropdownMenu>
+          <>
+            <Button variant="outline" size="sm" className="gap-1.5" onClick={() => setCreateOpen(true)}>
+              <Plus className="size-3.5" />
+              新建租户
+            </Button>
+            <DropdownMenu>
+              <DropdownMenuTrigger render={<Button variant="outline" size="sm" className="gap-1.5" />}>
+                <SlidersHorizontal className="size-3.5" />
+                {activeRoleLabel}
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end" className="w-44">
+                <DropdownMenuLabel>按角色筛选</DropdownMenuLabel>
+                <DropdownMenuSeparator />
+                <DropdownMenuRadioGroup
+                  value={roleFilter}
+                  onValueChange={(v) => setRoleFilter(v as RoleFilter)}
+                >
+                  {ROLE_FILTERS.map((f) => (
+                    <DropdownMenuRadioItem key={f.value} value={f.value}>
+                      {f.label}
+                    </DropdownMenuRadioItem>
+                  ))}
+                </DropdownMenuRadioGroup>
+              </DropdownMenuContent>
+            </DropdownMenu>
+          </>
         }
         rowActions={(r) => {
           const isCustomer = r.role === "customer" && r.tenant_id != null;
@@ -262,6 +270,10 @@ export function AdminTenantsTable() {
                   <Tag className="size-4" />
                   设单价 Pricing
                 </DropdownMenuItem>
+                <DropdownMenuItem onClick={() => setAssignTarget(r)}>
+                  <UserCog className="size-4" />
+                  指派销售 Assign
+                </DropdownMenuItem>
               </DropdownMenuContent>
             </DropdownMenu>
           );
@@ -270,6 +282,8 @@ export function AdminTenantsTable() {
 
       <TopupDialog target={topupTarget} onClose={() => setTopupTarget(null)} onDone={load} />
       <PricingDialog target={pricingTarget} onClose={() => setPricingTarget(null)} onDone={load} />
+      <CreateTenantDialog open={createOpen} onClose={() => setCreateOpen(false)} onDone={load} />
+      <AssignSalesDialog target={assignTarget} salesUsers={salesUsers} onClose={() => setAssignTarget(null)} onDone={load} />
     </>
   );
 }
@@ -461,6 +475,127 @@ function PricingDialog({
           <Button onClick={submit} disabled={!valid}>
             {busy ? "提交中…" : "确认设置"}
           </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Create tenant dialog → POST /admin/tenants
+// ---------------------------------------------------------------------------
+
+function CreateTenantDialog({ open, onClose, onDone }: { open: boolean; onClose: () => void; onDone: () => void }) {
+  const [name, setName] = useState("");
+  const [busy, setBusy] = useState(false);
+
+  useEffect(() => {
+    if (open) setName("");
+  }, [open]);
+
+  const valid = name.trim().length > 0 && !busy;
+
+  async function submit() {
+    setBusy(true);
+    try {
+      const created = await api.post<{ id: number; name: string }>("/admin/tenants", { name: name.trim() });
+      toast.success("租户已创建", { description: `${created.name}(#${created.id})— 请到用户管理为其创建客户账号` });
+      onClose();
+      onDone();
+    } catch (e) {
+      toast.error("创建失败", { description: e instanceof ApiError ? e.message : "请重试" });
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <Dialog open={open} onOpenChange={(o) => !o && onClose()}>
+      <DialogContent className="sm:max-w-md">
+        <DialogHeader>
+          <DialogTitle>新建租户</DialogTitle>
+          <DialogDescription>创建一个新客户租户。新建后它会以「未开通账号」出现在列表中,可直接充值/设价/指派销售。</DialogDescription>
+        </DialogHeader>
+        <div className="space-y-2 py-1">
+          <label htmlFor="tenant-name" className="text-sm font-medium">租户名称</label>
+          <Input id="tenant-name" value={name} onChange={(e) => setName(e.target.value)} placeholder="Acme Corp" />
+        </div>
+        <DialogFooter>
+          <DialogClose render={<Button variant="ghost" />}>取消</DialogClose>
+          <Button onClick={submit} disabled={!valid}>{busy ? "创建中…" : "确认创建"}</Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Assign sales dialog → POST /admin/sales/:tenantId/assign
+// ---------------------------------------------------------------------------
+
+function AssignSalesDialog({
+  target,
+  salesUsers,
+  onClose,
+  onDone,
+}: {
+  target: Row | null;
+  salesUsers: AdminUser[];
+  onClose: () => void;
+  onDone: () => void;
+}) {
+  const [salesId, setSalesId] = useState<string>("");
+  const [busy, setBusy] = useState(false);
+
+  useEffect(() => {
+    if (target) setSalesId(target.tenant?.sales_owner_id ? String(target.tenant.sales_owner_id) : "");
+  }, [target]);
+
+  const valid = salesId !== "" && !busy;
+
+  async function submit() {
+    if (!target?.tenant_id) return;
+    setBusy(true);
+    try {
+      await api.post(`/admin/sales/${target.tenant_id}/assign`, { sales_user_id: Number(salesId) });
+      toast.success("已指派销售", { description: `${target.tenant?.name} → ${salesUsers.find((s) => String(s.id) === salesId)?.email ?? salesId}` });
+      onClose();
+      onDone();
+    } catch (e) {
+      toast.error("指派失败", { description: e instanceof ApiError ? e.message : "请重试" });
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <Dialog open={target != null} onOpenChange={(o) => !o && onClose()}>
+      <DialogContent className="sm:max-w-md">
+        <DialogHeader>
+          <DialogTitle>指派销售归属</DialogTitle>
+          <DialogDescription>为 <span className="font-mono">{target?.tenant?.name}</span> 选择负责的销售账号。</DialogDescription>
+        </DialogHeader>
+        <div className="space-y-2 py-1">
+          <label htmlFor="assign-sales" className="text-sm font-medium">销售账号</label>
+          {salesUsers.length === 0 ? (
+            <p className="text-sm text-muted-foreground">暂无销售账号,请先在「用户管理」创建一个 sales 用户。</p>
+          ) : (
+            <select
+              id="assign-sales"
+              value={salesId}
+              onChange={(e) => setSalesId(e.target.value)}
+              className="h-9 w-full rounded-lg border bg-transparent px-2.5 text-sm outline-none"
+            >
+              <option value="" disabled>选择销售…</option>
+              {salesUsers.map((s) => (
+                <option key={s.id} value={String(s.id)}>{s.email}</option>
+              ))}
+            </select>
+          )}
+        </div>
+        <DialogFooter>
+          <DialogClose render={<Button variant="ghost" />}>取消</DialogClose>
+          <Button onClick={submit} disabled={!valid}>{busy ? "提交中…" : "确认指派"}</Button>
         </DialogFooter>
       </DialogContent>
     </Dialog>
