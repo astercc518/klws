@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
-import { MoreHorizontal, Plus, Ban, CircleCheck, KeyRound } from "lucide-react";
+import { MoreHorizontal, Plus, Ban, CircleCheck, KeyRound, Pencil } from "lucide-react";
 import { toast } from "sonner";
 import { api, ApiError } from "@/lib/api";
 import { Button } from "@/components/ui/button";
@@ -50,6 +50,7 @@ export function AdminUsersTable() {
   const [tenants, setTenants] = useState<Tenant[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [pwTarget, setPwTarget] = useState<User | null>(null);
+  const [editTarget, setEditTarget] = useState<User | null>(null);
 
   const load = useCallback(async () => {
     try {
@@ -125,6 +126,10 @@ export function AdminUsersTable() {
                       <MoreHorizontal className="size-4" />
                     </DropdownMenuTrigger>
                     <DropdownMenuContent align="end">
+                      <DropdownMenuItem onClick={() => setEditTarget(u)}>
+                        <Pencil className="size-4" />
+                        编辑 Edit
+                      </DropdownMenuItem>
                       <DropdownMenuItem onClick={() => toggleDisabled(u)}>
                         {u.disabled ? <CircleCheck className="size-4" /> : <Ban className="size-4" />}
                         {u.disabled ? "启用账号" : "禁用账号"}
@@ -143,6 +148,12 @@ export function AdminUsersTable() {
       </Card>
 
       <ResetPasswordDialog target={pwTarget} onClose={() => setPwTarget(null)} />
+      <EditUserDialog
+        target={editTarget}
+        tenants={tenants}
+        onClose={() => setEditTarget(null)}
+        onDone={load}
+      />
     </div>
   );
 }
@@ -263,6 +274,123 @@ function CreateUserDialog({ tenants, onDone }: { tenants: Tenant[]; onDone: () =
           <DialogClose render={<Button variant="ghost" />}>取消</DialogClose>
           <Button onClick={submit} disabled={!valid}>
             {busy ? "创建中…" : "确认创建"}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Edit user → PUT /admin/users/:id
+// ---------------------------------------------------------------------------
+
+function EditUserDialog({
+  target,
+  tenants,
+  onClose,
+  onDone,
+}: {
+  target: User | null;
+  tenants: Tenant[];
+  onClose: () => void;
+  onDone: () => void;
+}) {
+  const [email, setEmail] = useState("");
+  const [role, setRole] = useState<Role>("customer");
+  const [tenantId, setTenantId] = useState<string>("");
+  const [busy, setBusy] = useState(false);
+
+  useEffect(() => {
+    if (target) {
+      setEmail(target.email);
+      setRole(target.role);
+      setTenantId(target.tenant_id != null ? String(target.tenant_id) : "");
+    }
+  }, [target]);
+
+  const needsTenant = role === "customer";
+  const valid =
+    /\S+@\S+\.\S+/.test(email) &&
+    (!needsTenant || tenantId !== "") &&
+    !busy;
+
+  async function submit() {
+    if (!target) return;
+    setBusy(true);
+    try {
+      await api.put(`/admin/users/${target.id}`, {
+        email: email.trim(),
+        role,
+        tenant_id: needsTenant ? Number(tenantId) : undefined,
+      });
+      toast.success("用户已更新", { description: `${email} · ${role}` });
+      onClose();
+      onDone();
+    } catch (e) {
+      toast.error("更新失败", { description: e instanceof ApiError ? e.message : "请重试" });
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <Dialog open={target != null} onOpenChange={(o) => !o && onClose()}>
+      <DialogContent className="sm:max-w-md">
+        <DialogHeader>
+          <DialogTitle>编辑用户</DialogTitle>
+          <DialogDescription>修改邮箱、角色或绑定租户。客户须绑定一个租户。</DialogDescription>
+        </DialogHeader>
+        <div className="space-y-4 py-1">
+          <div className="space-y-2">
+            <label htmlFor="eu-email" className="text-sm font-medium">邮箱</label>
+            <Input
+              id="eu-email"
+              type="email"
+              value={email}
+              onChange={(e) => setEmail(e.target.value)}
+              placeholder="user@example.com"
+              className="font-mono"
+            />
+          </div>
+          <div className="flex gap-3">
+            <div className="space-y-2">
+              <label htmlFor="eu-role" className="text-sm font-medium">角色</label>
+              <select
+                id="eu-role"
+                value={role}
+                onChange={(e) => setRole(e.target.value as Role)}
+                className="h-9 rounded-md border bg-transparent px-3 text-sm"
+              >
+                <option value="customer">customer</option>
+                <option value="sales">sales</option>
+                <option value="admin">admin</option>
+              </select>
+            </div>
+            {needsTenant && (
+              <div className="flex-1 space-y-2">
+                <label htmlFor="eu-tenant" className="text-sm font-medium">绑定租户</label>
+                <select
+                  id="eu-tenant"
+                  value={tenantId}
+                  onChange={(e) => setTenantId(e.target.value)}
+                  className="h-9 w-full rounded-md border bg-transparent px-3 text-sm"
+                >
+                  <option value="">选择租户…</option>
+                  {tenants.map((t) => (
+                    <option key={t.id} value={t.id}>
+                      #{t.id} {t.name}
+                    </option>
+                  ))}
+                </select>
+              </div>
+            )}
+          </div>
+        </div>
+        <DialogFooter>
+          <DialogClose render={<Button variant="ghost" />}>取消</DialogClose>
+          <Button onClick={submit} disabled={!valid}>
+            {busy ? "保存中…" : "保存"}
           </Button>
         </DialogFooter>
       </DialogContent>
