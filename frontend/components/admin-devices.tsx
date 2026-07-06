@@ -148,24 +148,55 @@ function parseDevices(raw: string): ParsedDevice[] {
     .filter((d): d is ParsedDevice => d !== null);
 }
 
+const PAGE_SIZE = 20;
+
+interface DeviceStats {
+  total: number;
+  online: number;
+  banned: number;
+  flagged: number;
+  logged_out: number;
+}
+
 export function AdminDevices() {
   const [rows, setRows] = useState<Device[] | null>(null);
+  const [total, setTotal] = useState(0);
+  const [stats, setStats] = useState<DeviceStats | null>(null);
+  const [page, setPage] = useState(0);
+  const [query, setQuery] = useState("");
+  const [banStatus, setBanStatus] = useState<"all" | "active" | "banned" | "flagged" | "logged_out">("all");
+  const [online, setOnline] = useState<"all" | "true" | "false">("all");
+  const [loading, setLoading] = useState(false);
   const [proxies, setProxies] = useState<Proxy[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [proxyTarget, setProxyTarget] = useState<Device | null>(null);
 
   const load = useCallback(async () => {
+    setLoading(true);
+    const params = new URLSearchParams({ limit: String(PAGE_SIZE), offset: String(page * PAGE_SIZE) });
+    if (query.trim()) params.set("q", query.trim());
+    if (banStatus !== "all") params.set("ban_status", banStatus);
+    if (online !== "all") params.set("online", online);
     try {
-      setRows(await api.get<Device[]>("/admin/resources/devices"));
+      const d = await api.get<{ rows: Device[]; total: number; stats: DeviceStats }>(
+        `/admin/resources/devices?${params.toString()}`,
+      );
+      setRows(d.rows);
+      setTotal(d.total);
+      setStats(d.stats);
+      setError(null);
     } catch (e) {
       if (!(e instanceof ApiError && e.status === 401)) {
         setError(e instanceof ApiError ? e.message : "加载失败");
       }
+    } finally {
+      setLoading(false);
     }
-  }, []);
+  }, [page, query, banStatus, online]);
   const loadProxies = useCallback(async () => {
     try {
-      setProxies(await api.get<Proxy[]>("/admin/resources/proxies"));
+      const d = await api.get<{ rows: Proxy[] }>("/admin/resources/proxies?alive=true&limit=200");
+      setProxies(d.rows);
     } catch {
       // proxy pool is non-critical for the table; the bind dialog will simply
       // show "无可用代理" if this fails.
@@ -178,21 +209,11 @@ export function AdminDevices() {
     loadProxies();
   }, [load, loadProxies]);
   useEffect(() => {
-    refresh();
-  }, [refresh]);
-
-  const summary = useMemo(() => {
-    if (!rows) return null;
-    let online = 0;
-    let risky = 0;
-    let loggedOut = 0;
-    for (const d of rows) {
-      if (d.ban_status === "banned" || d.ban_status === "flagged") risky++;
-      else if (d.ban_status === "logged_out") loggedOut++;
-      else if (d.owner_node) online++;
-    }
-    return { total: rows.length, online, risky, loggedOut };
-  }, [rows]);
+    load();
+  }, [load]);
+  useEffect(() => {
+    loadProxies();
+  }, [loadProxies]);
 
   const columns: Column<Device>[] = [
     {
@@ -252,12 +273,12 @@ export function AdminDevices() {
 
   return (
     <>
-      {summary && (
+      {stats && (
         <MetricCardGroup className="mb-6">
-          <StatCard accent="brand" label="设备总数" value={String(summary.total)} sub="全网 WA 账号" icon={Smartphone} />
-          <StatCard accent="emerald" label="在线" value={String(summary.online)} sub="已接管并可发送" icon={Wifi} />
-          <StatCard accent="rose" label="封禁 / 标记" value={String(summary.risky)} sub="被风控命中" icon={ShieldAlert} />
-          <StatCard accent="amber" label="已登出" value={String(summary.loggedOut)} sub="需重新扫码接入" icon={LogOut} />
+          <StatCard accent="brand" label="设备总数" value={String(stats.total)} sub="全网 WA 账号" icon={Smartphone} />
+          <StatCard accent="emerald" label="在线" value={String(stats.online)} sub="已接管并可发送" icon={Wifi} />
+          <StatCard accent="rose" label="封禁 / 标记" value={String(stats.banned + stats.flagged)} sub="被风控命中" icon={ShieldAlert} />
+          <StatCard accent="amber" label="已登出" value={String(stats.logged_out)} sub="需重新扫码接入" icon={LogOut} />
         </MetricCardGroup>
       )}
       <ProDataTable
@@ -265,17 +286,50 @@ export function AdminDevices() {
         error={error}
         columns={columns}
         getRowKey={(d) => d.id}
-        search={{
-          placeholder: "搜索 JID / 手机号 / 标签…",
-          accessor: (d) =>
-            `${d.account_jid} ${d.phone_number} ${d.tags.join(" ")} ${d.proxy_url ?? ""}`,
+        server={{
+          total,
+          page,
+          pageSize: PAGE_SIZE,
+          onPageChange: setPage,
+          query,
+          onQueryChange: (q) => { setQuery(q); setPage(0); },
+          loading,
         }}
+        search={{ placeholder: "搜索 JID / 手机号 / 标签…", accessor: () => "" }}
         emptyState="设备池为空。可批量录入元数据,或在节点侧扫码接入。"
         toolbar={
-          <>
+          <div className="flex items-center gap-2">
+            <select
+              value={banStatus}
+              onChange={(e) => {
+                setBanStatus(e.target.value as "all" | "active" | "banned" | "flagged" | "logged_out");
+                setPage(0);
+              }}
+              className="h-8 rounded-md border bg-transparent px-2 text-sm"
+              aria-label="按状态筛选"
+            >
+              <option value="all">全部状态</option>
+              <option value="active">活跃</option>
+              <option value="banned">封禁</option>
+              <option value="flagged">标记</option>
+              <option value="logged_out">已登出</option>
+            </select>
+            <select
+              value={online}
+              onChange={(e) => {
+                setOnline(e.target.value as "all" | "true" | "false");
+                setPage(0);
+              }}
+              className="h-8 rounded-md border bg-transparent px-2 text-sm"
+              aria-label="按在线状态筛选"
+            >
+              <option value="all">全部</option>
+              <option value="true">在线</option>
+              <option value="false">离线</option>
+            </select>
             <ConnectDeviceDialog />
             <ImportDevicesDialog onDone={load} />
-          </>
+          </div>
         }
         rowActions={(d) => (
           <DropdownMenu>
