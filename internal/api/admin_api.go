@@ -10,9 +10,12 @@
 package api
 
 import (
+	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"strconv"
+	"time"
 
 	"github.com/gin-gonic/gin"
 	"github.com/jackc/pgx/v5"
@@ -139,6 +142,9 @@ func (s *Server) handleAdminCreateTenant(c *gin.Context) {
 		fail(c, http.StatusInternalServerError, "create tenant failed")
 		return
 	}
+	s.recordAudit(c.Request.Context(), auditEvent{TenantID: id, ActorID: actorID(c),
+		Action: "tenant.create", ResourceType: "tenant", ResourceID: id,
+		Details: map[string]any{"name": req.Name}})
 	ok(c, gin.H{"id": id, "name": req.Name, "status": "active"})
 }
 
@@ -208,6 +214,9 @@ func (s *Server) handleAdminCreateUser(c *gin.Context) {
 		fail(c, http.StatusConflict, "create user failed (email may already exist)")
 		return
 	}
+	s.recordAudit(c.Request.Context(), auditEvent{ActorID: actorID(c),
+		Action: "user.create", ResourceType: "user", ResourceID: id,
+		Details: map[string]any{"email": req.Email, "role": req.Role, "tenant_id": req.TenantID}})
 	ok(c, gin.H{"id": id, "email": req.Email, "role": req.Role, "tenant_id": req.TenantID})
 }
 
@@ -234,6 +243,9 @@ func (s *Server) handleAdminAssignSales(c *gin.Context) {
 		fail(c, http.StatusInternalServerError, "assign sales failed")
 		return
 	}
+	s.recordAudit(c.Request.Context(), auditEvent{TenantID: tenantID, ActorID: actorID(c),
+		Action: "sales.assign", ResourceType: "tenant", ResourceID: tenantID,
+		Details: map[string]any{"sales_user_id": req.SalesUserID}})
 	ok(c, gin.H{"tenant_id": tenantID, "sales_user_id": req.SalesUserID})
 }
 
@@ -262,6 +274,9 @@ func (s *Server) handleAdminTopup(c *gin.Context) {
 		fail(c, http.StatusInternalServerError, "topup failed: "+err.Error())
 		return
 	}
+	s.recordAudit(c.Request.Context(), auditEvent{TenantID: req.TenantID, ActorID: actorID(c),
+		Action: "finance.topup", ResourceType: "tenant", ResourceID: req.TenantID,
+		Details: map[string]any{"amount": req.Amount, "ref": req.Ref}})
 	ok(c, gin.H{"tenant_id": req.TenantID, "amount": req.Amount, "ref": req.Ref})
 }
 
@@ -284,6 +299,9 @@ func (s *Server) handleAdminSetPricing(c *gin.Context) {
 		fail(c, http.StatusInternalServerError, "set price failed")
 		return
 	}
+	s.recordAudit(c.Request.Context(), auditEvent{TenantID: req.TenantID, ActorID: actorID(c),
+		Action: "finance.pricing", ResourceType: "tenant", ResourceID: req.TenantID,
+		Details: map[string]any{"country": req.Country, "unit_price": req.UnitPrice}})
 	ok(c, gin.H{"tenant_id": req.TenantID, "country": req.Country, "unit_price": req.UnitPrice})
 }
 
@@ -425,6 +443,9 @@ VALUES ($1, $2, $3) ON CONFLICT (proxy_url) DO NOTHING`, p.URL, typ, p.Country)
 		}
 		imported += int(tag.RowsAffected())
 	}
+	s.recordAudit(ctx, auditEvent{ActorID: actorID(c),
+		Action: "proxy.import", ResourceType: "proxy",
+		Details: map[string]any{"submitted": len(req.Proxies), "imported": imported, "skipped": len(req.Proxies) - imported}})
 	ok(c, gin.H{"submitted": len(req.Proxies), "imported": imported, "skipped": len(req.Proxies) - imported})
 }
 
@@ -505,6 +526,9 @@ VALUES ($1, $2, $3, $4, 'init', $5) ON CONFLICT (account_jid) DO NOTHING`,
 		}
 		imported += int(tag.RowsAffected())
 	}
+	s.recordAudit(ctx, auditEvent{ActorID: actorID(c),
+		Action: "device.import", ResourceType: "device",
+		Details: map[string]any{"submitted": len(req.Devices), "imported": imported, "skipped": len(req.Devices) - imported}})
 	ok(c, gin.H{"submitted": len(req.Devices), "imported": imported, "skipped": len(req.Devices) - imported})
 }
 
@@ -582,6 +606,9 @@ RETURNING proxy_url`, req.ProxyID).Scan(&proxyURL)
 		fail(c, http.StatusInternalServerError, "bind proxy failed: "+err.Error())
 		return
 	}
+	s.recordAudit(ctx, auditEvent{ActorID: actorID(c),
+		Action: "device.bind_proxy", ResourceType: "device", ResourceID: id,
+		Details: map[string]any{"proxy_id": req.ProxyID}})
 	ok(c, gin.H{"device_id": id, "proxy_id": req.ProxyID, "proxy_url": proxyURL})
 }
 
@@ -623,6 +650,8 @@ func (s *Server) handleAdminUnbindDeviceProxy(c *gin.Context) {
 		fail(c, http.StatusInternalServerError, "unbind proxy failed: "+err.Error())
 		return
 	}
+	s.recordAudit(ctx, auditEvent{ActorID: actorID(c),
+		Action: "device.unbind_proxy", ResourceType: "device", ResourceID: id})
 	ok(c, gin.H{"device_id": id, "proxy_id": nil})
 }
 
@@ -759,6 +788,13 @@ ON CONFLICT (id) DO UPDATE SET
 		fail(c, http.StatusInternalServerError, "save risk config failed: "+err.Error())
 		return
 	}
+	s.recordAudit(c.Request.Context(), auditEvent{ActorID: actorID(c),
+		Action: "risk.update", ResourceType: "system_risk_config", ResourceID: 1,
+		Details: map[string]any{
+			"min_delay_seconds": *req.MinDelaySeconds, "max_delay_seconds": *req.MaxDelaySeconds,
+			"daily_limit_per_device": *req.DailyLimitPerDevice, "ban_rate_circuit_breaker": *req.BanRateCircuitBreaker,
+			"circuit_breaker_enabled": req.CircuitBreakerEnabled, "circuit_breaker_dry_run": req.CircuitBreakerDryRun,
+			"min_sample": *req.MinSample, "window_seconds": *req.WindowSeconds, "eval_interval_seconds": *req.EvalIntervalSeconds}})
 	ok(c, riskConfig{
 		MinDelaySeconds:       *req.MinDelaySeconds,
 		MaxDelaySeconds:       *req.MaxDelaySeconds,
@@ -821,21 +857,37 @@ SELECT c.id, c.tenant_id, c.state::text, c.total, c.sent, c.failed, c.created_at
 
 // handleAdminStopCampaign: POST /api/v1/admin/campaigns/:id/stop. Force-pauses a
 // running campaign by flipping its state to 'paused' — the dispatcher only
-// processes 'running', so it stops picking this campaign up. This is a plain
-// control-plane UPDATE; no dispatch/billing engine code is touched.
+// processes 'running', so it stops picking this campaign up. The state flip and
+// its audit row are written atomically in one tx; a no-op stop (already
+// paused/not found) audits nothing. No dispatch/billing engine code is touched.
 func (s *Server) handleAdminStopCampaign(c *gin.Context) {
 	id, err := strconv.ParseInt(c.Param("id"), 10, 64)
 	if err != nil {
 		fail(c, http.StatusBadRequest, "bad campaign id")
 		return
 	}
-	tag, err := s.deps.Mgr.SystemPool().Exec(c.Request.Context(),
-		`UPDATE campaigns SET state='paused' WHERE id=$1 AND state='running'`, id)
+	ctx := c.Request.Context()
+	paused := false
+	err = pgx.BeginTxFunc(ctx, s.systemPool(), pgx.TxOptions{}, func(tx pgx.Tx) error {
+		var tenantID int64
+		e := tx.QueryRow(ctx,
+			`UPDATE campaigns SET state='paused' WHERE id=$1 AND state='running' RETURNING tenant_id`, id).
+			Scan(&tenantID)
+		if errors.Is(e, pgx.ErrNoRows) {
+			return nil // not running / not found; paused stays false
+		}
+		if e != nil {
+			return e
+		}
+		paused = true
+		return s.recordAuditTx(ctx, tx, auditEvent{TenantID: tenantID, ActorID: actorID(c),
+			Action: "campaign.stop", ResourceType: "campaign", ResourceID: id})
+	})
 	if err != nil {
 		fail(c, http.StatusInternalServerError, "stop campaign failed")
 		return
 	}
-	if tag.RowsAffected() == 0 {
+	if !paused {
 		fail(c, http.StatusConflict, "campaign not found or not in 'running' state")
 		return
 	}
@@ -853,13 +905,9 @@ func (s *Server) handleAdminResumeCampaign(c *gin.Context) {
 		fail(c, http.StatusBadRequest, "bad campaign id")
 		return
 	}
-	var actorID *int64
-	if sd := sessionFrom(c); sd != nil {
-		actorID = &sd.UserID
-	}
 	ctx := c.Request.Context()
 	resumed := false
-	err = pgx.BeginTxFunc(ctx, s.deps.Mgr.SystemPool(), pgx.TxOptions{}, func(tx pgx.Tx) error {
+	err = pgx.BeginTxFunc(ctx, s.systemPool(), pgx.TxOptions{}, func(tx pgx.Tx) error {
 		var tenantID int64
 		err := tx.QueryRow(ctx,
 			`UPDATE campaigns SET state='running' WHERE id=$1 AND state='paused' RETURNING tenant_id`, id).
@@ -873,10 +921,8 @@ func (s *Server) handleAdminResumeCampaign(c *gin.Context) {
 		resumed = true
 		// Audit the resume so AutoTripped (latest circuit_break vs latest resume)
 		// reads correctly afterwards, and operators have a trail.
-		_, err = tx.Exec(ctx, `
-INSERT INTO audit_log (tenant_id, actor_id, action, resource_type, resource_id, details)
-VALUES ($1, $2, 'campaign.resume', 'campaign', $3, '{}'::jsonb)`, tenantID, actorID, id)
-		return err
+		return s.recordAuditTx(ctx, tx, auditEvent{TenantID: tenantID, ActorID: actorID(c),
+			Action: "campaign.resume", ResourceType: "campaign", ResourceID: id})
 	})
 	if err != nil {
 		fail(c, http.StatusInternalServerError, "resume campaign failed")
@@ -948,6 +994,9 @@ func (s *Server) handleAdminSetUserDisabled(c *gin.Context) {
 		fail(c, http.StatusNotFound, "user not found")
 		return
 	}
+	s.recordAudit(c.Request.Context(), auditEvent{ActorID: actorID(c),
+		Action: "user.disable", ResourceType: "user", ResourceID: id,
+		Details: map[string]any{"disabled": req.Disabled}})
 	ok(c, gin.H{"id": id, "disabled": req.Disabled})
 }
 
@@ -980,5 +1029,104 @@ func (s *Server) handleAdminResetUserPassword(c *gin.Context) {
 		fail(c, http.StatusNotFound, "user not found")
 		return
 	}
+	s.recordAudit(c.Request.Context(), auditEvent{ActorID: actorID(c),
+		Action: "user.password_reset", ResourceType: "user", ResourceID: id})
 	ok(c, gin.H{"id": id, "password_reset": true})
+}
+
+// ---------------------------------------------------------------------------
+// Audit log (read-only)
+
+type auditRow struct {
+	ID           int64           `json:"id"`
+	OccurredAt   string          `json:"occurred_at"`
+	TenantID     *int64          `json:"tenant_id"`
+	TenantName   *string         `json:"tenant_name"`
+	ActorID      *int64          `json:"actor_id"`
+	ActorEmail   *string         `json:"actor_email"`
+	Action       string          `json:"action"`
+	ResourceType *string         `json:"resource_type"`
+	ResourceID   *int64          `json:"resource_id"`
+	Details      json.RawMessage `json:"details"`
+}
+
+// parseAuditFilter reads the optional query params for the audit list.
+func parseAuditFilter(c *gin.Context) (auditFilter, error) {
+	f := auditFilter{Action: c.Query("action")}
+	if v := c.Query("actor_id"); v != "" {
+		n, err := strconv.ParseInt(v, 10, 64)
+		if err != nil {
+			return f, fmt.Errorf("bad actor_id")
+		}
+		f.ActorID = n
+	}
+	if v := c.Query("tenant_id"); v != "" {
+		n, err := strconv.ParseInt(v, 10, 64)
+		if err != nil {
+			return f, fmt.Errorf("bad tenant_id")
+		}
+		f.TenantID = n
+	}
+	if v := c.Query("since"); v != "" {
+		ts, err := time.Parse(time.RFC3339, v)
+		if err != nil {
+			return f, fmt.Errorf("bad since (want RFC3339)")
+		}
+		f.Since = ts
+	}
+	if v := c.Query("until"); v != "" {
+		ts, err := time.Parse(time.RFC3339, v)
+		if err != nil {
+			return f, fmt.Errorf("bad until (want RFC3339)")
+		}
+		f.Until = ts
+	}
+	if v := c.Query("limit"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil {
+			f.Limit = n
+		}
+	}
+	if v := c.Query("offset"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil {
+			f.Offset = n
+		}
+	}
+	return f, nil
+}
+
+// handleAdminListAudit: GET /api/v1/admin/audit — filtered, paginated audit log
+// with actor-email and tenant-name joins.
+func (s *Server) handleAdminListAudit(c *gin.Context) {
+	f, err := parseAuditFilter(c)
+	if err != nil {
+		fail(c, http.StatusBadRequest, err.Error())
+		return
+	}
+	ctx := c.Request.Context()
+	listSQL, listArgs := buildAuditListSQL(f)
+	rows, err := s.systemPool().Query(ctx, listSQL, listArgs...)
+	if err != nil {
+		fail(c, http.StatusInternalServerError, "audit query")
+		return
+	}
+	defer rows.Close()
+	out := make([]auditRow, 0)
+	for rows.Next() {
+		var r auditRow
+		var details []byte
+		if err := rows.Scan(&r.ID, &r.OccurredAt, &r.TenantID, &r.TenantName,
+			&r.ActorID, &r.ActorEmail, &r.Action, &r.ResourceType, &r.ResourceID, &details); err != nil {
+			fail(c, http.StatusInternalServerError, "scan audit")
+			return
+		}
+		r.Details = details
+		out = append(out, r)
+	}
+	countSQL, countArgs := buildAuditCountSQL(f)
+	var total int64
+	if err := s.systemPool().QueryRow(ctx, countSQL, countArgs...).Scan(&total); err != nil {
+		fail(c, http.StatusInternalServerError, "audit count")
+		return
+	}
+	ok(c, gin.H{"rows": out, "total": total})
 }
