@@ -142,6 +142,9 @@ func (s *Server) handleAdminCreateTenant(c *gin.Context) {
 		fail(c, http.StatusInternalServerError, "create tenant failed")
 		return
 	}
+	s.recordAudit(c.Request.Context(), auditEvent{TenantID: id, ActorID: actorID(c),
+		Action: "tenant.create", ResourceType: "tenant", ResourceID: id,
+		Details: map[string]any{"name": req.Name}})
 	ok(c, gin.H{"id": id, "name": req.Name, "status": "active"})
 }
 
@@ -211,6 +214,9 @@ func (s *Server) handleAdminCreateUser(c *gin.Context) {
 		fail(c, http.StatusConflict, "create user failed (email may already exist)")
 		return
 	}
+	s.recordAudit(c.Request.Context(), auditEvent{ActorID: actorID(c),
+		Action: "user.create", ResourceType: "user", ResourceID: id,
+		Details: map[string]any{"email": req.Email, "role": req.Role, "tenant_id": req.TenantID}})
 	ok(c, gin.H{"id": id, "email": req.Email, "role": req.Role, "tenant_id": req.TenantID})
 }
 
@@ -237,6 +243,9 @@ func (s *Server) handleAdminAssignSales(c *gin.Context) {
 		fail(c, http.StatusInternalServerError, "assign sales failed")
 		return
 	}
+	s.recordAudit(c.Request.Context(), auditEvent{TenantID: tenantID, ActorID: actorID(c),
+		Action: "sales.assign", ResourceType: "tenant", ResourceID: tenantID,
+		Details: map[string]any{"sales_user_id": req.SalesUserID}})
 	ok(c, gin.H{"tenant_id": tenantID, "sales_user_id": req.SalesUserID})
 }
 
@@ -265,6 +274,9 @@ func (s *Server) handleAdminTopup(c *gin.Context) {
 		fail(c, http.StatusInternalServerError, "topup failed: "+err.Error())
 		return
 	}
+	s.recordAudit(c.Request.Context(), auditEvent{TenantID: req.TenantID, ActorID: actorID(c),
+		Action: "finance.topup", ResourceType: "tenant", ResourceID: req.TenantID,
+		Details: map[string]any{"amount": req.Amount, "ref": req.Ref}})
 	ok(c, gin.H{"tenant_id": req.TenantID, "amount": req.Amount, "ref": req.Ref})
 }
 
@@ -287,6 +299,9 @@ func (s *Server) handleAdminSetPricing(c *gin.Context) {
 		fail(c, http.StatusInternalServerError, "set price failed")
 		return
 	}
+	s.recordAudit(c.Request.Context(), auditEvent{TenantID: req.TenantID, ActorID: actorID(c),
+		Action: "finance.pricing", ResourceType: "tenant", ResourceID: req.TenantID,
+		Details: map[string]any{"country": req.Country, "unit_price": req.UnitPrice}})
 	ok(c, gin.H{"tenant_id": req.TenantID, "country": req.Country, "unit_price": req.UnitPrice})
 }
 
@@ -428,6 +443,9 @@ VALUES ($1, $2, $3) ON CONFLICT (proxy_url) DO NOTHING`, p.URL, typ, p.Country)
 		}
 		imported += int(tag.RowsAffected())
 	}
+	s.recordAudit(ctx, auditEvent{ActorID: actorID(c),
+		Action: "proxy.import", ResourceType: "proxy",
+		Details: map[string]any{"submitted": len(req.Proxies), "imported": imported, "skipped": len(req.Proxies) - imported}})
 	ok(c, gin.H{"submitted": len(req.Proxies), "imported": imported, "skipped": len(req.Proxies) - imported})
 }
 
@@ -508,6 +526,9 @@ VALUES ($1, $2, $3, $4, 'init', $5) ON CONFLICT (account_jid) DO NOTHING`,
 		}
 		imported += int(tag.RowsAffected())
 	}
+	s.recordAudit(ctx, auditEvent{ActorID: actorID(c),
+		Action: "device.import", ResourceType: "device",
+		Details: map[string]any{"submitted": len(req.Devices), "imported": imported, "skipped": len(req.Devices) - imported}})
 	ok(c, gin.H{"submitted": len(req.Devices), "imported": imported, "skipped": len(req.Devices) - imported})
 }
 
@@ -585,6 +606,9 @@ RETURNING proxy_url`, req.ProxyID).Scan(&proxyURL)
 		fail(c, http.StatusInternalServerError, "bind proxy failed: "+err.Error())
 		return
 	}
+	s.recordAudit(ctx, auditEvent{ActorID: actorID(c),
+		Action: "device.bind_proxy", ResourceType: "device", ResourceID: id,
+		Details: map[string]any{"proxy_id": req.ProxyID}})
 	ok(c, gin.H{"device_id": id, "proxy_id": req.ProxyID, "proxy_url": proxyURL})
 }
 
@@ -626,6 +650,8 @@ func (s *Server) handleAdminUnbindDeviceProxy(c *gin.Context) {
 		fail(c, http.StatusInternalServerError, "unbind proxy failed: "+err.Error())
 		return
 	}
+	s.recordAudit(ctx, auditEvent{ActorID: actorID(c),
+		Action: "device.unbind_proxy", ResourceType: "device", ResourceID: id})
 	ok(c, gin.H{"device_id": id, "proxy_id": nil})
 }
 
@@ -762,6 +788,13 @@ ON CONFLICT (id) DO UPDATE SET
 		fail(c, http.StatusInternalServerError, "save risk config failed: "+err.Error())
 		return
 	}
+	s.recordAudit(c.Request.Context(), auditEvent{ActorID: actorID(c),
+		Action: "risk.update", ResourceType: "system_risk_config", ResourceID: 1,
+		Details: map[string]any{
+			"min_delay_seconds": *req.MinDelaySeconds, "max_delay_seconds": *req.MaxDelaySeconds,
+			"daily_limit_per_device": *req.DailyLimitPerDevice, "ban_rate_circuit_breaker": *req.BanRateCircuitBreaker,
+			"circuit_breaker_enabled": req.CircuitBreakerEnabled, "circuit_breaker_dry_run": req.CircuitBreakerDryRun,
+			"min_sample": *req.MinSample, "window_seconds": *req.WindowSeconds, "eval_interval_seconds": *req.EvalIntervalSeconds}})
 	ok(c, riskConfig{
 		MinDelaySeconds:       *req.MinDelaySeconds,
 		MaxDelaySeconds:       *req.MaxDelaySeconds,
@@ -951,6 +984,9 @@ func (s *Server) handleAdminSetUserDisabled(c *gin.Context) {
 		fail(c, http.StatusNotFound, "user not found")
 		return
 	}
+	s.recordAudit(c.Request.Context(), auditEvent{ActorID: actorID(c),
+		Action: "user.disable", ResourceType: "user", ResourceID: id,
+		Details: map[string]any{"disabled": req.Disabled}})
 	ok(c, gin.H{"id": id, "disabled": req.Disabled})
 }
 
@@ -983,6 +1019,8 @@ func (s *Server) handleAdminResetUserPassword(c *gin.Context) {
 		fail(c, http.StatusNotFound, "user not found")
 		return
 	}
+	s.recordAudit(c.Request.Context(), auditEvent{ActorID: actorID(c),
+		Action: "user.password_reset", ResourceType: "user", ResourceID: id})
 	ok(c, gin.H{"id": id, "password_reset": true})
 }
 
