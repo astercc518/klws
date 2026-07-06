@@ -128,6 +128,8 @@ func (s *Server) Router() *gin.Engine {
 
 		admin.GET("/tenants", s.handleAdminListTenants)
 		admin.POST("/tenants", s.handleAdminCreateTenant)
+		admin.PUT("/tenants/:id", s.handleAdminUpdateTenant)
+		admin.POST("/tenants/:id/status", s.handleAdminSetTenantStatus)
 		admin.GET("/users", s.handleAdminListUsers)
 		admin.POST("/users", s.handleAdminCreateUser)
 		admin.PUT("/users/:id", s.handleAdminUpdateUser)

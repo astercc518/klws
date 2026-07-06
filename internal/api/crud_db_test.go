@@ -104,3 +104,50 @@ func TestHandleAdminUpdateUser(t *testing.T) {
 }
 
 func itoa(v int64) string { return strconv.FormatInt(v, 10) }
+
+func TestHandleAdminUpdateTenant(t *testing.T) {
+	s, ctx := newCrudServer(t)
+	tid, _ := seedTenantUser(t, ctx, s, "t-admin@acme.test")
+
+	w := doJSON(t, s, s.handleAdminUpdateTenant, http.MethodPut, "/admin/tenants/x", itoa(tid), `{"name":"Renamed Inc"}`)
+	if w.Code != http.StatusOK {
+		t.Fatalf("status %d body %s", w.Code, w.Body.String())
+	}
+	var name string
+	s.systemPool().QueryRow(ctx, `SELECT name FROM tenants WHERE id=$1`, tid).Scan(&name)
+	if name != "Renamed Inc" {
+		t.Errorf("name not updated: %q", name)
+	}
+	var n int
+	s.systemPool().QueryRow(ctx, `SELECT count(*) FROM audit_log WHERE action='tenant.update' AND resource_id=$1`, tid).Scan(&n)
+	if n != 1 {
+		t.Errorf("want 1 tenant.update audit, got %d", n)
+	}
+	// missing id → 404
+	if doJSON(t, s, s.handleAdminUpdateTenant, http.MethodPut, "/admin/tenants/x", "999999", `{"name":"x"}`).Code != http.StatusNotFound {
+		t.Errorf("missing tenant want 404")
+	}
+}
+
+func TestHandleAdminSetTenantStatus(t *testing.T) {
+	s, ctx := newCrudServer(t)
+	tid, _ := seedTenantUser(t, ctx, s, "s-admin@acme.test")
+
+	w := doJSON(t, s, s.handleAdminSetTenantStatus, http.MethodPost, "/admin/tenants/x/status", itoa(tid), `{"status":"suspended"}`)
+	if w.Code != http.StatusOK {
+		t.Fatalf("status %d body %s", w.Code, w.Body.String())
+	}
+	var st string
+	s.systemPool().QueryRow(ctx, `SELECT status FROM tenants WHERE id=$1`, tid).Scan(&st)
+	if st != "suspended" {
+		t.Errorf("status not updated: %q", st)
+	}
+	// invalid status → 400
+	if doJSON(t, s, s.handleAdminSetTenantStatus, http.MethodPost, "/admin/tenants/x/status", itoa(tid), `{"status":"deleted"}`).Code != http.StatusBadRequest {
+		t.Errorf("invalid status want 400")
+	}
+	// missing id → 404
+	if doJSON(t, s, s.handleAdminSetTenantStatus, http.MethodPost, "/admin/tenants/x/status", "999999", `{"status":"active"}`).Code != http.StatusNotFound {
+		t.Errorf("missing tenant want 404")
+	}
+}

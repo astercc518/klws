@@ -149,6 +149,66 @@ func (s *Server) handleAdminCreateTenant(c *gin.Context) {
 	ok(c, gin.H{"id": id, "name": req.Name, "status": "active"})
 }
 
+// handleAdminUpdateTenant: PUT /api/v1/admin/tenants/:id {name}.
+func (s *Server) handleAdminUpdateTenant(c *gin.Context) {
+	id, err := strconv.ParseInt(c.Param("id"), 10, 64)
+	if err != nil || id <= 0 {
+		fail(c, http.StatusBadRequest, "invalid tenant id")
+		return
+	}
+	var req struct {
+		Name string `json:"name" binding:"required"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		fail(c, http.StatusBadRequest, "name is required")
+		return
+	}
+	tag, err := s.systemPool().Exec(c.Request.Context(),
+		`UPDATE tenants SET name=$1, updated_at=now() WHERE id=$2`, req.Name, id)
+	if err != nil {
+		fail(c, http.StatusInternalServerError, "update tenant failed")
+		return
+	}
+	if tag.RowsAffected() == 0 {
+		fail(c, http.StatusNotFound, "tenant not found")
+		return
+	}
+	s.recordAudit(c.Request.Context(), auditEvent{TenantID: id, ActorID: actorID(c),
+		Action: "tenant.update", ResourceType: "tenant", ResourceID: id,
+		Details: map[string]any{"name": req.Name}})
+	ok(c, gin.H{"id": id, "name": req.Name})
+}
+
+// handleAdminSetTenantStatus: POST /api/v1/admin/tenants/:id/status {status}.
+func (s *Server) handleAdminSetTenantStatus(c *gin.Context) {
+	id, err := strconv.ParseInt(c.Param("id"), 10, 64)
+	if err != nil || id <= 0 {
+		fail(c, http.StatusBadRequest, "invalid tenant id")
+		return
+	}
+	var req struct {
+		Status string `json:"status" binding:"required"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil || (req.Status != "active" && req.Status != "suspended") {
+		fail(c, http.StatusBadRequest, "status must be 'active' or 'suspended'")
+		return
+	}
+	tag, err := s.systemPool().Exec(c.Request.Context(),
+		`UPDATE tenants SET status=$1, updated_at=now() WHERE id=$2`, req.Status, id)
+	if err != nil {
+		fail(c, http.StatusInternalServerError, "update status failed")
+		return
+	}
+	if tag.RowsAffected() == 0 {
+		fail(c, http.StatusNotFound, "tenant not found")
+		return
+	}
+	s.recordAudit(c.Request.Context(), auditEvent{TenantID: id, ActorID: actorID(c),
+		Action: "tenant.status", ResourceType: "tenant", ResourceID: id,
+		Details: map[string]any{"status": req.Status}})
+	ok(c, gin.H{"id": id, "status": req.Status})
+}
+
 type adminUserRow struct {
 	ID       int64  `json:"id"`
 	Email    string `json:"email"`
