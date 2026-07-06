@@ -48,33 +48,45 @@ function parseProxies(raw: string, type: string, country: string) {
     .filter((p): p is { url: string; type: string; country: string } => p !== null);
 }
 
+const PAGE_SIZE = 20;
+
+interface ProxyStats { total: number; alive: number; dead: number }
+
 export function AdminProxies() {
   const [rows, setRows] = useState<Proxy[] | null>(null);
+  const [total, setTotal] = useState(0);
+  const [stats, setStats] = useState<ProxyStats | null>(null);
+  const [page, setPage] = useState(0);
+  const [query, setQuery] = useState("");
+  const [alive, setAlive] = useState<"all" | "true" | "false">("all");
   const [error, setError] = useState<string | null>(null);
+  const [loading, setLoading] = useState(false);
 
   const load = useCallback(async () => {
+    setLoading(true);
+    const params = new URLSearchParams({ limit: String(PAGE_SIZE), offset: String(page * PAGE_SIZE) });
+    if (query.trim()) params.set("q", query.trim());
+    if (alive !== "all") params.set("alive", alive);
     try {
-      setRows(await api.get<Proxy[]>("/admin/resources/proxies"));
+      const d = await api.get<{ rows: Proxy[]; total: number; stats: ProxyStats }>(
+        `/admin/resources/proxies?${params.toString()}`,
+      );
+      setRows(d.rows);
+      setTotal(d.total);
+      setStats(d.stats);
+      setError(null);
     } catch (e) {
       if (!(e instanceof ApiError && e.status === 401)) {
         setError(e instanceof ApiError ? e.message : "加载失败");
       }
+    } finally {
+      setLoading(false);
     }
-  }, []);
+  }, [page, query, alive]);
+
   useEffect(() => {
     load();
   }, [load]);
-
-  const summary = useMemo(() => {
-    if (!rows) return null;
-    let alive = 0;
-    let failures = 0;
-    for (const p of rows) {
-      if (p.is_alive) alive++;
-      failures += p.failure_count;
-    }
-    return { total: rows.length, alive, dead: rows.length - alive, failures };
-  }, [rows]);
 
   const columns: Column<Proxy>[] = [
     {
@@ -130,12 +142,12 @@ export function AdminProxies() {
 
   return (
     <>
-      {summary && (
+      {stats && (
         <MetricCardGroup className="mb-6">
-          <StatCard accent="brand" label="代理总数" value={String(summary.total)} sub="全平台出口" icon={Globe} />
-          <StatCard accent="emerald" label="在线" value={String(summary.alive)} sub="健康可调度" icon={Wifi} />
-          <StatCard accent="rose" label="离线 / 失效" value={String(summary.dead)} sub="需排查或剔除" icon={WifiOff} />
-          <StatCard accent="amber" label="累计失败次数" value={String(summary.failures)} sub="连接失败计数合计" icon={Activity} />
+          <StatCard accent="brand" label="代理总数" value={String(stats.total)} sub="全平台出口" icon={Globe} />
+          <StatCard accent="emerald" label="在线" value={String(stats.alive)} sub="健康可调度" icon={Wifi} />
+          <StatCard accent="rose" label="离线 / 失效" value={String(stats.dead)} sub="需排查或剔除" icon={WifiOff} />
+          <StatCard accent="amber" label="当前页" value={String(total)} sub="匹配筛选的总数" icon={Activity} />
         </MetricCardGroup>
       )}
       <ProDataTable
@@ -143,9 +155,32 @@ export function AdminProxies() {
         error={error}
         columns={columns}
         getRowKey={(p) => p.id}
-        search={{ placeholder: "搜索地址或国家…", accessor: (p) => `${p.proxy_url} ${p.country_code}` }}
         emptyState="代理池为空,点击右上角批量导入。"
-        toolbar={<ImportProxiesDialog onDone={load} />}
+        server={{
+          total,
+          page,
+          pageSize: PAGE_SIZE,
+          onPageChange: setPage,
+          query,
+          onQueryChange: (q) => { setQuery(q); setPage(0); },
+          loading,
+        }}
+        search={{ placeholder: "搜索地址或国家…", accessor: () => "" }}
+        toolbar={
+          <div className="flex items-center gap-2">
+            <select
+              value={alive}
+              onChange={(e) => { setAlive(e.target.value as "all" | "true" | "false"); setPage(0); }}
+              className="h-8 rounded-md border bg-transparent px-2 text-sm"
+              aria-label="按状态筛选"
+            >
+              <option value="all">全部状态</option>
+              <option value="true">在线</option>
+              <option value="false">失效</option>
+            </select>
+            <ImportProxiesDialog onDone={load} />
+          </div>
+        }
       />
     </>
   );
