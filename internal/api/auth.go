@@ -25,7 +25,7 @@ const resetTokenTTL = 30 * time.Minute
 
 // loginRequest is the POST /api/v1/auth/login body.
 type loginRequest struct {
-	Email     string `json:"email" binding:"required,email"`
+	Email     string `json:"email" binding:"required"`
 	Password  string `json:"password" binding:"required"`
 	Turnstile string `json:"cf_turnstile_token"`
 }
@@ -85,7 +85,7 @@ func (s *Server) handleLogin(c *gin.Context) {
 
 // registerRequest is the POST /api/v1/auth/register body (customer self-signup).
 type registerRequest struct {
-	Email     string `json:"email" binding:"required,email"`
+	Email     string `json:"email" binding:"required"`
 	Password  string `json:"password" binding:"required,min=6"`
 	Turnstile string `json:"cf_turnstile_token"` // forwarded for optional CF verification
 }
@@ -156,7 +156,7 @@ func (s *Server) handleRegister(c *gin.Context) {
 
 // forgotPasswordRequest is the POST /api/v1/auth/password/forgot body.
 type forgotPasswordRequest struct {
-	Email     string `json:"email" binding:"required,email"`
+	Email     string `json:"email" binding:"required"`
 	Turnstile string `json:"cf_turnstile_token"`
 }
 
