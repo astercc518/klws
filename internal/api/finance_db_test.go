@@ -259,6 +259,54 @@ func TestHandleAdminListRecipients(t *testing.T) {
 	}
 }
 
+func TestHandleAdminCommissions(t *testing.T) {
+	s, ctx := newFinanceServer(t)
+
+	var salesID int64
+	if err := s.systemPool().QueryRow(ctx,
+		`INSERT INTO console_users (email,password_hash,role,commission_rate) VALUES ('s1','x','sales',0.10) RETURNING id`,
+	).Scan(&salesID); err != nil {
+		t.Fatalf("seed sales user: %v", err)
+	}
+
+	var tenantA, tenantB int64
+	if err := s.systemPool().QueryRow(ctx,
+		`INSERT INTO tenants (name,status,sales_owner_id,commission_rate) VALUES ('A','active',$1,0.20) RETURNING id`,
+		salesID).Scan(&tenantA); err != nil {
+		t.Fatalf("seed tenant A: %v", err)
+	}
+	if err := s.systemPool().QueryRow(ctx,
+		`INSERT INTO tenants (name,status,sales_owner_id,commission_rate) VALUES ('B','active',$1,NULL) RETURNING id`,
+		salesID).Scan(&tenantB); err != nil {
+		t.Fatalf("seed tenant B: %v", err)
+	}
+
+	// In-month settle: tenant A consumes 1000, tenant B consumes 500.
+	seedLedger(t, ctx, s, tenantA, "settle", -1000, 0, 0, 0, "2026-07-15T10:00:00+08:00", "c1")
+	seedLedger(t, ctx, s, tenantB, "settle", -500, 0, 0, 0, "2026-07-15T10:00:00+08:00", "c2")
+	// Out-of-month settle for tenant A — must be excluded.
+	seedLedger(t, ctx, s, tenantA, "settle", -9999, 0, 0, 0, "2026-06-15T10:00:00+08:00", "c3")
+
+	w := doGET(t, s, s.handleAdminCommissions, "/admin/commissions?month=2026-07")
+	if w.Code != http.StatusOK {
+		t.Fatalf("status %d body %s", w.Code, w.Body.String())
+	}
+	body := w.Body.String()
+	// tenant A: round(1000*0.20)=200, tenant B: round(500*0.10)=50 → 250 total.
+	if !contains(body, `"consumption":1500`) {
+		t.Errorf("want consumption 1500: %s", body)
+	}
+	if !contains(body, `"commission":250`) {
+		t.Errorf("want commission 250: %s", body)
+	}
+	if !contains(body, `"totals":{"commission":250,"consumption":1500}`) {
+		t.Errorf("want totals consumption=1500 commission=250: %s", body)
+	}
+	if !contains(body, `"month":"2026-07"`) {
+		t.Errorf("want month echoed: %s", body)
+	}
+}
+
 func doGET(t *testing.T, s *Server, h gin.HandlerFunc, target string) *httptest.ResponseRecorder {
 	t.Helper()
 	w := httptest.NewRecorder()

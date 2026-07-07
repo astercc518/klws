@@ -238,6 +238,80 @@ SELECT to_char(date_trunc('day', l.created_at AT TIME ZONE 'Asia/Shanghai'), 'YY
 	ok(c, bill)
 }
 
+type commissionRow struct {
+	SalesID     int64    `json:"sales_id"`
+	SalesEmail  string   `json:"sales_email"`
+	SalesRate   *float64 `json:"sales_rate"`
+	TenantCount int64    `json:"tenant_count"`
+	Consumption int64    `json:"consumption"`
+	Commission  int64    `json:"commission"`
+}
+
+// handleAdminCommissions: GET /admin/commissions?month=YYYY-MM — per-sales
+// monthly commission summary (消耗 × effective rate, tenant rate wins over
+// the sales rep's default rate, else 0).
+func (s *Server) handleAdminCommissions(c *gin.Context) {
+	ctx := c.Request.Context()
+	monthParam := c.Query("month")
+	from, to, err := parseMonth(monthParam)
+	if err != nil {
+		fail(c, http.StatusBadRequest, err.Error())
+		return
+	}
+	month := monthParam
+	if month == "" {
+		month = from.Format("2006-01")
+	}
+
+	rows, err := s.systemPool().Query(ctx, `
+SELECT u.id, u.email, u.commission_rate,
+       count(DISTINCT t.id),
+       COALESCE(SUM(m.consumption),0)::bigint,
+       COALESCE(SUM(round(m.consumption * COALESCE(t.commission_rate, u.commission_rate, 0))),0)::bigint
+  FROM console_users u
+  JOIN tenants t ON t.sales_owner_id = u.id
+  LEFT JOIN (
+    SELECT tenant_id, -SUM(delta_balance+delta_frozen) AS consumption
+      FROM wallet_ledger
+     WHERE kind='settle' AND created_at >= $1 AND created_at < $2
+     GROUP BY tenant_id
+  ) m ON m.tenant_id = t.id
+ WHERE u.role='sales'
+ GROUP BY u.id, u.email, u.commission_rate
+ ORDER BY 6 DESC`, from, to)
+	if err != nil {
+		fail(c, http.StatusInternalServerError, "commissions query")
+		return
+	}
+	defer rows.Close()
+
+	out := []commissionRow{}
+	var totalConsumption, totalCommission int64
+	for rows.Next() {
+		var r commissionRow
+		if err := rows.Scan(&r.SalesID, &r.SalesEmail, &r.SalesRate, &r.TenantCount, &r.Consumption, &r.Commission); err != nil {
+			fail(c, http.StatusInternalServerError, "scan commission row")
+			return
+		}
+		totalConsumption += r.Consumption
+		totalCommission += r.Commission
+		out = append(out, r)
+	}
+	if err := rows.Err(); err != nil {
+		fail(c, http.StatusInternalServerError, "iterate commissions")
+		return
+	}
+
+	ok(c, gin.H{
+		"month": month,
+		"rows":  out,
+		"totals": gin.H{
+			"consumption": totalConsumption,
+			"commission":  totalCommission,
+		},
+	})
+}
+
 func (s *Server) handleAdminFinanceBillExport(c *gin.Context) {
 	ctx := c.Request.Context()
 	tenantID, err := strconv.ParseInt(c.Query("tenant_id"), 10, 64)

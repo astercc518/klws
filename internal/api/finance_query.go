@@ -97,6 +97,25 @@ func parseBillRange(fromStr, toStr string) (billRange, error) {
 	return billRange{From: from, To: to}, nil
 }
 
+// parseMonth parses a `YYYY-MM` string as an Asia/Shanghai calendar month and
+// returns [from, to) where from is the first instant of that month and to is
+// the first instant of the next month (exclusive upper bound). An empty
+// string defaults to the current CN month. Invalid formats return an error.
+func parseMonth(s string) (from, to time.Time, err error) {
+	if s == "" {
+		now := time.Now().In(cnLoc)
+		from = time.Date(now.Year(), now.Month(), 1, 0, 0, 0, 0, cnLoc)
+		to = from.AddDate(0, 1, 0)
+		return from, to, nil
+	}
+	from, err = time.ParseInLocation("2006-01", s, cnLoc)
+	if err != nil {
+		return time.Time{}, time.Time{}, fmt.Errorf("bad month: %w", err)
+	}
+	to = from.AddDate(0, 1, 0)
+	return from, to, nil
+}
+
 // campaignFilter is the parsed query for the admin campaign list.
 type campaignFilter struct {
 	Q      string

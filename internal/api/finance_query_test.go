@@ -61,6 +61,35 @@ func TestParseBillRange(t *testing.T) {
 	}
 }
 
+func TestParseMonth(t *testing.T) {
+	cn, _ := time.LoadLocation("Asia/Shanghai")
+
+	// explicit month
+	from, to, err := parseMonth("2026-07")
+	if err != nil {
+		t.Fatalf("valid month err: %v", err)
+	}
+	wantFrom := time.Date(2026, 7, 1, 0, 0, 0, 0, cn)
+	wantTo := time.Date(2026, 8, 1, 0, 0, 0, 0, cn)
+	if !from.Equal(wantFrom) || !to.Equal(wantTo) {
+		t.Errorf("month = %v..%v want %v..%v", from, to, wantFrom, wantTo)
+	}
+
+	// bad format → error
+	if _, _, err := parseMonth("2026/07"); err == nil {
+		t.Error("bad format should error")
+	}
+
+	// empty defaults to the current CN month; to must be exactly one month after from
+	fromEmpty, toEmpty, err := parseMonth("")
+	if err != nil {
+		t.Fatalf("empty month err: %v", err)
+	}
+	if !toEmpty.Equal(fromEmpty.AddDate(0, 1, 0)) {
+		t.Errorf("empty: to=%v want %v", toEmpty, fromEmpty.AddDate(0, 1, 0))
+	}
+}
+
 func TestBuildCampaignWhere(t *testing.T) {
 	if w, _ := buildCampaignWhere(campaignFilter{}); w != "" {
 		t.Errorf("empty where = %q", w)

@@ -144,6 +144,7 @@ func (s *Server) Router() *gin.Engine {
 		admin.GET("/finance/stats", s.handleAdminFinanceStats)
 		admin.GET("/finance/bill", s.handleAdminFinanceBill)
 		admin.GET("/finance/bill/export", s.handleAdminFinanceBillExport)
+		admin.GET("/commissions", s.handleAdminCommissions)
 
 		admin.GET("/resources/proxies", s.handleAdminListProxies)
 		admin.POST("/resources/proxies", s.handleAdminImportProxies)
