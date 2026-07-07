@@ -352,6 +352,55 @@ func TestHandleAdminUpdateCommissionRate(t *testing.T) {
 	if userRate != 0.1 {
 		t.Errorf("user commission_rate not updated: got %v want 0.1", userRate)
 	}
+
+	// name-only edit (no commission_rate key) must NOT wipe the configured rate.
+	w = doJSON(t, s, s.handleAdminUpdateTenant, http.MethodPut, "/admin/tenants/x", itoa(tid),
+		`{"name":"Acme Renamed"}`)
+	if w.Code != http.StatusOK {
+		t.Fatalf("name-only update status %d body %s", w.Code, w.Body.String())
+	}
+	if err := s.systemPool().QueryRow(ctx, `SELECT commission_rate FROM tenants WHERE id=$1`, tid).Scan(&tenantRate); err != nil {
+		t.Fatalf("re-read tenant commission_rate: %v", err)
+	}
+	if tenantRate != 0.2 {
+		t.Errorf("name-only edit wiped commission_rate: got %v want 0.2", tenantRate)
+	}
+}
+
+// TestCommissionPerTenantRounding proves commission is rounded PER TENANT before
+// summing, not once over the summed consumption. With rate 0.05 and two tenants
+// each consuming 10 cents: per-tenant = round(0.5)+round(0.5) = 1+1 = 2, whereas
+// global rounding would be round((10+10)*0.05) = round(1.0) = 1. Asserting 2
+// pins the per-tenant behaviour (Postgres round() is half-away-from-zero).
+func TestCommissionPerTenantRounding(t *testing.T) {
+	s, ctx := newFinanceServer(t)
+
+	var salesID int64
+	if err := s.systemPool().QueryRow(ctx,
+		`INSERT INTO console_users (email,password_hash,role,commission_rate) VALUES ('rnd','x','sales',0.05) RETURNING id`,
+	).Scan(&salesID); err != nil {
+		t.Fatalf("seed sales: %v", err)
+	}
+	var tA, tB int64
+	if err := s.systemPool().QueryRow(ctx,
+		`INSERT INTO tenants (name,status,sales_owner_id) VALUES ('rA','active',$1) RETURNING id`, salesID).Scan(&tA); err != nil {
+		t.Fatalf("seed tenant rA: %v", err)
+	}
+	if err := s.systemPool().QueryRow(ctx,
+		`INSERT INTO tenants (name,status,sales_owner_id) VALUES ('rB','active',$1) RETURNING id`, salesID).Scan(&tB); err != nil {
+		t.Fatalf("seed tenant rB: %v", err)
+	}
+	seedLedger(t, ctx, s, tA, "settle", -10, 0, 0, 0, "2026-07-15T10:00:00+08:00", "r1")
+	seedLedger(t, ctx, s, tB, "settle", -10, 0, 0, 0, "2026-07-15T10:00:00+08:00", "r2")
+
+	w := doGET(t, s, s.handleAdminCommissions, "/admin/commissions?month=2026-07")
+	if w.Code != http.StatusOK {
+		t.Fatalf("status %d body %s", w.Code, w.Body.String())
+	}
+	body := w.Body.String()
+	if !contains(body, `"commission":2`) {
+		t.Errorf("per-tenant rounding: want commission 2 (not global 1): %s", body)
+	}
 }
 
 func doGET(t *testing.T, s *Server, h gin.HandlerFunc, target string) *httptest.ResponseRecorder {
