@@ -593,7 +593,7 @@ function EditTenantDialog({
     if (target) {
       setName(target.tenant?.name ?? "");
       setRatePct(
-        target.tenant?.commission_rate != null ? String(target.tenant.commission_rate * 100) : "",
+        target.tenant?.commission_rate != null ? String(Math.round(target.tenant.commission_rate * 10000) / 100) : "",
       );
     }
   }, [target]);
@@ -631,9 +631,9 @@ function EditTenantDialog({
     <Dialog open={target != null} onOpenChange={(o) => !o && onClose()}>
       <DialogContent className="sm:max-w-md">
         <DialogHeader>
-          <DialogTitle>编辑租户名称</DialogTitle>
+          <DialogTitle>编辑租户</DialogTitle>
           <DialogDescription>
-            修改 <span className="font-mono">{target?.tenant?.name}</span> 的显示名称。
+            修改 <span className="font-mono">{target?.tenant?.name}</span> 的名称与佣金比例。
           </DialogDescription>
         </DialogHeader>
         <div className="space-y-4 py-1">

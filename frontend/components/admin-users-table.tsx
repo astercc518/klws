@@ -346,7 +346,7 @@ function EditUserDialog({
       setEmail(target.email);
       setRole(target.role);
       setTenantId(target.tenant_id != null ? String(target.tenant_id) : "");
-      setRatePct(target.commission_rate != null ? String(target.commission_rate * 100) : "");
+      setRatePct(target.commission_rate != null ? String(Math.round(target.commission_rate * 10000) / 100) : "");
     }
   }, [target]);
 
