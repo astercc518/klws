@@ -1397,6 +1397,106 @@ SELECT count(*) FILTER (WHERE state='running'),
 	ok(c, gin.H{"rows": out, "total": total, "stats": st})
 }
 
+// ---------------------------------------------------------------------------
+// Global recipients (cross-tenant send records, god view)
+// ---------------------------------------------------------------------------
+
+type adminRecipientRow struct {
+	ID          int64   `json:"id"`
+	CampaignID  int64   `json:"campaign_id"`
+	TenantID    int64   `json:"tenant_id"`
+	TenantName  *string `json:"tenant_name"`
+	Phone       string  `json:"phone"`
+	State       string  `json:"state"`
+	LastError   *string `json:"last_error"`
+	UpdatedAt   string  `json:"updated_at"`
+	DeliveredAt *string `json:"delivered_at"`
+	ReadAt      *string `json:"read_at"`
+}
+
+func parseRecipientFilter(c *gin.Context) recipientFilter {
+	f := recipientFilter{State: c.Query("state"), Q: c.Query("q")}
+	if n, err := strconv.ParseInt(c.Query("tenant_id"), 10, 64); err == nil && n > 0 {
+		f.TenantID = n
+	}
+	if n, err := strconv.ParseInt(c.Query("campaign_id"), 10, 64); err == nil && n > 0 {
+		f.CampaignID = n
+	}
+	if n, err := strconv.Atoi(c.Query("limit")); err == nil {
+		f.Limit = n
+	}
+	if n, err := strconv.Atoi(c.Query("offset")); err == nil && n > 0 {
+		f.Offset = n
+	}
+	return f
+}
+
+// handleAdminListRecipients: GET /api/v1/admin/recipients (all tenants).
+func (s *Server) handleAdminListRecipients(c *gin.Context) {
+	ctx := c.Request.Context()
+	pool := s.systemPool()
+	f := parseRecipientFilter(c)
+	where, args := buildRecipientWhere(f)
+
+	listArgs := append(append([]any{}, args...), clampPage(f.Limit, 20, 200), f.Offset)
+	list := `
+SELECT r.id, r.campaign_id, r.tenant_id, t.name, r.phone, r.state::text, r.last_error,
+       r.updated_at::text, r.delivered_at::text, r.read_at::text
+  FROM campaign_recipients r
+  LEFT JOIN tenants t ON t.id = r.tenant_id` + where +
+		fmt.Sprintf(" ORDER BY r.id DESC LIMIT $%d OFFSET $%d", len(args)+1, len(args)+2)
+	rows, err := pool.Query(ctx, list, listArgs...)
+	if err != nil {
+		fail(c, http.StatusInternalServerError, "list recipients")
+		return
+	}
+	defer rows.Close()
+	out := make([]adminRecipientRow, 0)
+	for rows.Next() {
+		var r adminRecipientRow
+		if err := rows.Scan(&r.ID, &r.CampaignID, &r.TenantID, &r.TenantName, &r.Phone, &r.State,
+			&r.LastError, &r.UpdatedAt, &r.DeliveredAt, &r.ReadAt); err != nil {
+			fail(c, http.StatusInternalServerError, "scan recipient")
+			return
+		}
+		out = append(out, r)
+	}
+	if err := rows.Err(); err != nil {
+		fail(c, http.StatusInternalServerError, "iterate recipients")
+		return
+	}
+
+	var total int64
+	if err := pool.QueryRow(ctx, `SELECT count(*) FROM campaign_recipients r LEFT JOIN tenants t ON t.id = r.tenant_id`+where, args...).Scan(&total); err != nil {
+		fail(c, http.StatusInternalServerError, "count recipients")
+		return
+	}
+
+	var st struct {
+		Total     int64 `json:"total"`
+		Sent      int64 `json:"sent"`
+		Delivered int64 `json:"delivered"`
+		Read      int64 `json:"read"`
+		Failed    int64 `json:"failed"`
+		Pending   int64 `json:"pending"`
+		Skipped   int64 `json:"skipped"`
+	}
+	if err := pool.QueryRow(ctx, `
+SELECT count(*),
+       count(*) FILTER (WHERE state='sent'),
+       count(*) FILTER (WHERE delivered_at IS NOT NULL),
+       count(*) FILTER (WHERE read_at IS NOT NULL),
+       count(*) FILTER (WHERE state='failed'),
+       count(*) FILTER (WHERE state='pending'),
+       count(*) FILTER (WHERE state='skipped')
+  FROM campaign_recipients`).Scan(&st.Total, &st.Sent, &st.Delivered, &st.Read, &st.Failed, &st.Pending, &st.Skipped); err != nil {
+		fail(c, http.StatusInternalServerError, "recipient stats")
+		return
+	}
+
+	ok(c, gin.H{"rows": out, "total": total, "stats": st})
+}
+
 // handleAdminStopCampaign: POST /api/v1/admin/campaigns/:id/stop. Force-pauses a
 // running campaign by flipping its state to 'paused' — the dispatcher only
 // processes 'running', so it stops picking this campaign up. The state flip and

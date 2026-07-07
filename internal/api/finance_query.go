@@ -127,3 +127,39 @@ func buildCampaignWhere(f campaignFilter) (string, []any) {
 	}
 	return " WHERE " + strings.Join(conds, " AND "), args
 }
+
+// recipientFilter is the parsed query for the admin cross-tenant send-records list.
+type recipientFilter struct {
+	TenantID   int64
+	CampaignID int64
+	State      string
+	Q          string
+	Limit      int
+	Offset     int
+}
+
+// buildRecipientWhere returns the clause for campaign_recipients "r".
+func buildRecipientWhere(f recipientFilter) (string, []any) {
+	var conds []string
+	var args []any
+	add := func(tmpl string, val any) {
+		args = append(args, val)
+		conds = append(conds, fmt.Sprintf(tmpl, len(args)))
+	}
+	if f.TenantID != 0 {
+		add("r.tenant_id = $%d", f.TenantID)
+	}
+	if f.CampaignID != 0 {
+		add("r.campaign_id = $%d", f.CampaignID)
+	}
+	if f.State != "" {
+		add("r.state::text = $%d", f.State)
+	}
+	if f.Q != "" {
+		add("r.phone ILIKE $%d", "%"+f.Q+"%")
+	}
+	if len(conds) == 0 {
+		return "", args
+	}
+	return " WHERE " + strings.Join(conds, " AND "), args
+}
