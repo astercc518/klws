@@ -140,6 +140,7 @@ func (s *Server) Router() *gin.Engine {
 		admin.POST("/finance/topup", s.handleAdminTopup)
 		admin.POST("/finance/pricing", s.handleAdminSetPricing)
 		admin.GET("/finance/ledger", s.handleAdminLedger)
+		admin.GET("/finance/ledger/export", s.handleAdminLedgerExport)
 
 		admin.GET("/resources/proxies", s.handleAdminListProxies)
 		admin.POST("/resources/proxies", s.handleAdminImportProxies)

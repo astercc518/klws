@@ -443,6 +443,50 @@ type refundRow struct {
 	State    string `json:"state"`
 }
 
+// handleAdminLedgerExport: GET /admin/finance/ledger/export — full filtered
+// ledger as CSV (no pagination). Audited (sensitive financial export).
+func (s *Server) handleAdminLedgerExport(c *gin.Context) {
+	ctx := c.Request.Context()
+	f := parseLedgerFilter(c)
+	where, args := buildLedgerWhere(f)
+	q := `
+SELECT l.id, l.created_at::text, l.tenant_id, COALESCE(t.name,''), l.kind::text,
+       l.delta_balance, l.delta_frozen, l.balance_after, l.frozen_after
+  FROM wallet_ledger l
+  LEFT JOIN tenants t ON t.id = l.tenant_id` + where + " ORDER BY l.id DESC"
+	rows, err := s.systemPool().Query(ctx, q, args...)
+	if err != nil {
+		fail(c, http.StatusInternalServerError, "ledger export query")
+		return
+	}
+	defer rows.Close()
+	out := [][]string{}
+	for rows.Next() {
+		var id, tenantID, dbal, dfroz, bal, froz int64
+		var created, name, kind string
+		if err := rows.Scan(&id, &created, &tenantID, &name, &kind, &dbal, &dfroz, &bal, &froz); err != nil {
+			fail(c, http.StatusInternalServerError, "scan export")
+			return
+		}
+		out = append(out, []string{
+			strconv.FormatInt(id, 10), created, strconv.FormatInt(tenantID, 10), name, kind,
+			strconv.FormatInt(dbal, 10), strconv.FormatInt(dfroz, 10),
+			strconv.FormatInt(bal, 10), strconv.FormatInt(froz, 10),
+		})
+	}
+	if err := rows.Err(); err != nil {
+		fail(c, http.StatusInternalServerError, "iterate export")
+		return
+	}
+	s.recordAudit(ctx, auditEvent{
+		ActorID: actorID(c), Action: "finance.ledger_export", ResourceType: "ledger",
+		Details: gin.H{"kind": f.Kind, "tenant_id": f.TenantID, "rows": len(out)},
+	})
+	writeCSV(c, "ledger.csv",
+		[]string{"id", "created_at", "tenant_id", "tenant_name", "kind", "delta_balance", "delta_frozen", "balance_after", "frozen_after"},
+		out)
+}
+
 // handleAdminLedger: GET /api/v1/admin/finance/ledger — platform-wide money
 // trail (paginated + filterable by kind/tenant/date) + recent refund requests.
 func (s *Server) handleAdminLedger(c *gin.Context) {
