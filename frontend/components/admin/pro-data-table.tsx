@@ -47,6 +47,8 @@ interface ProDataTableProps<T> {
   rowActions?: (row: T) => React.ReactNode;
   /** When set, the table is server-driven: no local filter/slice. */
   server?: ServerMode;
+  /** When set, clicking a row calls this (rows become cursor-pointer). */
+  onRowClick?: (row: T) => void;
 }
 
 const alignClass = (a?: "left" | "right") => (a === "right" ? "text-right" : "text-left");
@@ -62,6 +64,7 @@ export function ProDataTable<T>({
   error,
   rowActions,
   server,
+  onRowClick,
 }: ProDataTableProps<T>) {
   const [query, setQuery] = useState("");
   const [page, setPage] = useState(0);
@@ -172,7 +175,11 @@ export function ProDataTable<T>({
             </TableRow>
           ) : (
             rows.map((row) => (
-              <TableRow key={getRowKey(row)}>
+              <TableRow
+                key={getRowKey(row)}
+                className={onRowClick ? "cursor-pointer" : undefined}
+                onClick={onRowClick ? () => onRowClick(row) : undefined}
+              >
                 {columns.map((c) => (
                   <TableCell
                     key={c.key}
@@ -182,7 +189,9 @@ export function ProDataTable<T>({
                   </TableCell>
                 ))}
                 {rowActions && (
-                  <TableCell className="py-2.5 text-right">{rowActions(row)}</TableCell>
+                  <TableCell className="py-2.5 text-right" onClick={(e) => e.stopPropagation()}>
+                    {rowActions(row)}
+                  </TableCell>
                 )}
               </TableRow>
             ))

@@ -424,13 +424,15 @@ func (s *Server) handleAdminSetPricing(c *gin.Context) {
 }
 
 type ledgerRow struct {
-	ID           int64  `json:"id"`
-	TenantID     int64  `json:"tenant_id"`
-	Kind         string `json:"kind"`
-	DeltaBalance int64  `json:"delta_balance"`
-	DeltaFrozen  int64  `json:"delta_frozen"`
-	BalanceAfter int64  `json:"balance_after"`
-	CreatedAt    string `json:"created_at"`
+	ID           int64   `json:"id"`
+	TenantID     int64   `json:"tenant_id"`
+	TenantName   *string `json:"tenant_name"`
+	Kind         string  `json:"kind"`
+	DeltaBalance int64   `json:"delta_balance"`
+	DeltaFrozen  int64   `json:"delta_frozen"`
+	BalanceAfter int64   `json:"balance_after"`
+	FrozenAfter  int64   `json:"frozen_after"`
+	CreatedAt    string  `json:"created_at"`
 }
 
 type refundRow struct {
@@ -441,15 +443,66 @@ type refundRow struct {
 	State    string `json:"state"`
 }
 
+// handleAdminLedgerExport: GET /admin/finance/ledger/export — full filtered
+// ledger as CSV (no pagination). Audited (sensitive financial export).
+func (s *Server) handleAdminLedgerExport(c *gin.Context) {
+	ctx := c.Request.Context()
+	f := parseLedgerFilter(c)
+	where, args := buildLedgerWhere(f)
+	q := `
+SELECT l.id, l.created_at::text, l.tenant_id, COALESCE(t.name,''), l.kind::text,
+       l.delta_balance, l.delta_frozen, l.balance_after, l.frozen_after
+  FROM wallet_ledger l
+  LEFT JOIN tenants t ON t.id = l.tenant_id` + where + " ORDER BY l.id DESC"
+	rows, err := s.systemPool().Query(ctx, q, args...)
+	if err != nil {
+		fail(c, http.StatusInternalServerError, "ledger export query")
+		return
+	}
+	defer rows.Close()
+	out := [][]string{}
+	for rows.Next() {
+		var id, tenantID, dbal, dfroz, bal, froz int64
+		var created, name, kind string
+		if err := rows.Scan(&id, &created, &tenantID, &name, &kind, &dbal, &dfroz, &bal, &froz); err != nil {
+			fail(c, http.StatusInternalServerError, "scan export")
+			return
+		}
+		out = append(out, []string{
+			strconv.FormatInt(id, 10), created, strconv.FormatInt(tenantID, 10), name, kind,
+			strconv.FormatInt(dbal, 10), strconv.FormatInt(dfroz, 10),
+			strconv.FormatInt(bal, 10), strconv.FormatInt(froz, 10),
+		})
+	}
+	if err := rows.Err(); err != nil {
+		fail(c, http.StatusInternalServerError, "iterate export")
+		return
+	}
+	s.recordAudit(ctx, auditEvent{
+		ActorID: actorID(c), Action: "finance.ledger_export", ResourceType: "ledger",
+		Details: gin.H{"kind": f.Kind, "tenant_id": f.TenantID, "rows": len(out), "from": c.Query("from"), "to": c.Query("to")},
+	})
+	writeCSV(c, "ledger.csv",
+		[]string{"id", "created_at", "tenant_id", "tenant_name", "kind", "delta_balance", "delta_frozen", "balance_after", "frozen_after"},
+		out)
+}
+
 // handleAdminLedger: GET /api/v1/admin/finance/ledger — platform-wide money
-// trail + recent refund requests (audit).
+// trail (paginated + filterable by kind/tenant/date) + recent refund requests.
 func (s *Server) handleAdminLedger(c *gin.Context) {
 	ctx := c.Request.Context()
-	pool := s.deps.Mgr.SystemPool()
+	pool := s.systemPool()
+	f := parseLedgerFilter(c)
+	where, args := buildLedgerWhere(f)
 
-	lrows, err := pool.Query(ctx, `
-SELECT id, tenant_id, kind, delta_balance, delta_frozen, balance_after, created_at::text
-  FROM wallet_ledger ORDER BY id DESC LIMIT 200`)
+	listArgs := append(append([]any{}, args...), clampPage(f.Limit, 50, 500), f.Offset)
+	list := `
+SELECT l.id, l.tenant_id, t.name, l.kind::text, l.delta_balance, l.delta_frozen,
+       l.balance_after, l.frozen_after, l.created_at::text
+  FROM wallet_ledger l
+  LEFT JOIN tenants t ON t.id = l.tenant_id` + where +
+		fmt.Sprintf(" ORDER BY l.id DESC LIMIT $%d OFFSET $%d", len(args)+1, len(args)+2)
+	lrows, err := pool.Query(ctx, list, listArgs...)
 	if err != nil {
 		fail(c, http.StatusInternalServerError, "ledger query")
 		return
@@ -458,11 +511,22 @@ SELECT id, tenant_id, kind, delta_balance, delta_frozen, balance_after, created_
 	ledger := make([]ledgerRow, 0)
 	for lrows.Next() {
 		var l ledgerRow
-		if err := lrows.Scan(&l.ID, &l.TenantID, &l.Kind, &l.DeltaBalance, &l.DeltaFrozen, &l.BalanceAfter, &l.CreatedAt); err != nil {
+		if err := lrows.Scan(&l.ID, &l.TenantID, &l.TenantName, &l.Kind, &l.DeltaBalance,
+			&l.DeltaFrozen, &l.BalanceAfter, &l.FrozenAfter, &l.CreatedAt); err != nil {
 			fail(c, http.StatusInternalServerError, "scan ledger")
 			return
 		}
 		ledger = append(ledger, l)
+	}
+	if err := lrows.Err(); err != nil {
+		fail(c, http.StatusInternalServerError, "iterate ledger")
+		return
+	}
+
+	var total int64
+	if err := pool.QueryRow(ctx, `SELECT count(*) FROM wallet_ledger l`+where, args...).Scan(&total); err != nil {
+		fail(c, http.StatusInternalServerError, "count ledger")
+		return
 	}
 
 	rrows, err := pool.Query(ctx, `
@@ -483,7 +547,7 @@ SELECT id, tenant_id, amount, reason, state::text
 		refunds = append(refunds, r)
 	}
 
-	ok(c, gin.H{"ledger": ledger, "refunds": refunds})
+	ok(c, gin.H{"rows": ledger, "total": total, "refunds": refunds})
 }
 
 // ---------------------------------------------------------------------------
@@ -721,6 +785,30 @@ func parseDeviceFilter(c *gin.Context) deviceFilter {
 	} else if v == "false" {
 		b := false
 		f.Online = &b
+	}
+	if n, err := strconv.Atoi(c.Query("limit")); err == nil {
+		f.Limit = n
+	}
+	if n, err := strconv.Atoi(c.Query("offset")); err == nil && n > 0 {
+		f.Offset = n
+	}
+	return f
+}
+
+func parseLedgerFilter(c *gin.Context) ledgerFilter {
+	f := ledgerFilter{Kind: c.Query("kind")}
+	if n, err := strconv.ParseInt(c.Query("tenant_id"), 10, 64); err == nil && n > 0 {
+		f.TenantID = n
+	}
+	if v := c.Query("from"); v != "" {
+		if d, err := time.ParseInLocation("2006-01-02", v, cnLoc); err == nil {
+			f.From = d
+		}
+	}
+	if v := c.Query("to"); v != "" {
+		if d, err := time.ParseInLocation("2006-01-02", v, cnLoc); err == nil {
+			f.To = d.AddDate(0, 0, 1) // inclusive day → exclusive bound
+		}
 	}
 	if n, err := strconv.Atoi(c.Query("limit")); err == nil {
 		f.Limit = n
@@ -1218,30 +1306,51 @@ ON CONFLICT (id) DO UPDATE SET
 // ---------------------------------------------------------------------------
 
 type adminCampaignRow struct {
-	ID        int64  `json:"id"`
-	TenantID  int64  `json:"tenant_id"`
-	State     string `json:"state"`
-	Total     int    `json:"total"`
-	Sent      int    `json:"sent"`
-	Failed    int    `json:"failed"`
-	CreatedAt string `json:"created_at"`
+	ID         int64   `json:"id"`
+	TenantID   int64   `json:"tenant_id"`
+	TenantName *string `json:"tenant_name"`
+	State      string  `json:"state"`
+	Total      int     `json:"total"`
+	Sent       int     `json:"sent"`
+	Failed     int     `json:"failed"`
+	CreatedAt  string  `json:"created_at"`
 	// AutoTripped is true when the campaign is currently paused because the
 	// risk circuit breaker tripped it (a circuit_break audit newer than any
 	// later resume), as opposed to a manual operator stop.
 	AutoTripped bool `json:"auto_tripped"`
 }
 
+func parseCampaignFilter(c *gin.Context) campaignFilter {
+	f := campaignFilter{Q: c.Query("q"), State: c.Query("state")}
+	if n, err := strconv.Atoi(c.Query("limit")); err == nil {
+		f.Limit = n
+	}
+	if n, err := strconv.Atoi(c.Query("offset")); err == nil && n > 0 {
+		f.Offset = n
+	}
+	return f
+}
+
 // handleAdminListCampaigns: GET /api/v1/admin/campaigns (all tenants).
 func (s *Server) handleAdminListCampaigns(c *gin.Context) {
-	rows, err := s.deps.Mgr.SystemPool().Query(c.Request.Context(), `
-SELECT c.id, c.tenant_id, c.state::text, c.total, c.sent, c.failed, c.created_at::text,
+	ctx := c.Request.Context()
+	pool := s.systemPool()
+	f := parseCampaignFilter(c)
+	where, args := buildCampaignWhere(f)
+
+	listArgs := append(append([]any{}, args...), clampPage(f.Limit, 20, 200), f.Offset)
+	list := `
+SELECT c.id, c.tenant_id, t.name, c.state::text, c.total, c.sent, c.failed, c.created_at::text,
        (c.state = 'paused' AND
         COALESCE((SELECT max(occurred_at) FROM audit_log a
                    WHERE a.action='campaign.circuit_break' AND a.resource_id=c.id), 'epoch') >
         COALESCE((SELECT max(occurred_at) FROM audit_log a
                    WHERE a.action='campaign.resume' AND a.resource_id=c.id), 'epoch')
        ) AS auto_tripped
-  FROM campaigns c ORDER BY c.id DESC LIMIT 200`)
+  FROM campaigns c
+  LEFT JOIN tenants t ON t.id = c.tenant_id` + where +
+		fmt.Sprintf(" ORDER BY c.id DESC LIMIT $%d OFFSET $%d", len(args)+1, len(args)+2)
+	rows, err := pool.Query(ctx, list, listArgs...)
 	if err != nil {
 		fail(c, http.StatusInternalServerError, "list campaigns")
 		return
@@ -1250,13 +1359,42 @@ SELECT c.id, c.tenant_id, c.state::text, c.total, c.sent, c.failed, c.created_at
 	out := make([]adminCampaignRow, 0)
 	for rows.Next() {
 		var cp adminCampaignRow
-		if err := rows.Scan(&cp.ID, &cp.TenantID, &cp.State, &cp.Total, &cp.Sent, &cp.Failed, &cp.CreatedAt, &cp.AutoTripped); err != nil {
+		if err := rows.Scan(&cp.ID, &cp.TenantID, &cp.TenantName, &cp.State, &cp.Total, &cp.Sent, &cp.Failed, &cp.CreatedAt, &cp.AutoTripped); err != nil {
 			fail(c, http.StatusInternalServerError, "scan campaign")
 			return
 		}
 		out = append(out, cp)
 	}
-	ok(c, out)
+	if err := rows.Err(); err != nil {
+		fail(c, http.StatusInternalServerError, "iterate campaigns")
+		return
+	}
+
+	var total int64
+	if err := pool.QueryRow(ctx, `SELECT count(*) FROM campaigns c LEFT JOIN tenants t ON t.id = c.tenant_id`+where, args...).Scan(&total); err != nil {
+		fail(c, http.StatusInternalServerError, "count campaigns")
+		return
+	}
+
+	var st struct {
+		Running int64 `json:"running"`
+		Paused  int64 `json:"paused"`
+		Tripped int64 `json:"tripped"`
+		Total   int64 `json:"total"`
+	}
+	if err := pool.QueryRow(ctx, `
+SELECT count(*) FILTER (WHERE state='running'),
+       count(*) FILTER (WHERE state='paused'),
+       count(*) FILTER (WHERE state='paused' AND
+         COALESCE((SELECT max(occurred_at) FROM audit_log a WHERE a.action='campaign.circuit_break' AND a.resource_id=campaigns.id),'epoch') >
+         COALESCE((SELECT max(occurred_at) FROM audit_log a WHERE a.action='campaign.resume' AND a.resource_id=campaigns.id),'epoch')),
+       count(*)
+  FROM campaigns`).Scan(&st.Running, &st.Paused, &st.Tripped, &st.Total); err != nil {
+		fail(c, http.StatusInternalServerError, "campaign stats")
+		return
+	}
+
+	ok(c, gin.H{"rows": out, "total": total, "stats": st})
 }
 
 // handleAdminStopCampaign: POST /api/v1/admin/campaigns/:id/stop. Force-pauses a
