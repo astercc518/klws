@@ -33,6 +33,7 @@ interface User {
   role: Role;
   tenant_id: number | null;
   disabled: boolean;
+  commission_rate: number | null;
 }
 interface Tenant {
   id: number;
@@ -337,6 +338,7 @@ function EditUserDialog({
   const [email, setEmail] = useState("");
   const [role, setRole] = useState<Role>("customer");
   const [tenantId, setTenantId] = useState<string>("");
+  const [ratePct, setRatePct] = useState<string>("");
   const [busy, setBusy] = useState(false);
 
   useEffect(() => {
@@ -344,6 +346,7 @@ function EditUserDialog({
       setEmail(target.email);
       setRole(target.role);
       setTenantId(target.tenant_id != null ? String(target.tenant_id) : "");
+      setRatePct(target.commission_rate != null ? String(target.commission_rate * 100) : "");
     }
   }, [target]);
 
@@ -355,13 +358,25 @@ function EditUserDialog({
 
   async function submit() {
     if (!target) return;
+
+    const body: Record<string, unknown> = {
+      email: email.trim(),
+      role,
+      tenant_id: needsTenant ? Number(tenantId) : undefined,
+    };
+
+    if (role === "sales" && ratePct.trim() !== "") {
+      const rate = Number(ratePct);
+      if (!Number.isFinite(rate) || rate < 0 || rate > 100) {
+        toast.error("佣金比例无效", { description: "请输入 0-100 之间的数字" });
+        return;
+      }
+      body.commission_rate = rate / 100;
+    }
+
     setBusy(true);
     try {
-      await api.put(`/admin/users/${target.id}`, {
-        email: email.trim(),
-        role,
-        tenant_id: needsTenant ? Number(tenantId) : undefined,
-      });
+      await api.put(`/admin/users/${target.id}`, body);
       toast.success("用户已更新", { description: `${email} · ${role}` });
       onClose();
       onDone();
@@ -424,6 +439,23 @@ function EditUserDialog({
               </div>
             )}
           </div>
+          {role === "sales" && (
+            <div className="space-y-2">
+              <label htmlFor="eu-rate" className="text-sm font-medium">佣金比例(%)</label>
+              <Input
+                id="eu-rate"
+                type="number"
+                min={0}
+                max={100}
+                step={0.1}
+                value={ratePct}
+                onChange={(e) => setRatePct(e.target.value)}
+                placeholder="例如 10"
+                className="font-mono"
+              />
+              <p className="text-xs text-muted-foreground">留空表示未设置</p>
+            </div>
+          )}
         </div>
         <DialogFooter>
           <DialogClose render={<Button variant="ghost" />}>取消</DialogClose>

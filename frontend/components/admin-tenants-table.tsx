@@ -44,6 +44,7 @@ interface AdminTenant {
   sales_owner_id: number | null;
   balance: number;
   frozen: number;
+  commission_rate: number | null;
 }
 /** A user row joined with its tenant wallet, OR a placeholder for a tenant that
  *  has no console user yet (placeholder=true, email empty). */
@@ -584,20 +585,38 @@ function EditTenantDialog({
   onDone: () => void;
 }) {
   const [name, setName] = useState("");
+  const [ratePct, setRatePct] = useState<string>("");
   const [busy, setBusy] = useState(false);
 
   // Reset fields whenever a new target opens the dialog.
   useEffect(() => {
-    if (target) setName(target.tenant?.name ?? "");
+    if (target) {
+      setName(target.tenant?.name ?? "");
+      setRatePct(
+        target.tenant?.commission_rate != null ? String(target.tenant.commission_rate * 100) : "",
+      );
+    }
   }, [target]);
 
   const valid = name.trim().length > 0 && !busy;
 
   async function submit() {
     if (!target?.tenant_id) return;
+
+    const body: Record<string, unknown> = { name: name.trim() };
+
+    if (ratePct.trim() !== "") {
+      const rate = Number(ratePct);
+      if (!Number.isFinite(rate) || rate < 0 || rate > 100) {
+        toast.error("佣金比例无效", { description: "请输入 0-100 之间的数字" });
+        return;
+      }
+      body.commission_rate = rate / 100;
+    }
+
     setBusy(true);
     try {
-      await api.put(`/admin/tenants/${target.tenant_id}`, { name: name.trim() });
+      await api.put(`/admin/tenants/${target.tenant_id}`, body);
       toast.success("名称已更新", { description: name.trim() });
       onClose();
       onDone();
@@ -617,9 +636,26 @@ function EditTenantDialog({
             修改 <span className="font-mono">{target?.tenant?.name}</span> 的显示名称。
           </DialogDescription>
         </DialogHeader>
-        <div className="space-y-2 py-1">
-          <label htmlFor="edit-tenant-name" className="text-sm font-medium">租户名称</label>
-          <Input id="edit-tenant-name" value={name} onChange={(e) => setName(e.target.value)} placeholder="Acme Corp" />
+        <div className="space-y-4 py-1">
+          <div className="space-y-2">
+            <label htmlFor="edit-tenant-name" className="text-sm font-medium">租户名称</label>
+            <Input id="edit-tenant-name" value={name} onChange={(e) => setName(e.target.value)} placeholder="Acme Corp" />
+          </div>
+          <div className="space-y-2">
+            <label htmlFor="edit-tenant-rate" className="text-sm font-medium">佣金比例(%)</label>
+            <Input
+              id="edit-tenant-rate"
+              type="number"
+              min={0}
+              max={100}
+              step={0.1}
+              value={ratePct}
+              onChange={(e) => setRatePct(e.target.value)}
+              placeholder="例如 10"
+              className="font-mono"
+            />
+            <p className="text-xs text-muted-foreground">留空表示继承该租户所属销售的默认比例</p>
+          </div>
         </div>
         <DialogFooter>
           <DialogClose render={<Button variant="ghost" />}>取消</DialogClose>
