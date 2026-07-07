@@ -243,7 +243,7 @@ func (s *Server) handleAdminListUsers(c *gin.Context) {
 // A customer must carry a tenant_id; admin/sales must not.
 func (s *Server) handleAdminCreateUser(c *gin.Context) {
 	var req struct {
-		Email    string `json:"email" binding:"required,email"`
+		Email    string `json:"email" binding:"required"`
 		Password string `json:"password" binding:"required,min=8"`
 		Role     string `json:"role" binding:"required"`
 		TenantID *int64 `json:"tenant_id"`
@@ -297,7 +297,7 @@ func (s *Server) handleAdminUpdateUser(c *gin.Context) {
 		return
 	}
 	var req struct {
-		Email    string `json:"email" binding:"required,email"`
+		Email    string `json:"email" binding:"required"`
 		Role     string `json:"role" binding:"required"`
 		TenantID *int64 `json:"tenant_id"`
 	}
