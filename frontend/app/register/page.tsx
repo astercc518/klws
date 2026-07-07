@@ -83,7 +83,7 @@ export default function RegisterPage() {
               if (attempted) setErrors((p) => ({ ...p, email: emailError(v) }));
             }}
             placeholder="用户名或邮箱"
-            autoComplete="email"
+            autoComplete="username"
             aria-invalid={!!errors.email}
             aria-describedby="email-error"
             className="mt-2 h-11 rounded-xl"
