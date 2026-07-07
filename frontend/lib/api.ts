@@ -123,6 +123,45 @@ async function request<T>(path: string, options: RequestOptions = {}): Promise<T
 // Public verb helpers.
 // ---------------------------------------------------------------------------
 
+// ---------------------------------------------------------------------------
+// File download (CSV export). Bearer-authenticated GET → blob → browser save.
+// Kept separate from `request` because it does not unwrap the JSON envelope.
+// ---------------------------------------------------------------------------
+
+export async function download(path: string, filename: string): Promise<void> {
+  const url = path.startsWith("http")
+    ? path
+    : `${API_BASE_URL}${path.startsWith("/") ? path : `/${path}`}`;
+  const headers: Record<string, string> = {};
+  const token = getToken();
+  if (token) headers["Authorization"] = `Bearer ${token}`;
+
+  let res: Response;
+  try {
+    res = await fetch(url, { method: "GET", headers });
+  } catch {
+    throw new ApiError(0, "network error: could not reach API");
+  }
+  if (res.status === 401) {
+    clearToken();
+    if (typeof window !== "undefined" && window.location.pathname !== LOGIN_PATH) {
+      window.location.href = LOGIN_PATH;
+    }
+    throw new ApiError(401, "unauthorized");
+  }
+  if (!res.ok) throw new ApiError(res.status, res.statusText);
+
+  const blob = await res.blob();
+  const objectUrl = window.URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = objectUrl;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  window.URL.revokeObjectURL(objectUrl);
+}
+
 export const api = {
   get: <T>(path: string, options?: RequestOptions) =>
     request<T>(path, { ...options, method: "GET" }),
@@ -134,6 +173,7 @@ export const api = {
     request<T>(path, { ...options, method: "PATCH", body }),
   delete: <T>(path: string, options?: RequestOptions) =>
     request<T>(path, { ...options, method: "DELETE" }),
+  download,
 };
 
 // ---------------------------------------------------------------------------
