@@ -259,6 +259,150 @@ func TestHandleAdminListRecipients(t *testing.T) {
 	}
 }
 
+func TestHandleAdminCommissions(t *testing.T) {
+	s, ctx := newFinanceServer(t)
+
+	var salesID int64
+	if err := s.systemPool().QueryRow(ctx,
+		`INSERT INTO console_users (email,password_hash,role,commission_rate) VALUES ('s1','x','sales',0.10) RETURNING id`,
+	).Scan(&salesID); err != nil {
+		t.Fatalf("seed sales user: %v", err)
+	}
+
+	var tenantA, tenantB int64
+	if err := s.systemPool().QueryRow(ctx,
+		`INSERT INTO tenants (name,status,sales_owner_id,commission_rate) VALUES ('A','active',$1,0.20) RETURNING id`,
+		salesID).Scan(&tenantA); err != nil {
+		t.Fatalf("seed tenant A: %v", err)
+	}
+	if err := s.systemPool().QueryRow(ctx,
+		`INSERT INTO tenants (name,status,sales_owner_id,commission_rate) VALUES ('B','active',$1,NULL) RETURNING id`,
+		salesID).Scan(&tenantB); err != nil {
+		t.Fatalf("seed tenant B: %v", err)
+	}
+
+	// In-month settle: tenant A consumes 1000, tenant B consumes 500.
+	seedLedger(t, ctx, s, tenantA, "settle", -1000, 0, 0, 0, "2026-07-15T10:00:00+08:00", "c1")
+	seedLedger(t, ctx, s, tenantB, "settle", -500, 0, 0, 0, "2026-07-15T10:00:00+08:00", "c2")
+	// Out-of-month settle for tenant A — must be excluded.
+	seedLedger(t, ctx, s, tenantA, "settle", -9999, 0, 0, 0, "2026-06-15T10:00:00+08:00", "c3")
+
+	w := doGET(t, s, s.handleAdminCommissions, "/admin/commissions?month=2026-07")
+	if w.Code != http.StatusOK {
+		t.Fatalf("status %d body %s", w.Code, w.Body.String())
+	}
+	body := w.Body.String()
+	// tenant A: round(1000*0.20)=200, tenant B: round(500*0.10)=50 → 250 total.
+	if !contains(body, `"consumption":1500`) {
+		t.Errorf("want consumption 1500: %s", body)
+	}
+	if !contains(body, `"commission":250`) {
+		t.Errorf("want commission 250: %s", body)
+	}
+	if !contains(body, `"totals":{"commission":250,"consumption":1500}`) {
+		t.Errorf("want totals consumption=1500 commission=250: %s", body)
+	}
+	if !contains(body, `"month":"2026-07"`) {
+		t.Errorf("want month echoed: %s", body)
+	}
+}
+
+func TestHandleAdminUpdateCommissionRate(t *testing.T) {
+	s, ctx := newFinanceServer(t)
+	tid, _ := seedTenantUser(t, ctx, s, "cr-tenant@acme.test")
+
+	// tenant: valid commission_rate → 200, persisted.
+	w := doJSON(t, s, s.handleAdminUpdateTenant, http.MethodPut, "/admin/tenants/x", itoa(tid),
+		`{"name":"Acme","commission_rate":0.2}`)
+	if w.Code != http.StatusOK {
+		t.Fatalf("tenant update status %d body %s", w.Code, w.Body.String())
+	}
+	var tenantRate float64
+	if err := s.systemPool().QueryRow(ctx, `SELECT commission_rate FROM tenants WHERE id=$1`, tid).Scan(&tenantRate); err != nil {
+		t.Fatalf("read tenant commission_rate: %v", err)
+	}
+	if tenantRate != 0.2 {
+		t.Errorf("tenant commission_rate not updated: got %v want 0.2", tenantRate)
+	}
+
+	// tenant: out-of-range commission_rate → 400, no partial update.
+	w = doJSON(t, s, s.handleAdminUpdateTenant, http.MethodPut, "/admin/tenants/x", itoa(tid),
+		`{"name":"Acme","commission_rate":1.5}`)
+	if w.Code != http.StatusBadRequest {
+		t.Errorf("out-of-range tenant rate want 400, got %d body %s", w.Code, w.Body.String())
+	}
+
+	// sales user: valid commission_rate → 200, persisted. Also exercises the
+	// SP6 relaxed email binding — "s1" is a bare username, not an email.
+	var salesID int64
+	if err := s.systemPool().QueryRow(ctx,
+		`INSERT INTO console_users (email,password_hash,role) VALUES ('s1-orig','x','sales') RETURNING id`,
+	).Scan(&salesID); err != nil {
+		t.Fatalf("seed sales user: %v", err)
+	}
+	w = doJSON(t, s, s.handleAdminUpdateUser, http.MethodPut, "/admin/users/x", itoa(salesID),
+		`{"email":"s1","role":"sales","commission_rate":0.1}`)
+	if w.Code != http.StatusOK {
+		t.Fatalf("user update status %d body %s", w.Code, w.Body.String())
+	}
+	var userRate float64
+	if err := s.systemPool().QueryRow(ctx, `SELECT commission_rate FROM console_users WHERE id=$1`, salesID).Scan(&userRate); err != nil {
+		t.Fatalf("read user commission_rate: %v", err)
+	}
+	if userRate != 0.1 {
+		t.Errorf("user commission_rate not updated: got %v want 0.1", userRate)
+	}
+
+	// name-only edit (no commission_rate key) must NOT wipe the configured rate.
+	w = doJSON(t, s, s.handleAdminUpdateTenant, http.MethodPut, "/admin/tenants/x", itoa(tid),
+		`{"name":"Acme Renamed"}`)
+	if w.Code != http.StatusOK {
+		t.Fatalf("name-only update status %d body %s", w.Code, w.Body.String())
+	}
+	if err := s.systemPool().QueryRow(ctx, `SELECT commission_rate FROM tenants WHERE id=$1`, tid).Scan(&tenantRate); err != nil {
+		t.Fatalf("re-read tenant commission_rate: %v", err)
+	}
+	if tenantRate != 0.2 {
+		t.Errorf("name-only edit wiped commission_rate: got %v want 0.2", tenantRate)
+	}
+}
+
+// TestCommissionPerTenantRounding proves commission is rounded PER TENANT before
+// summing, not once over the summed consumption. With rate 0.05 and two tenants
+// each consuming 10 cents: per-tenant = round(0.5)+round(0.5) = 1+1 = 2, whereas
+// global rounding would be round((10+10)*0.05) = round(1.0) = 1. Asserting 2
+// pins the per-tenant behaviour (Postgres round() is half-away-from-zero).
+func TestCommissionPerTenantRounding(t *testing.T) {
+	s, ctx := newFinanceServer(t)
+
+	var salesID int64
+	if err := s.systemPool().QueryRow(ctx,
+		`INSERT INTO console_users (email,password_hash,role,commission_rate) VALUES ('rnd','x','sales',0.05) RETURNING id`,
+	).Scan(&salesID); err != nil {
+		t.Fatalf("seed sales: %v", err)
+	}
+	var tA, tB int64
+	if err := s.systemPool().QueryRow(ctx,
+		`INSERT INTO tenants (name,status,sales_owner_id) VALUES ('rA','active',$1) RETURNING id`, salesID).Scan(&tA); err != nil {
+		t.Fatalf("seed tenant rA: %v", err)
+	}
+	if err := s.systemPool().QueryRow(ctx,
+		`INSERT INTO tenants (name,status,sales_owner_id) VALUES ('rB','active',$1) RETURNING id`, salesID).Scan(&tB); err != nil {
+		t.Fatalf("seed tenant rB: %v", err)
+	}
+	seedLedger(t, ctx, s, tA, "settle", -10, 0, 0, 0, "2026-07-15T10:00:00+08:00", "r1")
+	seedLedger(t, ctx, s, tB, "settle", -10, 0, 0, 0, "2026-07-15T10:00:00+08:00", "r2")
+
+	w := doGET(t, s, s.handleAdminCommissions, "/admin/commissions?month=2026-07")
+	if w.Code != http.StatusOK {
+		t.Fatalf("status %d body %s", w.Code, w.Body.String())
+	}
+	body := w.Body.String()
+	if !contains(body, `"commission":2`) {
+		t.Errorf("per-tenant rounding: want commission 2 (not global 1): %s", body)
+	}
+}
+
 func doGET(t *testing.T, s *Server, h gin.HandlerFunc, target string) *httptest.ResponseRecorder {
 	t.Helper()
 	w := httptest.NewRecorder()
