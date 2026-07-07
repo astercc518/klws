@@ -65,3 +65,7 @@ chaos: ## run takeover chaos test (requires Docker for testcontainers)
 .PHONY: console-run
 console-run: ## run the management console (needs WADIST_POSTGRES_DSN, WADIST_CONSOLE_SESSION_KEY)
 	$(GO) run ./cmd/console
+
+.PHONY: deploy
+deploy: ## rebuild+redeploy live stack from current tree (default backend+frontend); SERVICES="..." to override
+	./scripts/deploy.sh $(SERVICES)
