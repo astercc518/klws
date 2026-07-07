@@ -42,3 +42,56 @@ func buildLedgerWhere(f ledgerFilter) (string, []any) {
 	}
 	return " WHERE " + strings.Join(conds, " AND "), args
 }
+
+// billRange is a validated [From, To) window in Asia/Shanghai. To is exclusive.
+type billRange struct {
+	From time.Time
+	To   time.Time
+}
+
+var cnLoc = func() *time.Location {
+	loc, err := time.LoadLocation("Asia/Shanghai")
+	if err != nil {
+		return time.FixedZone("CST", 8*3600) // fallback: fixed +08:00
+	}
+	return loc
+}()
+
+// parseBillRange parses YYYY-MM-DD `from`/`to` as Asia/Shanghai day bounds.
+// `to` is inclusive of that whole day, so the returned To is start-of-next-day.
+// Empty strings default to the last 30 days. Rejects reversed / >366d ranges.
+func parseBillRange(fromStr, toStr string) (billRange, error) {
+	const layout = "2006-01-02"
+	// Anchor "now" to CN start-of-tomorrow so the default window is stable
+	// within a day; we derive it from the parsed `to` when supplied.
+	var to time.Time
+	if toStr == "" {
+		now := time.Now().In(cnLoc)
+		to = time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, cnLoc).AddDate(0, 0, 1)
+	} else {
+		d, err := time.ParseInLocation(layout, toStr, cnLoc)
+		if err != nil {
+			return billRange{}, fmt.Errorf("bad `to` date: %w", err)
+		}
+		to = d.AddDate(0, 0, 1) // inclusive → exclusive next-day bound
+	}
+
+	var from time.Time
+	if fromStr == "" {
+		from = to.AddDate(0, 0, -30)
+	} else {
+		d, err := time.ParseInLocation(layout, fromStr, cnLoc)
+		if err != nil {
+			return billRange{}, fmt.Errorf("bad `from` date: %w", err)
+		}
+		from = d
+	}
+
+	if !from.Before(to) {
+		return billRange{}, fmt.Errorf("`from` must be before `to`")
+	}
+	if to.Sub(from) > 366*24*time.Hour {
+		return billRange{}, fmt.Errorf("range too large (max 366 days)")
+	}
+	return billRange{From: from, To: to}, nil
+}
