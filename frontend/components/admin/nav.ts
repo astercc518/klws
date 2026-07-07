@@ -1,6 +1,7 @@
 import {
   LayoutDashboard,
   UserCog,
+  Building2,
   Globe,
   Smartphone,
   ScrollText,
@@ -38,6 +39,7 @@ export const NAV_GROUPS: NavGroup[] = [
   {
     title: "IAM 与账单",
     items: [
+      { href: "/admin/tenants", label: "租户与财务", en: "Tenants", icon: Building2 },
       { href: "/admin/users", label: "用户管理", en: "Users", icon: UserCog },
       { href: "/admin/ledger", label: "财务流水", en: "Ledger", icon: ReceiptText },
       { href: "/admin/billing", label: "账单统计", en: "Billing", icon: PieChart },
