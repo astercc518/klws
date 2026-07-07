@@ -148,6 +148,7 @@ export function AdminLedger() {
           columns={ledgerCols}
           getRowKey={(r) => `l${r.id}`}
           emptyState="暂无流水"
+          search={{ placeholder: "搜索租户 ID…", accessor: () => "" }}
           server={{
             total,
             page,

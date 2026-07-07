@@ -184,6 +184,7 @@ export function AdminCampaigns() {
         getRowKey={(c) => c.id}
         onRowClick={(c) => setDetailId(c.id)}
         emptyState="当前没有任务。"
+        search={{ placeholder: "搜索租户名或 ID…", accessor: () => "" }}
         server={{
           total,
           page,
