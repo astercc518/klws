@@ -145,6 +145,10 @@ type tenantBill struct {
 // tenant strictly before `before` (0 if none).
 func (s *Server) balanceAsOf(ctx context.Context, tenantID int64, before time.Time) (int64, error) {
 	var v int64
+	// ORDER BY id DESC is used as a proxy for "latest by created_at" — correct
+	// only because wallet_ledger is append-only, so id is monotonic with
+	// created_at. If wallet_ledger ever allows back-dated inserts (created_at
+	// not matching insertion order), this must switch to ORDER BY created_at DESC, id DESC.
 	err := s.systemPool().QueryRow(ctx, `
 SELECT COALESCE(balance_after + frozen_after, 0)
   FROM wallet_ledger

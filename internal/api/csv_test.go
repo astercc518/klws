@@ -24,3 +24,15 @@ func TestWriteCSV(t *testing.T) {
 		t.Errorf("body = %q want %q", got, want)
 	}
 }
+
+func TestWriteCSVSanitizesFormulaInjection(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	w := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(w)
+	writeCSV(c, "ledger.csv", []string{"id", "kind"}, [][]string{{"1", "=1+2"}, {"2", "topup"}, {"3", "100"}})
+
+	want := "id,kind\n1,'=1+2\n2,topup\n3,100\n"
+	if got := w.Body.String(); got != want {
+		t.Errorf("body = %q want %q", got, want)
+	}
+}

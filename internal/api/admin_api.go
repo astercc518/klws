@@ -480,7 +480,7 @@ SELECT l.id, l.created_at::text, l.tenant_id, COALESCE(t.name,''), l.kind::text,
 	}
 	s.recordAudit(ctx, auditEvent{
 		ActorID: actorID(c), Action: "finance.ledger_export", ResourceType: "ledger",
-		Details: gin.H{"kind": f.Kind, "tenant_id": f.TenantID, "rows": len(out)},
+		Details: gin.H{"kind": f.Kind, "tenant_id": f.TenantID, "rows": len(out), "from": c.Query("from"), "to": c.Query("to")},
 	})
 	writeCSV(c, "ledger.csv",
 		[]string{"id", "created_at", "tenant_id", "tenant_name", "kind", "delta_balance", "delta_frozen", "balance_after", "frozen_after"},
