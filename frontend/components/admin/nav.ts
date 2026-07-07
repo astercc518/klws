@@ -10,6 +10,7 @@ import {
   Send,
   ListChecks,
   PieChart,
+  Coins,
   type LucideIcon,
 } from "lucide-react";
 
@@ -43,6 +44,7 @@ export const NAV_GROUPS: NavGroup[] = [
       { href: "/admin/users", label: "用户管理", en: "Users", icon: UserCog },
       { href: "/admin/ledger", label: "财务流水", en: "Ledger", icon: ReceiptText },
       { href: "/admin/billing", label: "账单统计", en: "Billing", icon: PieChart },
+      { href: "/admin/commissions", label: "销售佣金", en: "Commission", icon: Coins },
     ],
   },
   {
