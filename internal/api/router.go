@@ -161,6 +161,7 @@ func (s *Server) Router() *gin.Engine {
 
 		admin.GET("/campaigns", s.handleAdminListCampaigns)
 		admin.GET("/campaigns/:id/recipients", s.handleAdminListCampaignRecipients)
+		admin.GET("/recipients", s.handleAdminListRecipients)
 		admin.POST("/campaigns/:id/stop", s.handleAdminStopCampaign)
 		admin.POST("/campaigns/:id/resume", s.handleAdminResumeCampaign)
 

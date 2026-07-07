@@ -224,6 +224,41 @@ func TestHandleAdminListCampaignsFiltered(t *testing.T) {
 	}
 }
 
+// seedRecipient inserts one campaign_recipients row for the given campaign/tenant.
+func seedRecipient(t *testing.T, ctx context.Context, s *Server, campaignID, tenantID int64, phone, state string) {
+	t.Helper()
+	if _, err := s.systemPool().Exec(ctx,
+		`INSERT INTO campaign_recipients (campaign_id, tenant_id, phone, country_code, state)
+		 VALUES ($1,$2,$3,'US',$4::recipient_state_t)`,
+		campaignID, tenantID, phone, state); err != nil {
+		t.Fatalf("seed recipient: %v", err)
+	}
+}
+
+func TestHandleAdminListRecipients(t *testing.T) {
+	s, ctx := newFinanceServer(t)
+	tid, _ := seedTenantUser(t, ctx, s, "recip@acme.test")
+	cid := seedCampaign(t, ctx, s, tid, "running", 3, 2, 1)
+	seedRecipient(t, ctx, s, cid, tid, "+15550001", "sent")
+	seedRecipient(t, ctx, s, cid, tid, "+15550002", "sent")
+	seedRecipient(t, ctx, s, cid, tid, "+15550003", "failed")
+
+	w := doGET(t, s, s.handleAdminListRecipients, "/admin/recipients?state=sent")
+	if w.Code != http.StatusOK {
+		t.Fatalf("status %d body %s", w.Code, w.Body.String())
+	}
+	body := w.Body.String()
+	if !contains(body, `"total":2`) {
+		t.Errorf("want filtered total 2: %s", body)
+	}
+	if !contains(body, `"sent":2`) {
+		t.Errorf("want global stats sent=2: %s", body)
+	}
+	if !contains(body, `"failed":1`) {
+		t.Errorf("want global stats failed=1: %s", body)
+	}
+}
+
 func doGET(t *testing.T, s *Server, h gin.HandlerFunc, target string) *httptest.ResponseRecorder {
 	t.Helper()
 	w := httptest.NewRecorder()

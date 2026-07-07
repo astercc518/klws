@@ -80,3 +80,21 @@ func TestBuildCampaignWhere(t *testing.T) {
 		t.Errorf("text q where=%q args=%v", w, args)
 	}
 }
+
+func TestBuildRecipientWhere(t *testing.T) {
+	if w, args := buildRecipientWhere(recipientFilter{}); w != "" || len(args) != 0 {
+		t.Errorf("empty: where=%q args=%v", w, args)
+	}
+	w, args := buildRecipientWhere(recipientFilter{State: "sent"})
+	if w != " WHERE r.state::text = $1" || len(args) != 1 || args[0] != "sent" {
+		t.Errorf("state where=%q args=%v", w, args)
+	}
+	w, args = buildRecipientWhere(recipientFilter{TenantID: 7, CampaignID: 42})
+	if w != " WHERE r.tenant_id = $1 AND r.campaign_id = $2" || len(args) != 2 || args[0] != int64(7) || args[1] != int64(42) {
+		t.Errorf("tenant+campaign where=%q args=%v", w, args)
+	}
+	w, args = buildRecipientWhere(recipientFilter{Q: "555"})
+	if w != " WHERE r.phone ILIKE $1" || len(args) != 1 || args[0] != "%555%" {
+		t.Errorf("q where=%q args=%v", w, args)
+	}
+}

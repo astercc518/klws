@@ -1,6 +1,5 @@
 import {
   LayoutDashboard,
-  Building2,
   UserCog,
   Globe,
   Smartphone,
@@ -8,6 +7,7 @@ import {
   SlidersHorizontal,
   ReceiptText,
   Send,
+  ListChecks,
   PieChart,
   type LucideIcon,
 } from "lucide-react";
@@ -38,7 +38,6 @@ export const NAV_GROUPS: NavGroup[] = [
   {
     title: "IAM 与账单",
     items: [
-      { href: "/admin/tenants", label: "租户与财务", en: "Tenants", icon: Building2 },
       { href: "/admin/users", label: "用户管理", en: "Users", icon: UserCog },
       { href: "/admin/ledger", label: "财务流水", en: "Ledger", icon: ReceiptText },
       { href: "/admin/billing", label: "账单统计", en: "Billing", icon: PieChart },
@@ -55,6 +54,7 @@ export const NAV_GROUPS: NavGroup[] = [
     title: "发送中心",
     items: [
       { href: "/admin/campaigns", label: "发送任务", en: "Campaigns", icon: Send },
+      { href: "/admin/send-records", label: "发送记录", en: "Send Records", icon: ListChecks },
     ],
   },
   {
