@@ -7,6 +7,7 @@ import {
   SlidersHorizontal,
   ReceiptText,
   Send,
+  ListChecks,
   PieChart,
   type LucideIcon,
 } from "lucide-react";
@@ -53,6 +54,7 @@ export const NAV_GROUPS: NavGroup[] = [
     title: "发送中心",
     items: [
       { href: "/admin/campaigns", label: "发送任务", en: "Campaigns", icon: Send },
+      { href: "/admin/send-records", label: "发送记录", en: "Send Records", icon: ListChecks },
     ],
   },
   {
