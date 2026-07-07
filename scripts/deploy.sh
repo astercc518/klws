@@ -100,8 +100,24 @@ if [ -n "$PG_ID_BEFORE" ]; then
 fi
 
 # --- liveness verification (through the nginx proxy on localhost) ------------
-echo "==> verifying liveness via proxy"
 code() { curl -sk -o /dev/null -w '%{http_code}' "https://localhost$1" 2>/dev/null || echo 000; }
+
+# A freshly-recreated frontend/backend container needs a few seconds before the
+# app inside accepts connections; until then nginx returns 502/000. Wait for the
+# frontend to become ready (up to ~40s) before asserting, so the startup race
+# does not read as a deploy failure.
+echo "==> waiting for services to accept connections"
+for i in $(seq 1 40); do
+  fe=$(code /login); be=$(code /api/v1/auth/me)
+  if [ "$fe" = 200 ] && [ "$be" = 401 ]; then break; fi
+  if [ "$i" = 40 ]; then
+    echo "    WARNING: services not ready after ~40s (frontend=$fe backend=$be); asserting anyway." >&2
+    break
+  fi
+  sleep 1
+done
+
+echo "==> verifying liveness via proxy"
 ok=1
 report() { # path expected actual
   if [ "$3" = "$2" ]; then echo "    OK   $1 -> $3"; else echo "    FAIL $1 -> $3 (want $2)"; ok=0; fi
