@@ -88,6 +88,12 @@ func TestHandleAdminFinanceStats(t *testing.T) {
 	seedLedger(t, ctx, s, tid, "topup", 500, 0, 1200, 0, "2026-07-02T09:00:00+08:00", "s3")
 	// hold nets to zero — must NOT affect totals.
 	seedLedger(t, ctx, s, tid, "hold", -100, 100, 1200, 100, "2026-07-02T09:30:00+08:00", "s4")
+	// reject has a NON-zero net (-999): if the FILTER logic ever broadened
+	// to sum across all kinds instead of enumerating topup/settle/refund/adjust,
+	// this would corrupt a total and fail the assertions below. Unlike the
+	// hold row (which nets to zero and can't distinguish "excluded" from
+	// "included but harmless"), this makes the exclusion load-bearing.
+	seedLedger(t, ctx, s, tid, "reject", -999, 0, 201, 100, "2026-07-02T09:45:00+08:00", "s5")
 
 	w := doGET(t, s, s.handleAdminFinanceStats, "/admin/finance/stats?from=2026-07-01&to=2026-07-02")
 	if w.Code != http.StatusOK {
@@ -99,6 +105,15 @@ func TestHandleAdminFinanceStats(t *testing.T) {
 	}
 	if !contains(body, `"settle":300`) { // stored as -300, reported positive
 		t.Errorf("want settle 300: %s", body)
+	}
+	if !contains(body, `"refund":0`) {
+		t.Errorf("want refund 0 (hold/reject excluded): %s", body)
+	}
+	if !contains(body, `"adjust":0`) {
+		t.Errorf("want adjust 0 (hold/reject excluded): %s", body)
+	}
+	if !contains(body, `"net":1200`) { // 1500 - 300 + 0 + 0
+		t.Errorf("want net 1200 (hold/reject excluded): %s", body)
 	}
 }
 
