@@ -37,6 +37,7 @@ interface User {
 interface Tenant {
   id: number;
   name: string;
+  sales_owner_id: number | null;
 }
 
 const roleVariant: Record<Role, "default" | "secondary" | "outline"> = {
@@ -83,12 +84,45 @@ export function AdminUsersTable() {
   const tenantName = (id: number | null) =>
     id == null ? "—" : (tenants.find((t) => t.id === id)?.name ?? `#${id}`);
 
+  const [roleTab, setRoleTab] = useState<"" | Role>("");
+
+  // tenants owned per sales user id (client-side join for the 名下客户 column).
+  const ownedCount = new Map<number, number>();
+  for (const t of tenants) {
+    if (t.sales_owner_id != null) {
+      ownedCount.set(t.sales_owner_id, (ownedCount.get(t.sales_owner_id) ?? 0) + 1);
+    }
+  }
+
+  const ROLE_TABS: { key: "" | Role; label: string }[] = [
+    { key: "", label: "全部" },
+    { key: "admin", label: "管理员" },
+    { key: "sales", label: "销售" },
+    { key: "customer", label: "客户" },
+  ];
+
   if (error) return <Card className="p-5 text-sm text-muted-foreground">加载失败:{error}</Card>;
   if (!users) return <div className="h-64 animate-pulse rounded-xl bg-muted motion-reduce:animate-none" />;
 
+  const shown = roleTab ? users.filter((u) => u.role === roleTab) : users;
+
   return (
     <div className="space-y-4">
-      <div className="flex justify-end">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <div className="inline-flex flex-wrap rounded-lg border bg-muted/40 p-0.5">
+          {ROLE_TABS.map((t) => (
+            <button
+              key={t.key || "all"}
+              onClick={() => setRoleTab(t.key)}
+              className={
+                "rounded-md px-3 py-1.5 text-sm font-medium transition-colors " +
+                (roleTab === t.key ? "bg-background text-foreground shadow-sm" : "text-muted-foreground hover:text-foreground")
+              }
+            >
+              {t.label}
+            </button>
+          ))}
+        </div>
         <CreateUserDialog tenants={tenants} onDone={load} />
       </div>
 
@@ -98,19 +132,23 @@ export function AdminUsersTable() {
             <TableRow className="bg-muted/40">
               <TableHead>账号</TableHead>
               <TableHead>角色</TableHead>
-              <TableHead>租户</TableHead>
+              <TableHead>租户 / 名下客户</TableHead>
               <TableHead>状态</TableHead>
               <TableHead className="w-12" />
             </TableRow>
           </TableHeader>
           <TableBody>
-            {users.map((u) => (
+            {shown.map((u) => (
               <TableRow key={u.id}>
                 <TableCell className="font-mono text-sm">{u.email}</TableCell>
                 <TableCell>
                   <Badge variant={roleVariant[u.role]}>{u.role}</Badge>
                 </TableCell>
-                <TableCell className="text-sm text-muted-foreground">{tenantName(u.tenant_id)}</TableCell>
+                <TableCell className="text-sm text-muted-foreground">
+                  {u.role === "sales"
+                    ? `名下 ${ownedCount.get(u.id) ?? 0} 个租户`
+                    : tenantName(u.tenant_id)}
+                </TableCell>
                 <TableCell>
                   {u.disabled ? (
                     <Badge variant="destructive">已禁用</Badge>
