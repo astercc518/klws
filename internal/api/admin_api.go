@@ -1306,30 +1306,51 @@ ON CONFLICT (id) DO UPDATE SET
 // ---------------------------------------------------------------------------
 
 type adminCampaignRow struct {
-	ID        int64  `json:"id"`
-	TenantID  int64  `json:"tenant_id"`
-	State     string `json:"state"`
-	Total     int    `json:"total"`
-	Sent      int    `json:"sent"`
-	Failed    int    `json:"failed"`
-	CreatedAt string `json:"created_at"`
+	ID         int64   `json:"id"`
+	TenantID   int64   `json:"tenant_id"`
+	TenantName *string `json:"tenant_name"`
+	State      string  `json:"state"`
+	Total      int     `json:"total"`
+	Sent       int     `json:"sent"`
+	Failed     int     `json:"failed"`
+	CreatedAt  string  `json:"created_at"`
 	// AutoTripped is true when the campaign is currently paused because the
 	// risk circuit breaker tripped it (a circuit_break audit newer than any
 	// later resume), as opposed to a manual operator stop.
 	AutoTripped bool `json:"auto_tripped"`
 }
 
+func parseCampaignFilter(c *gin.Context) campaignFilter {
+	f := campaignFilter{Q: c.Query("q"), State: c.Query("state")}
+	if n, err := strconv.Atoi(c.Query("limit")); err == nil {
+		f.Limit = n
+	}
+	if n, err := strconv.Atoi(c.Query("offset")); err == nil && n > 0 {
+		f.Offset = n
+	}
+	return f
+}
+
 // handleAdminListCampaigns: GET /api/v1/admin/campaigns (all tenants).
 func (s *Server) handleAdminListCampaigns(c *gin.Context) {
-	rows, err := s.deps.Mgr.SystemPool().Query(c.Request.Context(), `
-SELECT c.id, c.tenant_id, c.state::text, c.total, c.sent, c.failed, c.created_at::text,
+	ctx := c.Request.Context()
+	pool := s.systemPool()
+	f := parseCampaignFilter(c)
+	where, args := buildCampaignWhere(f)
+
+	listArgs := append(append([]any{}, args...), clampPage(f.Limit, 20, 200), f.Offset)
+	list := `
+SELECT c.id, c.tenant_id, t.name, c.state::text, c.total, c.sent, c.failed, c.created_at::text,
        (c.state = 'paused' AND
         COALESCE((SELECT max(occurred_at) FROM audit_log a
                    WHERE a.action='campaign.circuit_break' AND a.resource_id=c.id), 'epoch') >
         COALESCE((SELECT max(occurred_at) FROM audit_log a
                    WHERE a.action='campaign.resume' AND a.resource_id=c.id), 'epoch')
        ) AS auto_tripped
-  FROM campaigns c ORDER BY c.id DESC LIMIT 200`)
+  FROM campaigns c
+  LEFT JOIN tenants t ON t.id = c.tenant_id` + where +
+		fmt.Sprintf(" ORDER BY c.id DESC LIMIT $%d OFFSET $%d", len(args)+1, len(args)+2)
+	rows, err := pool.Query(ctx, list, listArgs...)
 	if err != nil {
 		fail(c, http.StatusInternalServerError, "list campaigns")
 		return
@@ -1338,13 +1359,42 @@ SELECT c.id, c.tenant_id, c.state::text, c.total, c.sent, c.failed, c.created_at
 	out := make([]adminCampaignRow, 0)
 	for rows.Next() {
 		var cp adminCampaignRow
-		if err := rows.Scan(&cp.ID, &cp.TenantID, &cp.State, &cp.Total, &cp.Sent, &cp.Failed, &cp.CreatedAt, &cp.AutoTripped); err != nil {
+		if err := rows.Scan(&cp.ID, &cp.TenantID, &cp.TenantName, &cp.State, &cp.Total, &cp.Sent, &cp.Failed, &cp.CreatedAt, &cp.AutoTripped); err != nil {
 			fail(c, http.StatusInternalServerError, "scan campaign")
 			return
 		}
 		out = append(out, cp)
 	}
-	ok(c, out)
+	if err := rows.Err(); err != nil {
+		fail(c, http.StatusInternalServerError, "iterate campaigns")
+		return
+	}
+
+	var total int64
+	if err := pool.QueryRow(ctx, `SELECT count(*) FROM campaigns c LEFT JOIN tenants t ON t.id = c.tenant_id`+where, args...).Scan(&total); err != nil {
+		fail(c, http.StatusInternalServerError, "count campaigns")
+		return
+	}
+
+	var st struct {
+		Running int64 `json:"running"`
+		Paused  int64 `json:"paused"`
+		Tripped int64 `json:"tripped"`
+		Total   int64 `json:"total"`
+	}
+	if err := pool.QueryRow(ctx, `
+SELECT count(*) FILTER (WHERE state='running'),
+       count(*) FILTER (WHERE state='paused'),
+       count(*) FILTER (WHERE state='paused' AND
+         COALESCE((SELECT max(occurred_at) FROM audit_log a WHERE a.action='campaign.circuit_break' AND a.resource_id=campaigns.id),'epoch') >
+         COALESCE((SELECT max(occurred_at) FROM audit_log a WHERE a.action='campaign.resume' AND a.resource_id=campaigns.id),'epoch')),
+       count(*)
+  FROM campaigns`).Scan(&st.Running, &st.Paused, &st.Tripped, &st.Total); err != nil {
+		fail(c, http.StatusInternalServerError, "campaign stats")
+		return
+	}
+
+	ok(c, gin.H{"rows": out, "total": total, "stats": st})
 }
 
 // handleAdminStopCampaign: POST /api/v1/admin/campaigns/:id/stop. Force-pauses a

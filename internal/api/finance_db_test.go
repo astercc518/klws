@@ -170,6 +170,45 @@ func TestHandleAdminFinanceBillExport(t *testing.T) {
 	}
 }
 
+// seedCampaign inserts a template + campaign and returns the campaign id.
+func seedCampaign(t *testing.T, ctx context.Context, s *Server, tenantID int64, state string, total, sent, failed int) int64 {
+	t.Helper()
+	var tplID int64
+	if err := s.systemPool().QueryRow(ctx,
+		`INSERT INTO campaign_templates (tenant_id, kind, body) VALUES ($1,'text','hi') RETURNING id`, tenantID).Scan(&tplID); err != nil {
+		t.Fatalf("seed template: %v", err)
+	}
+	var id int64
+	if err := s.systemPool().QueryRow(ctx,
+		`INSERT INTO campaigns (tenant_id, template_id, state, total, sent, failed)
+		 VALUES ($1,$2,$3::campaign_state_t,$4,$5,$6) RETURNING id`,
+		tenantID, tplID, state, total, sent, failed).Scan(&id); err != nil {
+		t.Fatalf("seed campaign: %v", err)
+	}
+	return id
+}
+
+func TestHandleAdminListCampaignsFiltered(t *testing.T) {
+	s, ctx := newFinanceServer(t)
+	tid, _ := seedTenantUser(t, ctx, s, "camp@acme.test")
+	seedCampaign(t, ctx, s, tid, "running", 100, 50, 2)
+	seedCampaign(t, ctx, s, tid, "paused", 80, 80, 0)
+	seedCampaign(t, ctx, s, tid, "completed", 10, 10, 0)
+
+	// filter state=running → 1 row, but stats counts are global
+	w := doGET(t, s, s.handleAdminListCampaigns, "/admin/campaigns?state=running")
+	if w.Code != http.StatusOK {
+		t.Fatalf("status %d body %s", w.Code, w.Body.String())
+	}
+	body := w.Body.String()
+	if !contains(body, `"total":1`) {
+		t.Errorf("want filtered total 1: %s", body)
+	}
+	if !contains(body, `"running":1`) || !contains(body, `"paused":1`) {
+		t.Errorf("want global stats running=1 paused=1: %s", body)
+	}
+}
+
 func doGET(t *testing.T, s *Server, h gin.HandlerFunc, target string) *httptest.ResponseRecorder {
 	t.Helper()
 	w := httptest.NewRecorder()

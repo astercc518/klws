@@ -60,3 +60,23 @@ func TestParseBillRange(t *testing.T) {
 		t.Errorf("default range err: %v", err)
 	}
 }
+
+func TestBuildCampaignWhere(t *testing.T) {
+	if w, _ := buildCampaignWhere(campaignFilter{}); w != "" {
+		t.Errorf("empty where = %q", w)
+	}
+	w, args := buildCampaignWhere(campaignFilter{State: "running"})
+	if w != " WHERE c.state::text = $1" || len(args) != 1 || args[0] != "running" {
+		t.Errorf("state where=%q args=%v", w, args)
+	}
+	// numeric q matches id or tenant_id
+	w, args = buildCampaignWhere(campaignFilter{Q: "42"})
+	if w != " WHERE (c.id = $1 OR c.tenant_id = $1)" || args[0] != int64(42) {
+		t.Errorf("numeric q where=%q args=%v", w, args)
+	}
+	// text q matches tenant name
+	w, args = buildCampaignWhere(campaignFilter{Q: "acme"})
+	if w != " WHERE t.name ILIKE $1" || args[0] != "%acme%" {
+		t.Errorf("text q where=%q args=%v", w, args)
+	}
+}

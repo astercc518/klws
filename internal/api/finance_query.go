@@ -2,6 +2,7 @@ package api
 
 import (
 	"fmt"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -94,4 +95,35 @@ func parseBillRange(fromStr, toStr string) (billRange, error) {
 		return billRange{}, fmt.Errorf("range too large (max 366 days)")
 	}
 	return billRange{From: from, To: to}, nil
+}
+
+// campaignFilter is the parsed query for the admin campaign list.
+type campaignFilter struct {
+	Q      string
+	State  string
+	Limit  int
+	Offset int
+}
+
+// buildCampaignWhere returns the clause for campaigns "c" joined to tenants "t".
+func buildCampaignWhere(f campaignFilter) (string, []any) {
+	var conds []string
+	var args []any
+	if f.State != "" {
+		args = append(args, f.State)
+		conds = append(conds, fmt.Sprintf("c.state::text = $%d", len(args)))
+	}
+	if f.Q != "" {
+		if id, err := strconv.ParseInt(f.Q, 10, 64); err == nil {
+			args = append(args, id)
+			conds = append(conds, fmt.Sprintf("(c.id = $%d OR c.tenant_id = $%d)", len(args), len(args)))
+		} else {
+			args = append(args, "%"+f.Q+"%")
+			conds = append(conds, fmt.Sprintf("t.name ILIKE $%d", len(args)))
+		}
+	}
+	if len(conds) == 0 {
+		return "", args
+	}
+	return " WHERE " + strings.Join(conds, " AND "), args
 }
