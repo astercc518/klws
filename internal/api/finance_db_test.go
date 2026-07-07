@@ -115,6 +115,61 @@ func TestFinanceStatsTimezoneBucketing(t *testing.T) {
 	}
 }
 
+func TestHandleAdminFinanceBill(t *testing.T) {
+	s, ctx := newFinanceServer(t)
+	tid, _ := seedTenantUser(t, ctx, s, "bill@acme.test")
+	// Before window: a topup establishing opening balance 1000.
+	seedLedger(t, ctx, s, tid, "topup", 1000, 0, 1000, 0, "2026-06-15T10:00:00+08:00", "b0")
+	// In window: +500 topup, -200 settle → closing 1300.
+	seedLedger(t, ctx, s, tid, "topup", 500, 0, 1500, 0, "2026-07-02T10:00:00+08:00", "b1")
+	seedLedger(t, ctx, s, tid, "settle", -200, 0, 1300, 0, "2026-07-03T10:00:00+08:00", "b2")
+
+	w := doGET(t, s, s.handleAdminFinanceBill,
+		"/admin/finance/bill?tenant_id="+itoa(tid)+"&from=2026-07-01&to=2026-07-31")
+	if w.Code != http.StatusOK {
+		t.Fatalf("status %d body %s", w.Code, w.Body.String())
+	}
+	body := w.Body.String()
+	if !contains(body, `"opening":1000`) {
+		t.Errorf("want opening 1000: %s", body)
+	}
+	if !contains(body, `"closing":1300`) {
+		t.Errorf("want closing 1300: %s", body)
+	}
+	// reconciliation: opening + topup - settle == closing (1000 + 500 - 200)
+	if !contains(body, `"topup":500`) || !contains(body, `"settle":200`) {
+		t.Errorf("summary wrong: %s", body)
+	}
+}
+
+func TestHandleAdminFinanceBillMissingTenant(t *testing.T) {
+	s, _ := newFinanceServer(t)
+	w := doGET(t, s, s.handleAdminFinanceBill, "/admin/finance/bill?from=2026-07-01&to=2026-07-31")
+	if w.Code != http.StatusBadRequest {
+		t.Errorf("missing tenant_id want 400, got %d", w.Code)
+	}
+}
+
+func TestHandleAdminFinanceBillExport(t *testing.T) {
+	s, ctx := newFinanceServer(t)
+	tid, _ := seedTenantUser(t, ctx, s, "billexp@acme.test")
+	seedLedger(t, ctx, s, tid, "topup", 500, 0, 500, 0, "2026-07-02T10:00:00+08:00", "be1")
+
+	w := doGET(t, s, s.handleAdminFinanceBillExport,
+		"/admin/finance/bill/export?tenant_id="+itoa(tid)+"&from=2026-07-01&to=2026-07-31")
+	if w.Code != http.StatusOK {
+		t.Fatalf("status %d", w.Code)
+	}
+	if ct := w.Header().Get("Content-Type"); ct != "text/csv; charset=utf-8" {
+		t.Errorf("content-type %q", ct)
+	}
+	var n int
+	s.systemPool().QueryRow(ctx, `SELECT count(*) FROM audit_log WHERE action='finance.bill_export'`).Scan(&n)
+	if n != 1 {
+		t.Errorf("want 1 bill_export audit, got %d", n)
+	}
+}
+
 func doGET(t *testing.T, s *Server, h gin.HandlerFunc, target string) *httptest.ResponseRecorder {
 	t.Helper()
 	w := httptest.NewRecorder()
