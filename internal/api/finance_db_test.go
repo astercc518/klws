@@ -307,6 +307,53 @@ func TestHandleAdminCommissions(t *testing.T) {
 	}
 }
 
+func TestHandleAdminUpdateCommissionRate(t *testing.T) {
+	s, ctx := newFinanceServer(t)
+	tid, _ := seedTenantUser(t, ctx, s, "cr-tenant@acme.test")
+
+	// tenant: valid commission_rate → 200, persisted.
+	w := doJSON(t, s, s.handleAdminUpdateTenant, http.MethodPut, "/admin/tenants/x", itoa(tid),
+		`{"name":"Acme","commission_rate":0.2}`)
+	if w.Code != http.StatusOK {
+		t.Fatalf("tenant update status %d body %s", w.Code, w.Body.String())
+	}
+	var tenantRate float64
+	if err := s.systemPool().QueryRow(ctx, `SELECT commission_rate FROM tenants WHERE id=$1`, tid).Scan(&tenantRate); err != nil {
+		t.Fatalf("read tenant commission_rate: %v", err)
+	}
+	if tenantRate != 0.2 {
+		t.Errorf("tenant commission_rate not updated: got %v want 0.2", tenantRate)
+	}
+
+	// tenant: out-of-range commission_rate → 400, no partial update.
+	w = doJSON(t, s, s.handleAdminUpdateTenant, http.MethodPut, "/admin/tenants/x", itoa(tid),
+		`{"name":"Acme","commission_rate":1.5}`)
+	if w.Code != http.StatusBadRequest {
+		t.Errorf("out-of-range tenant rate want 400, got %d body %s", w.Code, w.Body.String())
+	}
+
+	// sales user: valid commission_rate → 200, persisted. Also exercises the
+	// SP6 relaxed email binding — "s1" is a bare username, not an email.
+	var salesID int64
+	if err := s.systemPool().QueryRow(ctx,
+		`INSERT INTO console_users (email,password_hash,role) VALUES ('s1-orig','x','sales') RETURNING id`,
+	).Scan(&salesID); err != nil {
+		t.Fatalf("seed sales user: %v", err)
+	}
+	w = doJSON(t, s, s.handleAdminUpdateUser, http.MethodPut, "/admin/users/x", itoa(salesID),
+		`{"email":"s1","role":"sales","commission_rate":0.1}`)
+	if w.Code != http.StatusOK {
+		t.Fatalf("user update status %d body %s", w.Code, w.Body.String())
+	}
+	var userRate float64
+	if err := s.systemPool().QueryRow(ctx, `SELECT commission_rate FROM console_users WHERE id=$1`, salesID).Scan(&userRate); err != nil {
+		t.Fatalf("read user commission_rate: %v", err)
+	}
+	if userRate != 0.1 {
+		t.Errorf("user commission_rate not updated: got %v want 0.1", userRate)
+	}
+}
+
 func doGET(t *testing.T, s *Server, h gin.HandlerFunc, target string) *httptest.ResponseRecorder {
 	t.Helper()
 	w := httptest.NewRecorder()

@@ -94,12 +94,13 @@ func (s *Server) handleAdminStats(c *gin.Context) {
 // ---------------------------------------------------------------------------
 
 type adminTenantRow struct {
-	ID           int64  `json:"id"`
-	Name         string `json:"name"`
-	Status       string `json:"status"`
-	SalesOwnerID *int64 `json:"sales_owner_id"`
-	Balance      int64  `json:"balance"`
-	Frozen       int64  `json:"frozen"`
+	ID             int64    `json:"id"`
+	Name           string   `json:"name"`
+	Status         string   `json:"status"`
+	SalesOwnerID   *int64   `json:"sales_owner_id"`
+	Balance        int64    `json:"balance"`
+	Frozen         int64    `json:"frozen"`
+	CommissionRate *float64 `json:"commission_rate"`
 }
 
 // handleAdminListTenants: GET /api/v1/admin/tenants (with wallet balances).
@@ -107,7 +108,7 @@ func (s *Server) handleAdminListTenants(c *gin.Context) {
 	ctx := c.Request.Context()
 	rows, err := s.deps.Mgr.SystemPool().Query(ctx, `
 SELECT t.id, t.name, t.status, t.sales_owner_id,
-       COALESCE(w.balance,0), COALESCE(w.frozen,0)
+       COALESCE(w.balance,0), COALESCE(w.frozen,0), t.commission_rate
   FROM tenants t
   LEFT JOIN tenant_wallets w ON w.tenant_id = t.id
  ORDER BY t.id`)
@@ -119,7 +120,7 @@ SELECT t.id, t.name, t.status, t.sales_owner_id,
 	out := make([]adminTenantRow, 0)
 	for rows.Next() {
 		var t adminTenantRow
-		if err := rows.Scan(&t.ID, &t.Name, &t.Status, &t.SalesOwnerID, &t.Balance, &t.Frozen); err != nil {
+		if err := rows.Scan(&t.ID, &t.Name, &t.Status, &t.SalesOwnerID, &t.Balance, &t.Frozen, &t.CommissionRate); err != nil {
 			fail(c, http.StatusInternalServerError, "scan tenant")
 			return
 		}
@@ -150,7 +151,7 @@ func (s *Server) handleAdminCreateTenant(c *gin.Context) {
 	ok(c, gin.H{"id": id, "name": req.Name, "status": "active"})
 }
 
-// handleAdminUpdateTenant: PUT /api/v1/admin/tenants/:id {name}.
+// handleAdminUpdateTenant: PUT /api/v1/admin/tenants/:id {name, commission_rate?}.
 func (s *Server) handleAdminUpdateTenant(c *gin.Context) {
 	id, err := strconv.ParseInt(c.Param("id"), 10, 64)
 	if err != nil || id <= 0 {
@@ -158,14 +159,27 @@ func (s *Server) handleAdminUpdateTenant(c *gin.Context) {
 		return
 	}
 	var req struct {
-		Name string `json:"name" binding:"required"`
+		Name           string   `json:"name" binding:"required"`
+		CommissionRate *float64 `json:"commission_rate"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
 		fail(c, http.StatusBadRequest, "name is required")
 		return
 	}
-	tag, err := s.systemPool().Exec(c.Request.Context(),
-		`UPDATE tenants SET name=$1, updated_at=now() WHERE id=$2`, req.Name, id)
+	if req.CommissionRate != nil && (*req.CommissionRate < 0 || *req.CommissionRate > 1) {
+		fail(c, http.StatusBadRequest, "commission_rate must be between 0 and 1")
+		return
+	}
+
+	var tag pgconn.CommandTag
+	if req.CommissionRate != nil {
+		tag, err = s.systemPool().Exec(c.Request.Context(),
+			`UPDATE tenants SET name=$1, commission_rate=$2, updated_at=now() WHERE id=$3`,
+			req.Name, *req.CommissionRate, id)
+	} else {
+		tag, err = s.systemPool().Exec(c.Request.Context(),
+			`UPDATE tenants SET name=$1, updated_at=now() WHERE id=$2`, req.Name, id)
+	}
 	if err != nil {
 		fail(c, http.StatusInternalServerError, "update tenant failed")
 		return
@@ -174,9 +188,13 @@ func (s *Server) handleAdminUpdateTenant(c *gin.Context) {
 		fail(c, http.StatusNotFound, "tenant not found")
 		return
 	}
+	details := map[string]any{"name": req.Name}
+	if req.CommissionRate != nil {
+		details["commission_rate"] = *req.CommissionRate
+	}
 	s.recordAudit(c.Request.Context(), auditEvent{TenantID: id, ActorID: actorID(c),
 		Action: "tenant.update", ResourceType: "tenant", ResourceID: id,
-		Details: map[string]any{"name": req.Name}})
+		Details: details})
 	ok(c, gin.H{"id": id, "name": req.Name})
 }
 
@@ -211,17 +229,18 @@ func (s *Server) handleAdminSetTenantStatus(c *gin.Context) {
 }
 
 type adminUserRow struct {
-	ID       int64  `json:"id"`
-	Email    string `json:"email"`
-	Role     string `json:"role"`
-	TenantID *int64 `json:"tenant_id"`
-	Disabled bool   `json:"disabled"`
+	ID             int64    `json:"id"`
+	Email          string   `json:"email"`
+	Role           string   `json:"role"`
+	TenantID       *int64   `json:"tenant_id"`
+	Disabled       bool     `json:"disabled"`
+	CommissionRate *float64 `json:"commission_rate"`
 }
 
 // handleAdminListUsers: GET /api/v1/admin/users.
 func (s *Server) handleAdminListUsers(c *gin.Context) {
 	rows, err := s.deps.Mgr.SystemPool().Query(c.Request.Context(),
-		`SELECT id, email, role, tenant_id, disabled FROM console_users ORDER BY id`)
+		`SELECT id, email, role, tenant_id, disabled, commission_rate FROM console_users ORDER BY id`)
 	if err != nil {
 		fail(c, http.StatusInternalServerError, "list users")
 		return
@@ -230,7 +249,7 @@ func (s *Server) handleAdminListUsers(c *gin.Context) {
 	out := make([]adminUserRow, 0)
 	for rows.Next() {
 		var u adminUserRow
-		if err := rows.Scan(&u.ID, &u.Email, &u.Role, &u.TenantID, &u.Disabled); err != nil {
+		if err := rows.Scan(&u.ID, &u.Email, &u.Role, &u.TenantID, &u.Disabled, &u.CommissionRate); err != nil {
 			fail(c, http.StatusInternalServerError, "scan user")
 			return
 		}
@@ -288,7 +307,7 @@ func isUniqueViolation(err error) bool {
 	return errors.As(err, &pgErr) && pgErr.Code == "23505"
 }
 
-// handleAdminUpdateUser: PUT /api/v1/admin/users/:id {email, role, tenant_id?}.
+// handleAdminUpdateUser: PUT /api/v1/admin/users/:id {email, role, tenant_id?, commission_rate?}.
 // Same role/tenant rule as create: customer needs a tenant; admin/sales none.
 func (s *Server) handleAdminUpdateUser(c *gin.Context) {
 	id, err := strconv.ParseInt(c.Param("id"), 10, 64)
@@ -297,9 +316,10 @@ func (s *Server) handleAdminUpdateUser(c *gin.Context) {
 		return
 	}
 	var req struct {
-		Email    string `json:"email" binding:"required"`
-		Role     string `json:"role" binding:"required"`
-		TenantID *int64 `json:"tenant_id"`
+		Email          string   `json:"email" binding:"required"`
+		Role           string   `json:"role" binding:"required"`
+		TenantID       *int64   `json:"tenant_id"`
+		CommissionRate *float64 `json:"commission_rate"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
 		fail(c, http.StatusBadRequest, "invalid body (email, role required)")
@@ -317,9 +337,21 @@ func (s *Server) handleAdminUpdateUser(c *gin.Context) {
 		fail(c, http.StatusBadRequest, "role must be admin, sales, or customer")
 		return
 	}
-	tag, err := s.systemPool().Exec(c.Request.Context(),
-		`UPDATE console_users SET email=$1, role=$2, tenant_id=$3, updated_at=now() WHERE id=$4`,
-		req.Email, req.Role, req.TenantID, id)
+	if req.CommissionRate != nil && (*req.CommissionRate < 0 || *req.CommissionRate > 1) {
+		fail(c, http.StatusBadRequest, "commission_rate must be between 0 and 1")
+		return
+	}
+
+	var tag pgconn.CommandTag
+	if req.CommissionRate != nil {
+		tag, err = s.systemPool().Exec(c.Request.Context(),
+			`UPDATE console_users SET email=$1, role=$2, tenant_id=$3, commission_rate=$4, updated_at=now() WHERE id=$5`,
+			req.Email, req.Role, req.TenantID, *req.CommissionRate, id)
+	} else {
+		tag, err = s.systemPool().Exec(c.Request.Context(),
+			`UPDATE console_users SET email=$1, role=$2, tenant_id=$3, updated_at=now() WHERE id=$4`,
+			req.Email, req.Role, req.TenantID, id)
+	}
 	if err != nil {
 		if isUniqueViolation(err) {
 			fail(c, http.StatusConflict, "email already exists")
@@ -332,9 +364,13 @@ func (s *Server) handleAdminUpdateUser(c *gin.Context) {
 		fail(c, http.StatusNotFound, "user not found")
 		return
 	}
+	details := map[string]any{"email": req.Email, "role": req.Role, "tenant_id": req.TenantID}
+	if req.CommissionRate != nil {
+		details["commission_rate"] = *req.CommissionRate
+	}
 	s.recordAudit(c.Request.Context(), auditEvent{ActorID: actorID(c),
 		Action: "user.update", ResourceType: "user", ResourceID: id,
-		Details: map[string]any{"email": req.Email, "role": req.Role, "tenant_id": req.TenantID}})
+		Details: details})
 	ok(c, gin.H{"id": id, "email": req.Email, "role": req.Role, "tenant_id": req.TenantID})
 }
 
