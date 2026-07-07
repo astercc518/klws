@@ -1,13 +1,13 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
-import { Ban, Play, ShieldAlert } from "lucide-react";
+import { Ban, Play, ShieldAlert, Radio, Pause, Zap, ListChecks } from "lucide-react";
 import { toast } from "sonner";
 import { api, ApiError } from "@/lib/api";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
-import { Card } from "@/components/ui/card";
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import { ProDataTable, type Column } from "@/components/admin/pro-data-table";
+import { StatCard, MetricCardGroup } from "@/components/admin/stat-card";
 import { CampaignDetailSheet } from "@/components/campaign-detail-sheet";
 import {
   Dialog,
@@ -22,12 +22,19 @@ import {
 interface Campaign {
   id: number;
   tenant_id: number;
+  tenant_name: string | null;
   state: "draft" | "running" | "paused" | "completed" | "failed";
   total: number;
   sent: number;
   failed: number;
   created_at: string;
   auto_tripped: boolean;
+}
+interface CampaignStats {
+  running: number;
+  paused: number;
+  tripped: number;
+  total: number;
 }
 
 const stateVariant: Record<Campaign["state"], "default" | "secondary" | "outline" | "destructive"> = {
@@ -38,23 +45,52 @@ const stateVariant: Record<Campaign["state"], "default" | "secondary" | "outline
   failed: "destructive",
 };
 const nf = new Intl.NumberFormat("en-US");
+const PAGE_SIZE = 10;
+
+const STATE_TABS: { key: string; label: string }[] = [
+  { key: "", label: "全部" },
+  { key: "running", label: "运行中" },
+  { key: "paused", label: "已暂停" },
+  { key: "completed", label: "已完成" },
+  { key: "failed", label: "失败" },
+];
 
 export function AdminCampaigns() {
   const [rows, setRows] = useState<Campaign[] | null>(null);
+  const [total, setTotal] = useState(0);
+  const [stats, setStats] = useState<CampaignStats | null>(null);
+  const [page, setPage] = useState(0);
+  const [query, setQuery] = useState("");
+  const [state, setState] = useState("");
   const [error, setError] = useState<string | null>(null);
+  const [loading, setLoading] = useState(false);
   const [killTarget, setKillTarget] = useState<Campaign | null>(null);
   const [busy, setBusy] = useState(false);
+  const [resumingId, setResumingId] = useState<number | null>(null);
   const [detailId, setDetailId] = useState<number | null>(null);
 
   const load = useCallback(async () => {
+    setLoading(true);
+    const params = new URLSearchParams({ limit: String(PAGE_SIZE), offset: String(page * PAGE_SIZE) });
+    if (query.trim()) params.set("q", query.trim());
+    if (state) params.set("state", state);
     try {
-      setRows(await api.get<Campaign[]>("/admin/campaigns"));
+      const d = await api.get<{ rows: Campaign[]; total: number; stats: CampaignStats }>(
+        `/admin/campaigns?${params.toString()}`,
+      );
+      setRows(d.rows);
+      setTotal(d.total);
+      setStats(d.stats);
+      setError(null);
     } catch (e) {
       if (!(e instanceof ApiError && e.status === 401)) {
         setError(e instanceof ApiError ? e.message : "加载失败");
       }
+    } finally {
+      setLoading(false);
     }
-  }, []);
+  }, [page, query, state]);
+
   useEffect(() => {
     load();
   }, [load]);
@@ -74,7 +110,6 @@ export function AdminCampaigns() {
     }
   }
 
-  const [resumingId, setResumingId] = useState<number | null>(null);
   async function resume(c: Campaign) {
     setResumingId(c.id);
     try {
@@ -88,98 +123,106 @@ export function AdminCampaigns() {
     }
   }
 
-  if (error) return <Card className="p-5 text-sm text-muted-foreground">加载失败:{error}</Card>;
-  if (!rows) return <div className="h-64 animate-pulse rounded-xl bg-muted motion-reduce:animate-none" />;
+  const tenantLabel = (c: Campaign) => c.tenant_name ?? `#${c.tenant_id}`;
+
+  const columns: Column<Campaign>[] = [
+    { key: "id", header: "任务", cell: (c) => <span className="font-mono text-sm">#{c.id}</span> },
+    { key: "tenant", header: "租户", cell: (c) => <span className="text-sm text-muted-foreground">{tenantLabel(c)}</span> },
+    {
+      key: "state",
+      header: "状态",
+      cell: (c) => (
+        <div className="flex items-center gap-1.5">
+          <Badge variant={stateVariant[c.state]}>{c.state}</Badge>
+          {c.auto_tripped && (
+            <Badge variant="destructive" className="gap-1" title="风控熔断器因封号率超阈值自动挂起了此任务">
+              <ShieldAlert className="size-3" />
+              自动熔断
+            </Badge>
+          )}
+        </div>
+      ),
+    },
+    { key: "total", header: "总数", align: "right", cell: (c) => <span className="font-mono tabular-nums text-sm">{nf.format(c.total)}</span> },
+    { key: "sent", header: "已发", align: "right", cell: (c) => <span className="font-mono tabular-nums text-sm">{nf.format(c.sent)}</span> },
+    { key: "failed", header: "失败", align: "right", cell: (c) => <span className="font-mono tabular-nums text-sm text-muted-foreground">{nf.format(c.failed)}</span> },
+  ];
 
   return (
-    <>
-      <Card className="overflow-hidden p-0">
-        <Table>
-          <TableHeader>
-            <TableRow className="bg-muted/40">
-              <TableHead>任务</TableHead>
-              <TableHead>租户</TableHead>
-              <TableHead>状态</TableHead>
-              <TableHead className="text-right">总数</TableHead>
-              <TableHead className="text-right">已发</TableHead>
-              <TableHead className="text-right">失败</TableHead>
-              <TableHead className="text-right">操作</TableHead>
-            </TableRow>
-          </TableHeader>
-          <TableBody>
-            {rows.length === 0 ? (
-              <TableRow>
-                <TableCell colSpan={7} className="py-10 text-center text-sm text-muted-foreground">
-                  当前没有任务。
-                </TableCell>
-              </TableRow>
-            ) : (
-              rows.map((c) => (
-                <TableRow
-                  key={c.id}
-                  className="cursor-pointer"
-                  onClick={() => setDetailId(c.id)}
-                >
-                  <TableCell className="font-mono text-sm">#{c.id}</TableCell>
-                  <TableCell className="font-mono text-xs text-muted-foreground">#{c.tenant_id}</TableCell>
-                  <TableCell>
-                    <div className="flex items-center gap-1.5">
-                      <Badge variant={stateVariant[c.state]}>{c.state}</Badge>
-                      {c.auto_tripped && (
-                        <Badge
-                          variant="destructive"
-                          className="gap-1"
-                          title="风控熔断器因封号率超阈值自动挂起了此任务"
-                        >
-                          <ShieldAlert className="size-3" />
-                          自动熔断
-                        </Badge>
-                      )}
-                    </div>
-                  </TableCell>
-                  <TableCell className="text-right font-mono tabular-nums text-sm">{nf.format(c.total)}</TableCell>
-                  <TableCell className="text-right font-mono tabular-nums text-sm">{nf.format(c.sent)}</TableCell>
-                  <TableCell className="text-right font-mono tabular-nums text-sm text-muted-foreground">
-                    {nf.format(c.failed)}
-                  </TableCell>
-                  <TableCell className="text-right" onClick={(e) => e.stopPropagation()}>
-                    {c.state === "paused" ? (
-                      <Button
-                        variant="ghost"
-                        size="sm"
-                        className="gap-1.5"
-                        disabled={resumingId === c.id}
-                        onClick={() => resume(c)}
-                      >
-                        <Play className="size-3.5" />
-                        {resumingId === c.id ? "恢复中…" : "恢复"}
-                      </Button>
-                    ) : (
-                      <Button
-                        variant="ghost"
-                        size="sm"
-                        className="gap-1.5 text-destructive hover:text-destructive"
-                        disabled={c.state !== "running"}
-                        onClick={() => setKillTarget(c)}
-                      >
-                        <Ban className="size-3.5" />
-                        强制终止
-                      </Button>
-                    )}
-                  </TableCell>
-                </TableRow>
-              ))
-            )}
-          </TableBody>
-        </Table>
-      </Card>
+    <div className="space-y-6">
+      {stats && (
+        <MetricCardGroup>
+          <StatCard accent="brand" label="任务总数" value={String(stats.total)} sub="全平台" icon={ListChecks} />
+          <StatCard accent="emerald" label="运行中" value={String(stats.running)} sub="正在发送" icon={Radio} />
+          <StatCard accent="amber" label="已暂停" value={String(stats.paused)} sub="含手动/熔断" icon={Pause} />
+          <StatCard accent="rose" label="熔断挂起" value={String(stats.tripped)} sub="风控自动触发" icon={Zap} />
+        </MetricCardGroup>
+      )}
+
+      <div className="inline-flex flex-wrap rounded-lg border bg-muted/40 p-0.5">
+        {STATE_TABS.map((t) => (
+          <button
+            key={t.key || "all"}
+            onClick={() => {
+              setState(t.key);
+              setPage(0);
+            }}
+            className={
+              "rounded-md px-3 py-1.5 text-sm font-medium transition-colors " +
+              (state === t.key ? "bg-background text-foreground shadow-sm" : "text-muted-foreground hover:text-foreground")
+            }
+          >
+            {t.label}
+          </button>
+        ))}
+      </div>
+
+      <ProDataTable
+        data={rows}
+        error={error}
+        columns={columns}
+        getRowKey={(c) => c.id}
+        onRowClick={(c) => setDetailId(c.id)}
+        emptyState="当前没有任务。"
+        server={{
+          total,
+          page,
+          pageSize: PAGE_SIZE,
+          onPageChange: setPage,
+          query,
+          onQueryChange: (q) => {
+            setQuery(q);
+            setPage(0);
+          },
+          loading,
+        }}
+        rowActions={(c) =>
+          c.state === "paused" ? (
+            <Button variant="ghost" size="sm" className="gap-1.5" disabled={resumingId === c.id} onClick={() => resume(c)}>
+              <Play className="size-3.5" />
+              {resumingId === c.id ? "恢复中…" : "恢复"}
+            </Button>
+          ) : (
+            <Button
+              variant="ghost"
+              size="sm"
+              className="gap-1.5 text-destructive hover:text-destructive"
+              disabled={c.state !== "running"}
+              onClick={() => setKillTarget(c)}
+            >
+              <Ban className="size-3.5" />
+              强制终止
+            </Button>
+          )
+        }
+      />
 
       <Dialog open={killTarget != null} onOpenChange={(o) => !o && setKillTarget(null)}>
         <DialogContent className="sm:max-w-md">
           <DialogHeader>
             <DialogTitle>强制终止任务</DialogTitle>
             <DialogDescription>
-              将任务 <span className="font-mono">#{killTarget?.id}</span>(租户 #{killTarget?.tenant_id})置为 paused,
+              将任务 <span className="font-mono">#{killTarget?.id}</span>(租户 {killTarget ? tenantLabel(killTarget) : ""})置为 paused,
               调度器会立即停止继续发送。此操作不可在界面撤销。
             </DialogDescription>
           </DialogHeader>
@@ -192,11 +235,7 @@ export function AdminCampaigns() {
         </DialogContent>
       </Dialog>
 
-      <CampaignDetailSheet
-        campaignId={detailId}
-        apiBase="/admin/campaigns"
-        onClose={() => setDetailId(null)}
-      />
-    </>
+      <CampaignDetailSheet campaignId={detailId} apiBase="/admin/campaigns" onClose={() => setDetailId(null)} />
+    </div>
   );
 }
