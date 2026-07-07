@@ -424,13 +424,15 @@ func (s *Server) handleAdminSetPricing(c *gin.Context) {
 }
 
 type ledgerRow struct {
-	ID           int64  `json:"id"`
-	TenantID     int64  `json:"tenant_id"`
-	Kind         string `json:"kind"`
-	DeltaBalance int64  `json:"delta_balance"`
-	DeltaFrozen  int64  `json:"delta_frozen"`
-	BalanceAfter int64  `json:"balance_after"`
-	CreatedAt    string `json:"created_at"`
+	ID           int64   `json:"id"`
+	TenantID     int64   `json:"tenant_id"`
+	TenantName   *string `json:"tenant_name"`
+	Kind         string  `json:"kind"`
+	DeltaBalance int64   `json:"delta_balance"`
+	DeltaFrozen  int64   `json:"delta_frozen"`
+	BalanceAfter int64   `json:"balance_after"`
+	FrozenAfter  int64   `json:"frozen_after"`
+	CreatedAt    string  `json:"created_at"`
 }
 
 type refundRow struct {
@@ -442,14 +444,21 @@ type refundRow struct {
 }
 
 // handleAdminLedger: GET /api/v1/admin/finance/ledger — platform-wide money
-// trail + recent refund requests (audit).
+// trail (paginated + filterable by kind/tenant/date) + recent refund requests.
 func (s *Server) handleAdminLedger(c *gin.Context) {
 	ctx := c.Request.Context()
-	pool := s.deps.Mgr.SystemPool()
+	pool := s.systemPool()
+	f := parseLedgerFilter(c)
+	where, args := buildLedgerWhere(f)
 
-	lrows, err := pool.Query(ctx, `
-SELECT id, tenant_id, kind, delta_balance, delta_frozen, balance_after, created_at::text
-  FROM wallet_ledger ORDER BY id DESC LIMIT 200`)
+	listArgs := append(append([]any{}, args...), clampPage(f.Limit, 50, 500), f.Offset)
+	list := `
+SELECT l.id, l.tenant_id, t.name, l.kind::text, l.delta_balance, l.delta_frozen,
+       l.balance_after, l.frozen_after, l.created_at::text
+  FROM wallet_ledger l
+  LEFT JOIN tenants t ON t.id = l.tenant_id` + where +
+		fmt.Sprintf(" ORDER BY l.id DESC LIMIT $%d OFFSET $%d", len(args)+1, len(args)+2)
+	lrows, err := pool.Query(ctx, list, listArgs...)
 	if err != nil {
 		fail(c, http.StatusInternalServerError, "ledger query")
 		return
@@ -458,11 +467,22 @@ SELECT id, tenant_id, kind, delta_balance, delta_frozen, balance_after, created_
 	ledger := make([]ledgerRow, 0)
 	for lrows.Next() {
 		var l ledgerRow
-		if err := lrows.Scan(&l.ID, &l.TenantID, &l.Kind, &l.DeltaBalance, &l.DeltaFrozen, &l.BalanceAfter, &l.CreatedAt); err != nil {
+		if err := lrows.Scan(&l.ID, &l.TenantID, &l.TenantName, &l.Kind, &l.DeltaBalance,
+			&l.DeltaFrozen, &l.BalanceAfter, &l.FrozenAfter, &l.CreatedAt); err != nil {
 			fail(c, http.StatusInternalServerError, "scan ledger")
 			return
 		}
 		ledger = append(ledger, l)
+	}
+	if err := lrows.Err(); err != nil {
+		fail(c, http.StatusInternalServerError, "iterate ledger")
+		return
+	}
+
+	var total int64
+	if err := pool.QueryRow(ctx, `SELECT count(*) FROM wallet_ledger l`+where, args...).Scan(&total); err != nil {
+		fail(c, http.StatusInternalServerError, "count ledger")
+		return
 	}
 
 	rrows, err := pool.Query(ctx, `
@@ -483,7 +503,7 @@ SELECT id, tenant_id, amount, reason, state::text
 		refunds = append(refunds, r)
 	}
 
-	ok(c, gin.H{"ledger": ledger, "refunds": refunds})
+	ok(c, gin.H{"rows": ledger, "total": total, "refunds": refunds})
 }
 
 // ---------------------------------------------------------------------------
@@ -721,6 +741,30 @@ func parseDeviceFilter(c *gin.Context) deviceFilter {
 	} else if v == "false" {
 		b := false
 		f.Online = &b
+	}
+	if n, err := strconv.Atoi(c.Query("limit")); err == nil {
+		f.Limit = n
+	}
+	if n, err := strconv.Atoi(c.Query("offset")); err == nil && n > 0 {
+		f.Offset = n
+	}
+	return f
+}
+
+func parseLedgerFilter(c *gin.Context) ledgerFilter {
+	f := ledgerFilter{Kind: c.Query("kind")}
+	if n, err := strconv.ParseInt(c.Query("tenant_id"), 10, 64); err == nil && n > 0 {
+		f.TenantID = n
+	}
+	if v := c.Query("from"); v != "" {
+		if d, err := time.ParseInLocation("2006-01-02", v, cnLoc); err == nil {
+			f.From = d
+		}
+	}
+	if v := c.Query("to"); v != "" {
+		if d, err := time.ParseInLocation("2006-01-02", v, cnLoc); err == nil {
+			f.To = d.AddDate(0, 0, 1) // inclusive day → exclusive bound
+		}
 	}
 	if n, err := strconv.Atoi(c.Query("limit")); err == nil {
 		f.Limit = n
