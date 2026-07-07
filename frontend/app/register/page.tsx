@@ -9,11 +9,9 @@ import { Input } from "@/components/ui/input";
 import { AuthShell } from "@/components/auth/auth-shell";
 import { Turnstile } from "@/components/auth/turnstile";
 
-const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-
 function emailError(v: string): string | undefined {
-  if (!v.trim()) return "请输入邮箱";
-  if (!EMAIL_RE.test(v.trim())) return "邮箱格式不正确";
+  if (!v.trim()) return "请输入账号";
+  if (v.trim().length < 3) return "账号至少 3 位";
   return undefined;
 }
 function passwordError(v: string): string | undefined {
@@ -73,18 +71,18 @@ export default function RegisterPage() {
       <form onSubmit={handleSubmit} noValidate className="mt-7 space-y-4">
         <div>
           <label htmlFor="email" className="text-sm font-medium">
-            邮箱
+            账号
           </label>
           <Input
             id="email"
-            type="email"
+            type="text"
             value={email}
             onChange={(e) => {
               const v = e.target.value;
               setEmail(v);
               if (attempted) setErrors((p) => ({ ...p, email: emailError(v) }));
             }}
-            placeholder="you@company.com"
+            placeholder="用户名或邮箱"
             autoComplete="email"
             aria-invalid={!!errors.email}
             aria-describedby="email-error"

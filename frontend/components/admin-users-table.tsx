@@ -96,7 +96,6 @@ export function AdminUsersTable() {
 
   const ROLE_TABS: { key: "" | Role; label: string }[] = [
     { key: "", label: "全部" },
-    { key: "admin", label: "管理员" },
     { key: "sales", label: "销售" },
     { key: "customer", label: "客户" },
   ];
@@ -104,7 +103,8 @@ export function AdminUsersTable() {
   if (error) return <Card className="p-5 text-sm text-muted-foreground">加载失败:{error}</Card>;
   if (!users) return <div className="h-64 animate-pulse rounded-xl bg-muted motion-reduce:animate-none" />;
 
-  const shown = roleTab ? users.filter((u) => u.role === roleTab) : users;
+  const visible = users.filter((u) => u.role !== "admin");
+  const shown = roleTab ? visible.filter((u) => u.role === roleTab) : visible;
 
   return (
     <div className="space-y-4">
@@ -210,7 +210,7 @@ function CreateUserDialog({ tenants, onDone }: { tenants: Tenant[]; onDone: () =
 
   const needsTenant = role === "customer";
   const valid =
-    /\S+@\S+\.\S+/.test(email) &&
+    email.trim().length >= 3 &&
     password.length >= 8 &&
     (!needsTenant || tenantId !== "") &&
     !busy;
@@ -251,13 +251,13 @@ function CreateUserDialog({ tenants, onDone }: { tenants: Tenant[]; onDone: () =
         </DialogHeader>
         <div className="space-y-4 py-1">
           <div className="space-y-2">
-            <label htmlFor="nu-email" className="text-sm font-medium">邮箱</label>
+            <label htmlFor="nu-email" className="text-sm font-medium">账号</label>
             <Input
               id="nu-email"
-              type="email"
+              type="text"
               value={email}
               onChange={(e) => setEmail(e.target.value)}
-              placeholder="user@example.com"
+              placeholder="用户名或邮箱"
               className="font-mono"
             />
           </div>
@@ -349,7 +349,7 @@ function EditUserDialog({
 
   const needsTenant = role === "customer";
   const valid =
-    /\S+@\S+\.\S+/.test(email) &&
+    email.trim().length >= 3 &&
     (!needsTenant || tenantId !== "") &&
     !busy;
 
@@ -377,17 +377,17 @@ function EditUserDialog({
       <DialogContent className="sm:max-w-md">
         <DialogHeader>
           <DialogTitle>编辑用户</DialogTitle>
-          <DialogDescription>修改邮箱、角色或绑定租户。客户须绑定一个租户。</DialogDescription>
+          <DialogDescription>修改账号、角色或绑定租户。客户须绑定一个租户。</DialogDescription>
         </DialogHeader>
         <div className="space-y-4 py-1">
           <div className="space-y-2">
-            <label htmlFor="eu-email" className="text-sm font-medium">邮箱</label>
+            <label htmlFor="eu-email" className="text-sm font-medium">账号</label>
             <Input
               id="eu-email"
-              type="email"
+              type="text"
               value={email}
               onChange={(e) => setEmail(e.target.value)}
-              placeholder="user@example.com"
+              placeholder="用户名或邮箱"
               className="font-mono"
             />
           </div>
