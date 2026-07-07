@@ -79,6 +79,42 @@ func TestHandleAdminLedgerExport(t *testing.T) {
 	}
 }
 
+func TestHandleAdminFinanceStats(t *testing.T) {
+	s, ctx := newFinanceServer(t)
+	tid, _ := seedTenantUser(t, ctx, s, "stat@acme.test")
+	// Two topups (1500 total), one settle (300 spend).
+	seedLedger(t, ctx, s, tid, "topup", 1000, 0, 1000, 0, "2026-07-01T10:00:00+08:00", "s1")
+	seedLedger(t, ctx, s, tid, "settle", -300, 0, 700, 0, "2026-07-01T11:00:00+08:00", "s2")
+	seedLedger(t, ctx, s, tid, "topup", 500, 0, 1200, 0, "2026-07-02T09:00:00+08:00", "s3")
+	// hold nets to zero — must NOT affect totals.
+	seedLedger(t, ctx, s, tid, "hold", -100, 100, 1200, 100, "2026-07-02T09:30:00+08:00", "s4")
+
+	w := doGET(t, s, s.handleAdminFinanceStats, "/admin/finance/stats?from=2026-07-01&to=2026-07-02")
+	if w.Code != http.StatusOK {
+		t.Fatalf("status %d body %s", w.Code, w.Body.String())
+	}
+	body := w.Body.String()
+	if !contains(body, `"topup":1500`) {
+		t.Errorf("want topup 1500: %s", body)
+	}
+	if !contains(body, `"settle":300`) { // stored as -300, reported positive
+		t.Errorf("want settle 300: %s", body)
+	}
+}
+
+func TestFinanceStatsTimezoneBucketing(t *testing.T) {
+	s, ctx := newFinanceServer(t)
+	tid, _ := seedTenantUser(t, ctx, s, "tz@acme.test")
+	// 2026-07-01T23:30:00Z == 2026-07-02T07:30 CN → must bucket to 07-02.
+	seedLedger(t, ctx, s, tid, "topup", 100, 0, 100, 0, "2026-07-01T23:30:00Z", "tz1")
+
+	w := doGET(t, s, s.handleAdminFinanceStats, "/admin/finance/stats?from=2026-07-02&to=2026-07-02")
+	body := w.Body.String()
+	if !contains(body, `"day":"2026-07-02"`) {
+		t.Errorf("row should bucket to CN 07-02: %s", body)
+	}
+}
+
 func doGET(t *testing.T, s *Server, h gin.HandlerFunc, target string) *httptest.ResponseRecorder {
 	t.Helper()
 	w := httptest.NewRecorder()
