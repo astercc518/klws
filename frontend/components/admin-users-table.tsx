@@ -1,9 +1,23 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
-import { MoreHorizontal, Plus, Ban, CircleCheck, KeyRound, Pencil } from "lucide-react";
+import {
+  MoreHorizontal,
+  Plus,
+  Ban,
+  CircleCheck,
+  KeyRound,
+  Pencil,
+  Wallet,
+  Tag,
+  UserCog,
+  Lock,
+  Unlock,
+  LogIn,
+  ScrollText,
+} from "lucide-react";
 import { toast } from "sonner";
-import { api, ApiError } from "@/lib/api";
+import { api, ApiError, impersonate } from "@/lib/api";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
@@ -13,6 +27,7 @@ import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
+  DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import {
@@ -25,6 +40,14 @@ import {
   DialogTitle,
   DialogTrigger,
 } from "@/components/ui/dialog";
+import { CustomerLedgerSheet } from "@/components/customer-ledger-sheet";
+import {
+  TopupDialog,
+  PricingDialog,
+  AssignSalesDialog,
+  type TenantActionTarget,
+  type AssignActionTarget,
+} from "@/components/admin-user-dialogs";
 
 type Role = "admin" | "sales" | "customer";
 interface User {
@@ -38,7 +61,19 @@ interface User {
 interface Tenant {
   id: number;
   name: string;
+  status: string;
   sales_owner_id: number | null;
+  balance: number;
+  frozen: number;
+  commission_rate: number | null;
+}
+interface CommissionRow {
+  sales_id: number;
+  commission: number;
+  tenant_count: number;
+}
+interface CommissionResponse {
+  rows: CommissionRow[];
 }
 
 const roleVariant: Record<Role, "default" | "secondary" | "outline"> = {
@@ -47,21 +82,33 @@ const roleVariant: Record<Role, "default" | "secondary" | "outline"> = {
   customer: "outline",
 };
 
+const usd = (cents: number) =>
+  new Intl.NumberFormat("en-US", { style: "currency", currency: "USD" }).format(cents / 100);
+
 export function AdminUsersTable() {
   const [users, setUsers] = useState<User[] | null>(null);
   const [tenants, setTenants] = useState<Tenant[]>([]);
+  const [commissions, setCommissions] = useState<CommissionRow[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [pwTarget, setPwTarget] = useState<User | null>(null);
   const [editTarget, setEditTarget] = useState<User | null>(null);
+  const [topupTarget, setTopupTarget] = useState<TenantActionTarget | null>(null);
+  const [pricingTarget, setPricingTarget] = useState<TenantActionTarget | null>(null);
+  const [assignTarget, setAssignTarget] = useState<AssignActionTarget | null>(null);
+  const [ledgerTarget, setLedgerTarget] = useState<TenantActionTarget | null>(null);
+  const [statusBusyId, setStatusBusyId] = useState<number | null>(null);
 
   const load = useCallback(async () => {
     try {
-      const [u, t] = await Promise.all([
+      const month = new Date().toISOString().slice(0, 7);
+      const [u, t, c] = await Promise.all([
         api.get<User[]>("/admin/users"),
         api.get<Tenant[]>("/admin/tenants"),
+        api.get<CommissionResponse>(`/admin/commissions?month=${month}`),
       ]);
       setUsers(u);
       setTenants(t);
+      setCommissions(c.rows);
     } catch (e) {
       if (!(e instanceof ApiError && e.status === 401)) {
         setError(e instanceof ApiError ? e.message : "加载失败");
@@ -82,12 +129,44 @@ export function AdminUsersTable() {
     }
   }
 
-  const tenantName = (id: number | null) =>
-    id == null ? "—" : (tenants.find((t) => t.id === id)?.name ?? `#${id}`);
+  async function toggleTenantStatus(u: User, tenant: Tenant | undefined) {
+    if (u.tenant_id == null || !tenant || statusBusyId === u.tenant_id) return;
+    const next = tenant.status === "suspended" ? "active" : "suspended";
+    setStatusBusyId(u.tenant_id);
+    try {
+      await api.post(`/admin/tenants/${u.tenant_id}/status`, { status: next });
+      toast.success(next === "suspended" ? "已挂起" : "已恢复", { description: u.email });
+      load();
+    } catch (e) {
+      toast.error("操作失败", { description: e instanceof ApiError ? e.message : "请重试" });
+    } finally {
+      setStatusBusyId(null);
+    }
+  }
+
+  async function quickLogin(u: User) {
+    try {
+      const r = await impersonate(u.id);
+      window.open(`/impersonate#token=${encodeURIComponent(r.token)}&role=${r.role}`, "_blank");
+    } catch (e) {
+      toast.error("快捷登录失败", { description: e instanceof ApiError ? e.message : "请重试" });
+    }
+  }
 
   const [roleTab, setRoleTab] = useState<"" | Role>("");
 
-  // tenants owned per sales user id (client-side join for the 名下客户 column).
+  // tenant id → tenant (wallet/status/sales-owner/commission), for the
+  // customer columns + tenant-scoped row actions below.
+  const tenantMap = new Map<number, Tenant>(tenants.map((t) => [t.id, t]));
+
+  // sales user id → this month's commission summary, from /admin/commissions.
+  const commissionMap = new Map<number, { commission: number; tenant_count: number }>();
+  for (const r of commissions) {
+    commissionMap.set(r.sales_id, { commission: r.commission, tenant_count: r.tenant_count });
+  }
+
+  // tenants owned per sales user id (client-side join, fallback for the 名下
+  // 租户 column when a sales rep has no commission row yet this month).
   const ownedCount = new Map<number, number>();
   for (const t of tenants) {
     if (t.sales_owner_id != null) {
@@ -106,6 +185,7 @@ export function AdminUsersTable() {
 
   const visible = users.filter((u) => u.role !== "admin");
   const shown = roleTab ? visible.filter((u) => u.role === roleTab) : visible;
+  const salesUsers = users.filter((u) => u.role === "sales");
 
   return (
     <div className="space-y-4">
@@ -133,55 +213,149 @@ export function AdminUsersTable() {
             <TableRow className="bg-muted/40">
               <TableHead>账号</TableHead>
               <TableHead>角色</TableHead>
-              <TableHead>租户 / 名下客户</TableHead>
+              <TableHead>归属 / 规模</TableHead>
+              <TableHead>余额 / 佣金</TableHead>
               <TableHead>状态</TableHead>
               <TableHead className="w-12" />
             </TableRow>
           </TableHeader>
           <TableBody>
-            {shown.map((u) => (
-              <TableRow key={u.id}>
-                <TableCell className="font-mono text-sm">{u.email}</TableCell>
-                <TableCell>
-                  <Badge variant={roleVariant[u.role]}>{u.role}</Badge>
-                </TableCell>
-                <TableCell className="text-sm text-muted-foreground">
-                  {u.role === "sales"
-                    ? `名下 ${ownedCount.get(u.id) ?? 0} 个租户`
-                    : tenantName(u.tenant_id)}
-                </TableCell>
-                <TableCell>
-                  {u.disabled ? (
-                    <Badge variant="destructive">已禁用</Badge>
-                  ) : (
-                    <Badge variant="secondary">启用</Badge>
-                  )}
-                </TableCell>
-                <TableCell>
-                  <DropdownMenu>
-                    <DropdownMenuTrigger
-                      render={<Button variant="ghost" size="icon-sm" aria-label="操作" />}
-                    >
-                      <MoreHorizontal className="size-4" />
-                    </DropdownMenuTrigger>
-                    <DropdownMenuContent align="end">
-                      <DropdownMenuItem onClick={() => setEditTarget(u)}>
-                        <Pencil className="size-4" />
-                        编辑 Edit
-                      </DropdownMenuItem>
-                      <DropdownMenuItem onClick={() => toggleDisabled(u)}>
-                        {u.disabled ? <CircleCheck className="size-4" /> : <Ban className="size-4" />}
-                        {u.disabled ? "启用账号" : "禁用账号"}
-                      </DropdownMenuItem>
-                      <DropdownMenuItem onClick={() => setPwTarget(u)}>
-                        <KeyRound className="size-4" />
-                        重置密码
-                      </DropdownMenuItem>
-                    </DropdownMenuContent>
-                  </DropdownMenu>
-                </TableCell>
-              </TableRow>
-            ))}
+            {shown.map((u) => {
+              const isCustomer = u.role === "customer";
+              const isSales = u.role === "sales";
+              const tenant = u.tenant_id != null ? tenantMap.get(u.tenant_id) : undefined;
+              const commission = commissionMap.get(u.id);
+              const hasTenant = u.tenant_id != null;
+
+              return (
+                <TableRow key={u.id}>
+                  <TableCell className="font-mono text-sm">{u.email}</TableCell>
+                  <TableCell>
+                    <Badge variant={roleVariant[u.role]}>{u.role}</Badge>
+                  </TableCell>
+                  <TableCell className="text-sm text-muted-foreground">
+                    {isSales
+                      ? `名下 ${commission?.tenant_count ?? ownedCount.get(u.id) ?? 0} 租户`
+                      : tenant
+                        ? tenant.name
+                        : hasTenant
+                          ? `#${u.tenant_id}`
+                          : "—"}
+                  </TableCell>
+                  <TableCell className="text-sm">
+                    {isSales
+                      ? `本月佣金 ${usd(commission?.commission ?? 0)}`
+                      : tenant
+                        ? usd(tenant.balance)
+                        : "—"}
+                  </TableCell>
+                  <TableCell>
+                    <div className="flex flex-wrap gap-1">
+                      {u.disabled ? (
+                        <Badge variant="destructive">已禁用</Badge>
+                      ) : (
+                        <Badge variant="secondary">启用</Badge>
+                      )}
+                      {isCustomer && tenant?.status === "suspended" && (
+                        <Badge variant="outline">挂起</Badge>
+                      )}
+                    </div>
+                  </TableCell>
+                  <TableCell>
+                    <DropdownMenu>
+                      <DropdownMenuTrigger
+                        render={<Button variant="ghost" size="icon-sm" aria-label="操作" />}
+                      >
+                        <MoreHorizontal className="size-4" />
+                      </DropdownMenuTrigger>
+                      <DropdownMenuContent align="end">
+                        {isCustomer && (
+                          <>
+                            <DropdownMenuItem
+                              disabled={!hasTenant}
+                              onClick={() =>
+                                u.tenant_id != null &&
+                                setTopupTarget({ tenantId: u.tenant_id, label: u.email })
+                              }
+                            >
+                              <Wallet className="size-4" />
+                              充值 Top-up
+                            </DropdownMenuItem>
+                            <DropdownMenuItem
+                              disabled={!hasTenant}
+                              onClick={() =>
+                                u.tenant_id != null &&
+                                setLedgerTarget({ tenantId: u.tenant_id, label: u.email })
+                              }
+                            >
+                              <ScrollText className="size-4" />
+                              查看流水
+                            </DropdownMenuItem>
+                            <DropdownMenuItem
+                              disabled={!hasTenant}
+                              onClick={() =>
+                                u.tenant_id != null &&
+                                setPricingTarget({ tenantId: u.tenant_id, label: u.email })
+                              }
+                            >
+                              <Tag className="size-4" />
+                              发信定价
+                            </DropdownMenuItem>
+                            <DropdownMenuItem
+                              disabled={!hasTenant}
+                              onClick={() =>
+                                u.tenant_id != null &&
+                                setAssignTarget({
+                                  tenantId: u.tenant_id,
+                                  label: u.email,
+                                  currentSalesId: tenant?.sales_owner_id ?? null,
+                                })
+                              }
+                            >
+                              <UserCog className="size-4" />
+                              指派销售
+                            </DropdownMenuItem>
+                            <DropdownMenuItem
+                              disabled={!hasTenant || statusBusyId === u.tenant_id}
+                              onClick={() => toggleTenantStatus(u, tenant)}
+                            >
+                              {tenant?.status === "suspended" ? (
+                                <>
+                                  <Unlock className="size-4" />
+                                  恢复
+                                </>
+                              ) : (
+                                <>
+                                  <Lock className="size-4" />
+                                  挂起
+                                </>
+                              )}
+                            </DropdownMenuItem>
+                            <DropdownMenuSeparator />
+                          </>
+                        )}
+                        <DropdownMenuItem onClick={() => quickLogin(u)}>
+                          <LogIn className="size-4" />
+                          快捷登录
+                        </DropdownMenuItem>
+                        <DropdownMenuItem onClick={() => setEditTarget(u)}>
+                          <Pencil className="size-4" />
+                          编辑 Edit
+                        </DropdownMenuItem>
+                        <DropdownMenuItem onClick={() => toggleDisabled(u)}>
+                          {u.disabled ? <CircleCheck className="size-4" /> : <Ban className="size-4" />}
+                          {u.disabled ? "启用账号" : "禁用账号"}
+                        </DropdownMenuItem>
+                        <DropdownMenuItem onClick={() => setPwTarget(u)}>
+                          <KeyRound className="size-4" />
+                          重置密码
+                        </DropdownMenuItem>
+                      </DropdownMenuContent>
+                    </DropdownMenu>
+                  </TableCell>
+                </TableRow>
+              );
+            })}
           </TableBody>
         </Table>
       </Card>
@@ -192,6 +366,19 @@ export function AdminUsersTable() {
         tenants={tenants}
         onClose={() => setEditTarget(null)}
         onDone={load}
+      />
+      <TopupDialog target={topupTarget} onClose={() => setTopupTarget(null)} onDone={load} />
+      <PricingDialog target={pricingTarget} onClose={() => setPricingTarget(null)} onDone={load} />
+      <AssignSalesDialog
+        target={assignTarget}
+        salesUsers={salesUsers}
+        onClose={() => setAssignTarget(null)}
+        onDone={load}
+      />
+      <CustomerLedgerSheet
+        tenantId={ledgerTarget?.tenantId ?? null}
+        label={ledgerTarget?.label ?? ""}
+        onClose={() => setLedgerTarget(null)}
       />
     </div>
   );

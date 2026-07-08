@@ -4,7 +4,8 @@
 //   { "code": <int>, "data": <T>, "message": <string> }
 // and authentication is a Bearer token (the HMAC-signed session id returned by
 // POST /api/v1/auth/login). This module:
-//   1. auto-attaches the token from localStorage on every request,
+//   1. auto-attaches the token (sessionStorage, falling back to localStorage)
+//      on every request — see the tab-aware token store below,
 //   2. globally intercepts 401 → clears the token and redirects to /login,
 //   3. unwraps the envelope and returns the typed `data`, throwing ApiError
 //      on any non-success so callers can `try/catch`.
@@ -16,12 +17,18 @@ const TOKEN_KEY = "wadist_token";
 const LOGIN_PATH = "/login";
 
 // ---------------------------------------------------------------------------
-// Token store (localStorage, SSR-safe).
+// Token store (tab-aware, SSR-safe).
+//
+// Reads prefer sessionStorage (per-tab) over localStorage (per-origin, shared
+// across tabs). This lets an admin "login-as" impersonation session live only
+// in the tab that opened it (sessionStorage), without clobbering the admin's
+// own session — which every other tab keeps reading from localStorage.
+// Normal login/register still writes to localStorage via setToken.
 // ---------------------------------------------------------------------------
 
 export function getToken(): string | null {
   if (typeof window === "undefined") return null;
-  return window.localStorage.getItem(TOKEN_KEY);
+  return window.sessionStorage.getItem(TOKEN_KEY) ?? window.localStorage.getItem(TOKEN_KEY);
 }
 
 export function setToken(token: string): void {
@@ -29,9 +36,26 @@ export function setToken(token: string): void {
   window.localStorage.setItem(TOKEN_KEY, token);
 }
 
+/** setImpersonationToken stores a token tab-locally (sessionStorage only), so
+ *  it never overwrites the admin's own localStorage session in other tabs. */
+export function setImpersonationToken(token: string): void {
+  if (typeof window === "undefined") return;
+  window.sessionStorage.setItem(TOKEN_KEY, token);
+}
+
 export function clearToken(): void {
   if (typeof window === "undefined") return;
-  window.localStorage.removeItem(TOKEN_KEY);
+  // Clear only the store THIS tab is using. localStorage is origin-shared (not
+  // tab-scoped), so if an impersonation tab (sessionStorage) hit a 401 and we
+  // also cleared localStorage, we would log the admin out of every other tab —
+  // exactly what tab-local impersonation exists to avoid. sessionStorage takes
+  // precedence in getToken(), so an impersonation tab clears only sessionStorage;
+  // a normal tab (no sessionStorage token) clears localStorage.
+  if (window.sessionStorage.getItem(TOKEN_KEY) !== null) {
+    window.sessionStorage.removeItem(TOKEN_KEY);
+  } else {
+    window.localStorage.removeItem(TOKEN_KEY);
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -242,4 +266,18 @@ export async function logout(): Promise<void> {
   } finally {
     clearToken();
   }
+}
+
+export interface ImpersonateResponse {
+  token: string;
+  role: string;
+  tenant_id: number | null;
+}
+
+/** impersonate asks the backend for a full session token for another user
+ *  (admin-only). Callers open this in a new tab and hand the token to
+ *  setImpersonationToken via the /impersonate landing page, so it never
+ *  touches the admin's own localStorage session. */
+export async function impersonate(userId: number): Promise<ImpersonateResponse> {
+  return api.post<ImpersonateResponse>(`/admin/users/${userId}/impersonate`);
 }
