@@ -1749,6 +1749,20 @@ func (s *Server) handleAdminImpersonate(c *gin.Context) {
 		return
 	}
 
+	// SECURITY: audit BEFORE minting so an impersonation can never succeed
+	// unaudited. Unlike the codebase's usual best-effort recordAudit, here the
+	// audit trail IS the safety mechanism, so a failed audit write must block
+	// the login-as. (No writer wired → nothing to guarantee → proceed, as tests
+	// and non-audited deployments do.)
+	if s.deps.Audit != nil {
+		if err := s.deps.Audit.Record(ctx, toAuditEntry(auditEvent{ActorID: actorID(c),
+			Action: "user.impersonate", ResourceType: "console_user", ResourceID: id,
+			Details: gin.H{"role": role}})); err != nil {
+			fail(c, http.StatusInternalServerError, "could not record impersonation audit")
+			return
+		}
+	}
+
 	sid, err := s.deps.Sessions.Create(ctx, console.SessionData{
 		UserID:   id,
 		Role:     console.Role(role),
@@ -1759,10 +1773,6 @@ func (s *Server) handleAdminImpersonate(c *gin.Context) {
 		return
 	}
 	token := console.SignCookie(s.deps.SessionKey, sid)
-
-	s.recordAudit(ctx, auditEvent{ActorID: actorID(c),
-		Action: "user.impersonate", ResourceType: "console_user", ResourceID: id,
-		Details: gin.H{"role": role}})
 	ok(c, gin.H{"token": token, "role": role, "tenant_id": tenantID})
 }
 
