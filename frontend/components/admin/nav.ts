@@ -1,7 +1,6 @@
 import {
   LayoutDashboard,
-  UserCog,
-  Building2,
+  Users,
   Globe,
   Smartphone,
   ScrollText,
@@ -10,7 +9,7 @@ import {
   Send,
   ListChecks,
   PieChart,
-  Coins,
+  Workflow,
   type LucideIcon,
 } from "lucide-react";
 
@@ -35,20 +34,18 @@ export interface NavGroup {
 export const NAV_GROUPS: NavGroup[] = [
   {
     title: "概览",
-    items: [{ href: "/admin", label: "全局大盘", en: "Overview", icon: LayoutDashboard }],
+    items: [{ href: "/admin", label: "运行信息", en: "Overview", icon: LayoutDashboard }],
   },
   {
-    title: "IAM 与账单",
+    title: "客户与财务",
     items: [
-      { href: "/admin/tenants", label: "租户与财务", en: "Tenants", icon: Building2 },
-      { href: "/admin/users", label: "用户管理", en: "Users", icon: UserCog },
+      { href: "/admin/users", label: "客户", en: "Customers", icon: Users },
       { href: "/admin/ledger", label: "财务流水", en: "Ledger", icon: ReceiptText },
       { href: "/admin/billing", label: "账单统计", en: "Billing", icon: PieChart },
-      { href: "/admin/commissions", label: "销售佣金", en: "Commission", icon: Coins },
     ],
   },
   {
-    title: "资源大厅",
+    title: "资源",
     items: [
       { href: "/admin/resources", label: "代理网络池", en: "Proxies", icon: Globe },
       { href: "/admin/devices", label: "节点与设备", en: "Devices", icon: Smartphone },
@@ -70,6 +67,10 @@ export const NAV_GROUPS: NavGroup[] = [
   {
     title: "系统审计",
     items: [{ href: "/admin/audit", label: "风控与审计", en: "Audit", icon: ScrollText }],
+  },
+  {
+    title: "配置流程",
+    items: [{ href: "/admin/setup", label: "配置流程", en: "Setup", icon: Workflow }],
   },
 ];
 
