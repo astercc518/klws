@@ -45,8 +45,17 @@ export function setImpersonationToken(token: string): void {
 
 export function clearToken(): void {
   if (typeof window === "undefined") return;
-  window.sessionStorage.removeItem(TOKEN_KEY);
-  window.localStorage.removeItem(TOKEN_KEY);
+  // Clear only the store THIS tab is using. localStorage is origin-shared (not
+  // tab-scoped), so if an impersonation tab (sessionStorage) hit a 401 and we
+  // also cleared localStorage, we would log the admin out of every other tab —
+  // exactly what tab-local impersonation exists to avoid. sessionStorage takes
+  // precedence in getToken(), so an impersonation tab clears only sessionStorage;
+  // a normal tab (no sessionStorage token) clears localStorage.
+  if (window.sessionStorage.getItem(TOKEN_KEY) !== null) {
+    window.sessionStorage.removeItem(TOKEN_KEY);
+  } else {
+    window.localStorage.removeItem(TOKEN_KEY);
+  }
 }
 
 // ---------------------------------------------------------------------------
