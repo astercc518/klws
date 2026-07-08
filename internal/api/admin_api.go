@@ -10,6 +10,7 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -239,7 +240,7 @@ type adminUserRow struct {
 
 // handleAdminListUsers: GET /api/v1/admin/users.
 func (s *Server) handleAdminListUsers(c *gin.Context) {
-	rows, err := s.deps.Mgr.SystemPool().Query(c.Request.Context(),
+	rows, err := s.systemPool().Query(c.Request.Context(),
 		`SELECT id, email, role, tenant_id, disabled, commission_rate FROM console_users ORDER BY id`)
 	if err != nil {
 		fail(c, http.StatusInternalServerError, "list users")
@@ -253,9 +254,39 @@ func (s *Server) handleAdminListUsers(c *gin.Context) {
 			fail(c, http.StatusInternalServerError, "scan user")
 			return
 		}
+		if s.deps.ProtectedAdmins[u.Email] {
+			continue // hide protected super/bootstrap admins from the console
+		}
 		out = append(out, u)
 	}
 	ok(c, out)
+}
+
+// ParseProtectedAdmins parses a comma-separated WADIST_PROTECTED_ADMINS value
+// (login identifiers — email or username) into a set. Blank entries are ignored.
+func ParseProtectedAdmins(csv string) map[string]bool {
+	m := map[string]bool{}
+	for _, p := range strings.Split(csv, ",") {
+		if p = strings.TrimSpace(p); p != "" {
+			m[p] = true
+		}
+	}
+	return m
+}
+
+// isProtectedAdmin reports whether the user id resolves to a login identifier
+// in the configured protected-admin set. Empty set → always false (no extra
+// query). A missing/unreadable row → false (the caller's own 404 path handles
+// non-existent ids).
+func (s *Server) isProtectedAdmin(ctx context.Context, id int64) bool {
+	if len(s.deps.ProtectedAdmins) == 0 {
+		return false
+	}
+	var email string
+	if err := s.systemPool().QueryRow(ctx, `SELECT email FROM console_users WHERE id=$1`, id).Scan(&email); err != nil {
+		return false
+	}
+	return s.deps.ProtectedAdmins[email]
 }
 
 // handleAdminCreateUser: POST /api/v1/admin/users {email,password,role,tenant_id?}.
@@ -313,6 +344,10 @@ func (s *Server) handleAdminUpdateUser(c *gin.Context) {
 	id, err := strconv.ParseInt(c.Param("id"), 10, 64)
 	if err != nil || id <= 0 {
 		fail(c, http.StatusBadRequest, "invalid user id")
+		return
+	}
+	if s.isProtectedAdmin(c.Request.Context(), id) {
+		fail(c, http.StatusForbidden, "受保护的管理员账号不可修改")
 		return
 	}
 	var req struct {
@@ -1650,6 +1685,10 @@ func (s *Server) handleAdminSetUserDisabled(c *gin.Context) {
 		fail(c, http.StatusBadRequest, "bad user id")
 		return
 	}
+	if s.isProtectedAdmin(c.Request.Context(), id) {
+		fail(c, http.StatusForbidden, "受保护的管理员账号不可修改")
+		return
+	}
 	var req struct {
 		Disabled bool `json:"disabled"`
 	}
@@ -1662,7 +1701,7 @@ func (s *Server) handleAdminSetUserDisabled(c *gin.Context) {
 		fail(c, http.StatusBadRequest, "不能禁用当前登录的管理员账号")
 		return
 	}
-	tag, err := s.deps.Mgr.SystemPool().Exec(c.Request.Context(),
+	tag, err := s.systemPool().Exec(c.Request.Context(),
 		`UPDATE console_users SET disabled=$1, updated_at=now() WHERE id=$2`, req.Disabled, id)
 	if err != nil {
 		fail(c, http.StatusInternalServerError, "update user failed")
@@ -1685,6 +1724,10 @@ func (s *Server) handleAdminResetUserPassword(c *gin.Context) {
 		fail(c, http.StatusBadRequest, "bad user id")
 		return
 	}
+	if s.isProtectedAdmin(c.Request.Context(), id) {
+		fail(c, http.StatusForbidden, "受保护的管理员账号不可修改")
+		return
+	}
 	var req struct {
 		Password string `json:"password" binding:"required,min=8"`
 	}
@@ -1697,7 +1740,7 @@ func (s *Server) handleAdminResetUserPassword(c *gin.Context) {
 		fail(c, http.StatusInternalServerError, "hash password failed")
 		return
 	}
-	tag, err := s.deps.Mgr.SystemPool().Exec(c.Request.Context(),
+	tag, err := s.systemPool().Exec(c.Request.Context(),
 		`UPDATE console_users SET password_hash=$1, updated_at=now() WHERE id=$2`, hash, id)
 	if err != nil {
 		fail(c, http.StatusInternalServerError, "reset password failed")

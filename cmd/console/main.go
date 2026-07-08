@@ -75,16 +75,18 @@ func run(ctx context.Context) (*api.Server, func(), error) {
 	// instances and the store.Manager's RLS machinery; no security logic is
 	// reinvented and no red-line package is touched.
 	srv := api.NewServer(api.Deps{
-		Mgr:        mgr,
-		Billing:    bill,
-		Pricing:    price,
-		Users:      users,
-		Tenants:    tenants,
-		Sessions:   sessions,
-		Audit:      audit.NewAuditWriter(mgr.SystemPool()),
-		SessionKey: webCfg.SessionKey,               // same HMAC key as the old console cookie
-		BlindKey:   baseCfg.BlindIndexKey,           // same blind-index key for recipient dedup
-		CORSOrigin: os.Getenv("WADIST_CORS_ORIGIN"), // empty -> defaults to http://localhost:3000
+		Mgr:      mgr,
+		Billing:  bill,
+		Pricing:  price,
+		Users:    users,
+		Tenants:  tenants,
+		Sessions: sessions,
+		Audit:    audit.NewAuditWriter(mgr.SystemPool()),
+		// Super/bootstrap admins hidden from the console + write-protected (403).
+		ProtectedAdmins: api.ParseProtectedAdmins(os.Getenv("WADIST_PROTECTED_ADMINS")),
+		SessionKey:      webCfg.SessionKey,               // same HMAC key as the old console cookie
+		BlindKey:        baseCfg.BlindIndexKey,           // same blind-index key for recipient dedup
+		CORSOrigin:      os.Getenv("WADIST_CORS_ORIGIN"), // empty -> defaults to http://localhost:3000
 	})
 	if len(baseCfg.BlindIndexKey) == 0 {
 		log.Printf("api: WADIST_BLIND_INDEX_KEY not set — send endpoints will fail-closed (ErrSendNotConfigured)")

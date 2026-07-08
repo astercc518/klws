@@ -35,6 +35,12 @@ type Deps struct {
 	Sessions *console.SessionStore // Redis-backed sessions (shared with console)
 	Audit    *audit.AuditWriter    // append-only audit_log writer (shared with billing)
 
+	// ProtectedAdmins holds console_users.email identifiers (the login field,
+	// email or username) of super/bootstrap admins that must be hidden from
+	// GET /admin/users and rejected (403) by the user write endpoints. Empty =
+	// nothing protected. Configured via WADIST_PROTECTED_ADMINS.
+	ProtectedAdmins map[string]bool
+
 	SessionKey []byte // HMAC key for signing/verifying the session token
 	BlindKey   []byte // HMAC blind-index key (campaign recipient dedup/suppression)
 	CORSOrigin string // allowed browser origin (default http://localhost:3000)
