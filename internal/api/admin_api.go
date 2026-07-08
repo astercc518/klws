@@ -1712,6 +1712,60 @@ func (s *Server) handleAdminResetUserPassword(c *gin.Context) {
 	ok(c, gin.H{"id": id, "password_reset": true})
 }
 
+// handleAdminImpersonate: POST /api/v1/admin/users/:id/impersonate. Mints a
+// live session token for the target sales/customer user so an admin can
+// quick-login-as them for support/debugging. SECURITY: never impersonate
+// another admin account, and every use is audited.
+func (s *Server) handleAdminImpersonate(c *gin.Context) {
+	id, err := strconv.ParseInt(c.Param("id"), 10, 64)
+	if err != nil || id <= 0 {
+		fail(c, http.StatusBadRequest, "bad user id")
+		return
+	}
+	ctx := c.Request.Context()
+
+	var role string
+	var tenantID *int64
+	var disabled bool
+	err = s.systemPool().QueryRow(ctx,
+		`SELECT id, role, tenant_id, disabled FROM console_users WHERE id=$1`, id,
+	).Scan(&id, &role, &tenantID, &disabled)
+	if errors.Is(err, pgx.ErrNoRows) {
+		fail(c, http.StatusNotFound, "user not found")
+		return
+	}
+	if err != nil {
+		fail(c, http.StatusInternalServerError, "lookup user failed")
+		return
+	}
+	if disabled {
+		fail(c, http.StatusBadRequest, "账号已禁用")
+		return
+	}
+	if role == "admin" {
+		// SECURITY: an admin impersonating another admin would let one admin
+		// silently assume another's identity/audit trail — never allowed.
+		fail(c, http.StatusBadRequest, "不能模拟管理员账号")
+		return
+	}
+
+	sid, err := s.deps.Sessions.Create(ctx, console.SessionData{
+		UserID:   id,
+		Role:     console.Role(role),
+		TenantID: tenantID,
+	})
+	if err != nil {
+		fail(c, http.StatusInternalServerError, "could not create session")
+		return
+	}
+	token := console.SignCookie(s.deps.SessionKey, sid)
+
+	s.recordAudit(ctx, auditEvent{ActorID: actorID(c),
+		Action: "user.impersonate", ResourceType: "console_user", ResourceID: id,
+		Details: gin.H{"role": role}})
+	ok(c, gin.H{"token": token, "role": role, "tenant_id": tenantID})
+}
+
 // ---------------------------------------------------------------------------
 // Audit log (read-only)
 

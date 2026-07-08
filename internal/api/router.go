@@ -135,6 +135,7 @@ func (s *Server) Router() *gin.Engine {
 		admin.PUT("/users/:id", s.handleAdminUpdateUser)
 		admin.POST("/users/:id/disable", s.handleAdminSetUserDisabled)
 		admin.POST("/users/:id/password", s.handleAdminResetUserPassword)
+		admin.POST("/users/:id/impersonate", s.handleAdminImpersonate)
 		admin.POST("/sales/:id/assign", s.handleAdminAssignSales)
 
 		admin.POST("/finance/topup", s.handleAdminTopup)
