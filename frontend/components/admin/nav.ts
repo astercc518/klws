@@ -9,7 +9,6 @@ import {
   Send,
   ListChecks,
   PieChart,
-  Workflow,
   type LucideIcon,
 } from "lucide-react";
 
@@ -67,10 +66,6 @@ export const NAV_GROUPS: NavGroup[] = [
   {
     title: "系统审计",
     items: [{ href: "/admin/audit", label: "风控与审计", en: "Audit", icon: ScrollText }],
-  },
-  {
-    title: "配置流程",
-    items: [{ href: "/admin/setup", label: "配置流程", en: "Setup", icon: Workflow }],
   },
 ];
 
