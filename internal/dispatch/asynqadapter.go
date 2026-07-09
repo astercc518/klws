@@ -36,9 +36,6 @@ func (a *AsynqEnqueuer) EnqueueSend(ctx context.Context, p SendPayload, delay ti
 	return nil
 }
 
-// SendBodyResolver loads the template body + media for a campaign (injected at wiring).
-type SendBodyResolver func(ctx context.Context, campaignID int64) (body, mediaSha, mime string, raw []byte, err error)
-
 // RegisterSendHandler wires the asynq mux to ProcessSend. Thin glue; not unit-tested
 // (requires a running asynq server). Exercised via integration/deploy.
 func RegisterSendHandler(mux *asynq.ServeMux, w *SendWorker, resolve SendBodyResolver) {

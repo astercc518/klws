@@ -3,8 +3,13 @@ package store
 
 import (
 	"context"
+	"errors"
 	"time"
 )
+
+// ErrDeviceLocked is returned when an account's device lock is already held
+// by another owner. Returned by the redis ownership backend's Acquire.
+var ErrDeviceLocked = errors.New("store: device owned by another process")
 
 // LockHandle 是一次账号所有权抢占的句柄。它必须满足 cluster.DeviceLockHandle
 // (Healthy/Release)，从而 cluster/node 无需感知底层是 PG 锁还是 Redis 租约。

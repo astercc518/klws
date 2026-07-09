@@ -3,14 +3,11 @@ package store
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"hash/fnv"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 )
-
-var ErrDeviceLocked = errors.New("store: device owned by another process")
 
 // DeviceLock 持有一条专用连接以维持 session 级 advisory lock。
 type DeviceLock struct {

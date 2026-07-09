@@ -199,7 +199,7 @@ func Load() (*Config, error) {
 
 	cfg.DispatchMode = getenv("WADIST_DISPATCH_MODE", "asynq")
 	cfg.PumpBuffer = intEnv("WADIST_PUMP_BUFFER", 512)
-	cfg.SendWorkers = intEnv("WADIST_SEND_WORKERS", cfg.AsynqConcurrency)
+	cfg.SendWorkers = intEnv("WADIST_SEND_WORKERS", 32)
 	cfg.SendRate = floatEnv("WADIST_SEND_RATE", 160.0)
 
 	cfg.RiskGovernor = getenv("WADIST_RISK_GOVERNOR", "off")

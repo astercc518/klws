@@ -97,3 +97,7 @@ func (w *SendWorker) amountFor(ctx context.Context, tenantID int64, country stri
 	}
 	return w.priceFor(ctx, tenantID, country)
 }
+
+// SendBodyResolver resolves a campaign's message body/media at send time.
+// Consumed by both the pump send loop and (legacy) the asynq handler.
+type SendBodyResolver func(ctx context.Context, campaignID int64) (body, mediaSha, mime string, raw []byte, err error)
