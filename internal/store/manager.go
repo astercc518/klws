@@ -8,7 +8,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 	_ "github.com/jackc/pgx/v5/stdlib" // 注册 "pgx" database/sql 驱动
 
@@ -18,19 +17,6 @@ import (
 
 	"github.com/acme/wadist/internal/store/wabadger"
 )
-
-// applyQueryMode sets the pgx exec mode for PgBouncer transaction-pool
-// compatibility. direct mode leaves the pgx default (CacheStatement) untouched.
-func applyQueryMode(poolCfg *pgxpool.Config, poolMode, queryMode string) {
-	if poolMode != "pgbouncer" {
-		return
-	}
-	if queryMode == "simple" {
-		poolCfg.ConnConfig.DefaultQueryExecMode = pgx.QueryExecModeSimpleProtocol
-	} else {
-		poolCfg.ConnConfig.DefaultQueryExecMode = pgx.QueryExecModeExec
-	}
-}
 
 // deviceContainer is the subset of container behaviour Manager needs
 // (wabadger.Container satisfies it via store.DeviceContainer).
@@ -128,7 +114,6 @@ func newManager(ctx context.Context, cfg Config, logger waLog.Logger) (*Manager,
 	poolCfg.MaxConnLifetime = cfg.ConnMaxLifetime
 	poolCfg.MaxConnIdleTime = cfg.ConnMaxIdleTime
 	poolCfg.HealthCheckPeriod = 30 * time.Second
-	applyQueryMode(poolCfg, cfg.PoolMode, cfg.QueryMode)
 
 	bizPool, err := pgxpool.NewWithConfig(ctx, poolCfg)
 	if err != nil {
@@ -148,7 +133,6 @@ func newManager(ctx context.Context, cfg Config, logger waLog.Logger) (*Manager,
 			return nil, fmt.Errorf("parse tenant pool config: %w", err)
 		}
 		tCfg.MaxConns = cfg.MaxOpenConns
-		applyQueryMode(tCfg, cfg.PoolMode, cfg.QueryMode)
 		tenantPool, err = pgxpool.NewWithConfig(ctx, tCfg)
 		if err != nil {
 			bizPool.Close()
@@ -171,7 +155,6 @@ func newManager(ctx context.Context, cfg Config, logger waLog.Logger) (*Manager,
 			return nil, fmt.Errorf("parse system pool config: %w", err)
 		}
 		sCfg.MaxConns = cfg.MaxOpenConns
-		applyQueryMode(sCfg, cfg.PoolMode, cfg.QueryMode)
 		systemPool, err = pgxpool.NewWithConfig(ctx, sCfg)
 		if err != nil {
 			if tenantPool != bizPool {

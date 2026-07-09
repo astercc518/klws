@@ -21,11 +21,6 @@ type Config struct {
 	// AppSystemDSN is the DSN for the app_system role (BYPASSRLS).
 	// Empty → falls back to bizPool.
 	AppSystemDSN string
-	// PoolMode selects the PG connection strategy: "direct" (default) or
-	// "pgbouncer" (transaction-pooled: simple/exec protocol).
-	PoolMode string
-	// QueryMode is the pgx exec mode under pgbouncer: "exec" (default) | "simple".
-	QueryMode string
 	// Redis is the client used by the redis ownership backend. Must be non-nil.
 	Redis *goredis.Client
 	// OwnershipTTL is the Redis heartbeat key TTL for the redis ownership
@@ -62,23 +57,12 @@ func (c *Config) withDefaults() {
 	if c.ProxyCooldown <= 0 {
 		c.ProxyCooldown = 60 * time.Second
 	}
-	if c.PoolMode == "" {
-		c.PoolMode = "direct"
-	}
-	if c.QueryMode == "" {
-		c.QueryMode = "exec"
-	}
 }
 
 // validate enforces cross-field constraints after defaults are applied.
-// pgbouncer transaction pooling caps MaxOpenConns at the PgBouncer
-// client-conn ceiling. (Ownership is unconditionally redis now, so the
-// former OwnershipBackend=="redis" requirement here is moot.)
+// Currently a no-op (the former connection-pooler-specific cap and
+// OwnershipBackend checks are both gone) but kept as a hook: newManager
+// calls it unconditionally.
 func (c *Config) validate() error {
-	if c.PoolMode == "pgbouncer" {
-		if c.MaxOpenConns > 200 {
-			c.MaxOpenConns = 200
-		}
-	}
 	return nil
 }

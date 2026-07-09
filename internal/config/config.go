@@ -92,10 +92,6 @@ type Config struct {
 	GhostTick   time.Duration // WADIST_GHOST_TICK_MS default 5000
 	// BootRamp spreads the post-restart warm burst; 0 disables (default).
 	BootRamp time.Duration // WADIST_BOOT_RAMP_MS default 0
-	// PgPoolMode selects the PG connection strategy: "direct" (default) or "pgbouncer".
-	PgPoolMode string // WADIST_PG_POOL_MODE default "direct"
-	// PgQueryMode is the pgx exec mode under pgbouncer: "exec" (default) | "simple".
-	PgQueryMode string // WADIST_PG_QUERY_MODE default "exec"
 	// Admission backoff (segment-level exponential slowdown on wa_warning).
 	BackoffOn     bool          // WADIST_BACKOFF_ON default "off"
 	BackoffFactor int           // WADIST_BACKOFF_FACTOR default 2
@@ -206,9 +202,6 @@ func Load() (*Config, error) {
 	cfg.GhostTick = msEnv("WADIST_GHOST_TICK_MS", 5000)
 	cfg.BootRamp = msEnvZero("WADIST_BOOT_RAMP_MS")
 
-	cfg.PgPoolMode = getenv("WADIST_PG_POOL_MODE", "direct")
-	cfg.PgQueryMode = getenv("WADIST_PG_QUERY_MODE", "exec")
-
 	cfg.BackoffOn = getenv("WADIST_BACKOFF_ON", "off") != "off"
 	cfg.BackoffFactor = intEnv("WADIST_BACKOFF_FACTOR", 2)
 	cfg.BackoffMax = intEnv("WADIST_BACKOFF_MAX", 8)
@@ -237,8 +230,6 @@ func (c *Config) Store() store.Config {
 		AppSystemDSN:  c.AppSystemDSN,
 		BadgerDir:     os.Getenv("WADIST_BADGER_DIR"),
 		ProxyCooldown: msEnvZero("WADIST_PROXY_COOLDOWN_MS"),
-		PoolMode:      c.PgPoolMode,
-		QueryMode:     c.PgQueryMode,
 		// Redis is injected by cmd/wadist after Store() returns.
 	}
 }

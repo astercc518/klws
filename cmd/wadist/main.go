@@ -145,10 +145,6 @@ func run(ctx context.Context, cfg *config.Config) (*metrics.Server, func(), erro
 	if cfg.BackoffOn {
 		log.Printf("admission backoff on (factor=%d max=%d ttl=%s)", cfg.BackoffFactor, cfg.BackoffMax, cfg.BackoffTTL)
 	}
-	if cfg.PgPoolMode == "pgbouncer" {
-		log.Printf("pg pool mode=pgbouncer query=%s", cfg.PgQueryMode)
-	}
-
 	asynqClient := asynq.NewClient(asynq.RedisClientOpt{Addr: cfg.RedisAddr})
 
 	// Send driver: the in-memory token-bucket Rolling-Wave pump (sole driver).
