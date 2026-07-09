@@ -7,6 +7,48 @@ import (
 	"time"
 )
 
+// TestOwnersFor_And_OwnedJIDs covers the Manager-level batch read/enumerate
+// methods used by the admin console. Setup goes through redisOwnership
+// directly (as the other tests in this file do) rather than
+// Manager.AcquireDeviceLock, because AcquireDeviceLock pins nodeID to
+// m.cfg.NodeID and this test needs two distinct owning nodes. Manager is
+// constructed as a bare struct literal since OwnersFor/OwnedJIDs only touch
+// m.cfg.Redis — no Postgres needed.
+func TestOwnersFor_And_OwnedJIDs(t *testing.T) {
+	if testing.Short() { t.Skip("integration") }
+	ctx := context.Background()
+	rdb := newTestRedis(t)
+	o := newRedisOwnership(rdb)
+
+	if _, err := o.Acquire(ctx, "jid-A", "node-1"); err != nil {
+		t.Fatalf("acquire A: %v", err)
+	}
+	if _, err := o.Acquire(ctx, "jid-B", "node-2"); err != nil {
+		t.Fatalf("acquire B: %v", err)
+	}
+
+	m := &Manager{cfg: Config{Redis: rdb}}
+
+	owners, err := m.OwnersFor(ctx, []string{"jid-A", "jid-B", "jid-missing"})
+	if err != nil {
+		t.Fatalf("OwnersFor: %v", err)
+	}
+	if owners["jid-A"] != "node-1" || owners["jid-B"] != "node-2" {
+		t.Fatalf("owners = %v", owners)
+	}
+	if _, ok := owners["jid-missing"]; ok {
+		t.Fatalf("missing jid should be absent")
+	}
+
+	all, err := m.OwnedJIDs(ctx)
+	if err != nil {
+		t.Fatalf("OwnedJIDs: %v", err)
+	}
+	if len(all) != 2 {
+		t.Fatalf("OwnedJIDs len = %d, want 2", len(all))
+	}
+}
+
 func TestRedisOwnership_ConfigurableTTL(t *testing.T) {
 	if testing.Short() { t.Skip("integration") }
 	rdb := newTestRedis(t) // existing store redis helper (redis_helper_test.go)

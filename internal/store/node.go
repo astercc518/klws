@@ -32,11 +32,13 @@ func (m *Manager) ListActiveAccounts(ctx context.Context) ([]string, error) {
 	return out, rows.Err()
 }
 
-// ClaimAccount sets the owner_node and last_connected_at for an account.
-func (m *Manager) ClaimAccount(ctx context.Context, accountJID, nodeID string) error {
+// ClaimAccount touches last_connected_at for an account. Ownership itself is
+// no longer mirrored to PG — it lives solely in Redis (owner:{jid}, written by
+// the Ownership.Acquire backend via AcquireDeviceLock).
+func (m *Manager) ClaimAccount(ctx context.Context, accountJID string) error {
 	_, err := m.bizPool.Exec(ctx,
-		`UPDATE account_devices SET owner_node=$2, last_connected_at=now() WHERE account_jid=$1`,
-		accountJID, nodeID)
+		`UPDATE account_devices SET last_connected_at=now() WHERE account_jid=$1`,
+		accountJID)
 	if err != nil {
 		return fmt.Errorf("claim account: %w", err)
 	}
@@ -120,7 +122,7 @@ func (m *Manager) StaleOwnedAccounts(ctx context.Context, staleness time.Duratio
 	return m.ownership.StaleOwned(ctx, staleness)
 }
 
-// ListUnownedActiveAccounts returns active accounts with no owner_node set.
+// ListUnownedActiveAccounts returns active accounts with no Redis owner:{jid} claim.
 func (m *Manager) ListUnownedActiveAccounts(ctx context.Context) ([]string, error) {
 	return m.ownership.Unowned(ctx)
 }

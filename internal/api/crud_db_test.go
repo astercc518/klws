@@ -197,7 +197,7 @@ func TestHandleAdminDeleteProxy(t *testing.T) {
 	var pid int64
 	s.systemPool().QueryRow(ctx, `SELECT id FROM proxy_pool WHERE proxy_url='socks5://8.8.8.8:1080'`).Scan(&pid)
 	// a device bound to this proxy → after delete, its proxy_id should be NULL (ON DELETE SET NULL)
-	seedDevice(t, ctx, s, tid, "d-px@wa", "555", "active", "")
+	seedDevice(t, ctx, s, tid, "d-px@wa", "555", "active")
 	s.systemPool().Exec(ctx, `UPDATE account_devices SET proxy_id=$1 WHERE account_jid='d-px@wa'`, pid)
 
 	w := doJSON(t, s, s.handleAdminDeleteProxy, http.MethodDelete, "/admin/resources/proxies/x", itoa(pid), "")
@@ -223,7 +223,7 @@ func TestHandleAdminDeleteProxy(t *testing.T) {
 func TestHandleAdminUpdateDevice(t *testing.T) {
 	s, ctx := newCrudServer(t)
 	tid, _ := seedTenantUser(t, ctx, s, "dv-edit@acme.test")
-	seedDevice(t, ctx, s, tid, "dv1@wa", "111", "active", "")
+	seedDevice(t, ctx, s, tid, "dv1@wa", "111", "active")
 	var did int64
 	s.systemPool().QueryRow(ctx, `SELECT id FROM account_devices WHERE account_jid='dv1@wa'`).Scan(&did)
 
@@ -265,7 +265,7 @@ func TestHandleAdminDeleteDevice_releasesBinding(t *testing.T) {
 	var pid int64
 	s.systemPool().QueryRow(ctx, `SELECT id FROM proxy_pool WHERE proxy_url='socks5://7.7.7.7:1080'`).Scan(&pid)
 	// bind a device to the proxy at bindings=1
-	seedDevice(t, ctx, s, tid, "dv-bound@wa", "333", "active", "")
+	seedDevice(t, ctx, s, tid, "dv-bound@wa", "333", "active")
 	s.systemPool().Exec(ctx, `UPDATE proxy_pool SET current_bindings=1 WHERE id=$1`, pid)
 	s.systemPool().Exec(ctx, `UPDATE account_devices SET proxy_id=$1 WHERE account_jid='dv-bound@wa'`, pid)
 	var did int64

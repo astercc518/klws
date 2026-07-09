@@ -157,10 +157,14 @@ func TestStartAccountWithLock_ClaimsAndRegisters(t *testing.T) {
 	if _, ok := reg.Get("jid-s1"); !ok {
 		t.Fatal("not registered")
 	}
-	var owner string
-	m.BizPool().QueryRow(ctx, `SELECT owner_node FROM account_devices WHERE account_jid='jid-s1'`).Scan(&owner)
-	if owner != "node-1" {
-		t.Fatalf("owner_node=%q", owner)
+	// Ownership truth is Redis-only now (owner:{jid}) — verify via OwnersFor
+	// instead of the (dropped) owner_node PG column.
+	owners, err := m.OwnersFor(ctx, []string{"jid-s1"})
+	if err != nil {
+		t.Fatalf("OwnersFor: %v", err)
+	}
+	if owners["jid-s1"] != "node-1" {
+		t.Fatalf("owner = %v want node-1", owners)
 	}
 	sup.Shutdown()
 }

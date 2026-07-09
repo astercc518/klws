@@ -17,33 +17,45 @@ func TestClampPage(t *testing.T) {
 }
 
 func TestBuildDeviceWhere(t *testing.T) {
+	owned := []string{"a0@wa", "a1@wa"}
 	// empty
-	if w, a := buildDeviceWhere(deviceFilter{}); w != "" || len(a) != 0 {
+	if w, a := buildDeviceWhere(deviceFilter{}, owned); w != "" || len(a) != 0 {
 		t.Errorf("empty: w=%q a=%v", w, a)
 	}
 	// q hits three columns with one param
-	w, a := buildDeviceWhere(deviceFilter{Q: "abc"})
+	w, a := buildDeviceWhere(deviceFilter{Q: "abc"}, owned)
 	if !strings.Contains(w, "account_jid ILIKE $1") || !strings.Contains(w, "phone_number ILIKE $1") || !strings.Contains(w, "array_to_string(tags,' ') ILIKE $1") {
 		t.Errorf("q where = %q", w)
 	}
 	if len(a) != 1 || a[0] != "%abc%" {
 		t.Errorf("q args = %v", a)
 	}
-	// combined: q + ban_status + online=true; online adds no arg
+	// combined: q + ban_status + online=true; online adds the redis-derived jid set as one arg
 	on := true
-	w, a = buildDeviceWhere(deviceFilter{Q: "x", BanStatus: "banned", Online: &on})
-	if !strings.Contains(w, "ban_status::text = $2") || !strings.Contains(w, "owner_node IS NOT NULL") {
+	w, a = buildDeviceWhere(deviceFilter{Q: "x", BanStatus: "banned", Online: &on}, owned)
+	if !strings.Contains(w, "ban_status::text = $2") || !strings.Contains(w, "account_jid = ANY($3)") {
 		t.Errorf("combined where = %q", w)
 	}
-	if len(a) != 2 || a[1] != "banned" {
+	if len(a) != 3 || a[1] != "banned" {
 		t.Errorf("combined args = %v", a)
 	}
-	// online=false → IS NULL
+	jids, ok := a[2].([]string)
+	if !ok || len(jids) != 2 {
+		t.Errorf("combined ownedJIDs arg = %v", a[2])
+	}
+	// online=false → NOT (... = ANY(...))
 	off := false
-	w, _ = buildDeviceWhere(deviceFilter{Online: &off})
-	if !strings.Contains(w, "owner_node IS NULL") {
+	w, a = buildDeviceWhere(deviceFilter{Online: &off}, owned)
+	if !strings.Contains(w, "NOT (account_jid = ANY($1))") {
 		t.Errorf("offline where = %q", w)
 	}
+	// nil ownedJIDs (nothing currently owned) must not become a SQL NULL array —
+	// NULL would make ANY(NULL)/NOT(...) evaluate to NULL and match nothing.
+	w, a = buildDeviceWhere(deviceFilter{Online: &off}, nil)
+	if jids, ok := a[0].([]string); !ok || jids == nil {
+		t.Errorf("nil ownedJIDs must be normalized to non-nil empty slice, got %v", a[0])
+	}
+	_ = w
 }
 
 func TestBuildProxyWhere(t *testing.T) {

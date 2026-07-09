@@ -828,11 +828,14 @@ func (s *Server) handleAdminDeleteProxy(c *gin.Context) {
 }
 
 type deviceRow struct {
-	ID              int64    `json:"id"`
-	TenantID        int64    `json:"tenant_id"`
-	AccountJID      string   `json:"account_jid"`
-	Phone           string   `json:"phone_number"`
-	BanStatus       string   `json:"ban_status"`
+	ID         int64  `json:"id"`
+	TenantID   int64  `json:"tenant_id"`
+	AccountJID string `json:"account_jid"`
+	Phone      string `json:"phone_number"`
+	BanStatus  string `json:"ban_status"`
+	// OwnerNode is NOT a SQL column — it's backfilled post-query from Redis
+	// (Mgr.OwnersFor) since ownership truth lives in owner:{jid} now.
+	// nil means unowned (no live claim in Redis).
 	OwnerNode       *string  `json:"owner_node"`
 	LastConnectedAt *string  `json:"last_connected_at"`
 	Tags            []string `json:"tags"`
@@ -891,14 +894,24 @@ func parseLedgerFilter(c *gin.Context) ledgerFilter {
 }
 
 // handleAdminListDevices: GET /api/v1/admin/resources/devices (cross-tenant).
+// Ownership (online/offline) truth lives in Redis (owner:{jid}) — the SQL
+// query never touches it; instead we snapshot Mgr.OwnedJIDs(ctx) once per
+// request and use it both as the ANY($n) filter set (when ?online= is given)
+// and as the stats "online" count.
 func (s *Server) handleAdminListDevices(c *gin.Context) {
 	ctx := c.Request.Context()
 	f := parseDeviceFilter(c)
-	where, args := buildDeviceWhere(f)
+
+	ownedJIDsAll, err := s.deps.Mgr.OwnedJIDs(ctx)
+	if err != nil {
+		fail(c, http.StatusInternalServerError, "list owned jids")
+		return
+	}
+	where, args := buildDeviceWhere(f, ownedJIDsAll)
 
 	listArgs := append(append([]any{}, args...), clampPage(f.Limit, 20, 200), f.Offset)
 	list := `
-SELECT id, tenant_id, account_jid, phone_number, ban_status::text, owner_node, last_connected_at::text,
+SELECT id, tenant_id, account_jid, phone_number, ban_status::text, last_connected_at::text,
        tags, proxy_id, proxy_url_cache
   FROM account_devices` + where +
 		fmt.Sprintf(" ORDER BY id DESC LIMIT $%d OFFSET $%d", len(args)+1, len(args)+2)
@@ -911,7 +924,7 @@ SELECT id, tenant_id, account_jid, phone_number, ban_status::text, owner_node, l
 	out := make([]deviceRow, 0)
 	for rows.Next() {
 		var d deviceRow
-		if err := rows.Scan(&d.ID, &d.TenantID, &d.AccountJID, &d.Phone, &d.BanStatus, &d.OwnerNode, &d.LastConnectedAt,
+		if err := rows.Scan(&d.ID, &d.TenantID, &d.AccountJID, &d.Phone, &d.BanStatus, &d.LastConnectedAt,
 			&d.Tags, &d.ProxyID, &d.ProxyURL); err != nil {
 			fail(c, http.StatusInternalServerError, "scan device")
 			return
@@ -923,6 +936,22 @@ SELECT id, tenant_id, account_jid, phone_number, ban_status::text, owner_node, l
 		return
 	}
 
+	pageJIDs := make([]string, len(out))
+	for i, d := range out {
+		pageJIDs[i] = d.AccountJID
+	}
+	owners, err := s.deps.Mgr.OwnersFor(ctx, pageJIDs)
+	if err != nil {
+		fail(c, http.StatusInternalServerError, "resolve owners")
+		return
+	}
+	for i := range out {
+		if node, ok := owners[out[i].AccountJID]; ok {
+			n := node
+			out[i].OwnerNode = &n
+		}
+	}
+
 	var total int64
 	if err := s.systemPool().QueryRow(ctx, `SELECT count(*) FROM account_devices`+where, args...).Scan(&total); err != nil {
 		fail(c, http.StatusInternalServerError, "count devices")
@@ -932,14 +961,14 @@ SELECT id, tenant_id, account_jid, phone_number, ban_status::text, owner_node, l
 	var st deviceStats
 	if err := s.systemPool().QueryRow(ctx, `
 SELECT count(*),
-       count(*) FILTER (WHERE owner_node IS NOT NULL),
        count(*) FILTER (WHERE ban_status = 'banned'),
        count(*) FILTER (WHERE ban_status = 'flagged'),
        count(*) FILTER (WHERE ban_status = 'logged_out')
-  FROM account_devices`).Scan(&st.Total, &st.Online, &st.Banned, &st.Flagged, &st.LoggedOut); err != nil {
+  FROM account_devices`).Scan(&st.Total, &st.Banned, &st.Flagged, &st.LoggedOut); err != nil {
 		fail(c, http.StatusInternalServerError, "device stats")
 		return
 	}
+	st.Online = int64(len(ownedJIDsAll))
 
 	ok(c, gin.H{"rows": out, "total": total, "stats": st})
 }

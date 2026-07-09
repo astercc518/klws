@@ -41,7 +41,7 @@ func newPgbouncerTestManager(t *testing.T, queryMode string) (*Manager, context.
 
 // runProtocolSmoke builds a pgbouncer-mode Manager with the given query mode
 // and exercises a representative set of high-risk queries (enum cast via
-// ban_status='active'/'logged_out', parameterized owner_node update) to
+// ban_status='active'/'logged_out', parameterized last_connected_at update) to
 // prove they succeed under the simple/exec protocol — which is what
 // PgBouncer transaction mode requires. Simple protocol works against plain
 // Postgres too, so no real PgBouncer is needed here: if a query has an
@@ -60,8 +60,8 @@ func runProtocolSmoke(t *testing.T, queryMode string) {
 		t.Fatalf("[%s] ListActiveAccounts: %v", queryMode, err)
 	}
 
-	// parameterized UPDATE (owner_node claim).
-	if err := m.ClaimAccount(ctx, "jid-proto", "node-proto"); err != nil {
+	// parameterized UPDATE (last_connected_at claim touch).
+	if err := m.ClaimAccount(ctx, "jid-proto"); err != nil {
 		t.Fatalf("[%s] ClaimAccount: %v", queryMode, err)
 	}
 

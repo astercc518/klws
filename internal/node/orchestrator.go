@@ -71,7 +71,7 @@ func (o *Orchestrator) StartAccountWithLock(ctx context.Context, jid string) (*c
 		return nil, fmt.Errorf("start session %s: %w", jid, err)
 	}
 
-	if err := o.mgr.ClaimAccount(ctx, jid, o.nodeID); err != nil {
+	if err := o.mgr.ClaimAccount(ctx, jid); err != nil {
 		sess.Close(ctx) // disconnects + releases lock
 		return nil, fmt.Errorf("claim %s: %w", jid, err)
 	}

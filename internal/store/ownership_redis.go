@@ -3,6 +3,7 @@ package store
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"time"
 
@@ -143,6 +144,51 @@ func (o *redisOwnership) Unowned(ctx context.Context) ([]string, error) {
 	var out []string
 	for i, c := range cmds {
 		if c.Val() == 0 { out = append(out, all[i]) }
+	}
+	return out, nil
+}
+
+// OwnersFor batch-reads the current redis owner nodeID for each jid.
+// Missing (unowned) jids are absent from the returned map.
+func (m *Manager) OwnersFor(ctx context.Context, jids []string) (map[string]string, error) {
+	out := make(map[string]string, len(jids))
+	if len(jids) == 0 || m.cfg.Redis == nil {
+		return out, nil
+	}
+	keys := make([]string, len(jids))
+	for i, j := range jids {
+		keys[i] = ownerKey(j)
+	}
+	vals, err := m.cfg.Redis.MGet(ctx, keys...).Result()
+	if err != nil {
+		return nil, fmt.Errorf("OwnersFor MGet: %w", err)
+	}
+	for i, v := range vals {
+		s, ok := v.(string)
+		if !ok || s == "" {
+			continue
+		}
+		if idx := strings.IndexByte(s, ':'); idx >= 0 {
+			out[jids[i]] = s[:idx]
+		} else {
+			out[jids[i]] = s
+		}
+	}
+	return out, nil
+}
+
+// OwnedJIDs scans all currently-held owner:{jid} keys.
+func (m *Manager) OwnedJIDs(ctx context.Context) ([]string, error) {
+	if m.cfg.Redis == nil {
+		return nil, nil
+	}
+	var out []string
+	iter := m.cfg.Redis.Scan(ctx, 0, "owner:*", 512).Iterator()
+	for iter.Next(ctx) {
+		out = append(out, strings.TrimPrefix(iter.Val(), "owner:"))
+	}
+	if err := iter.Err(); err != nil {
+		return nil, fmt.Errorf("OwnedJIDs scan: %w", err)
 	}
 	return out, nil
 }

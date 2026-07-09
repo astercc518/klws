@@ -27,8 +27,10 @@ type deviceFilter struct {
 }
 
 // buildDeviceWhere returns the " WHERE ..." clause (or "") and positional args
-// for account_devices (unqualified columns).
-func buildDeviceWhere(f deviceFilter) (string, []any) {
+// for account_devices (unqualified columns). Ownership truth lives in Redis
+// (owner:{jid}) now, not a PG column — ownedJIDs is the caller's current
+// Mgr.OwnedJIDs(ctx) snapshot, only consulted when f.Online is set.
+func buildDeviceWhere(f deviceFilter, ownedJIDs []string) (string, []any) {
 	var conds []string
 	var args []any
 	if f.Q != "" {
@@ -41,10 +43,15 @@ func buildDeviceWhere(f deviceFilter) (string, []any) {
 		conds = append(conds, fmt.Sprintf("ban_status::text = $%d", len(args)))
 	}
 	if f.Online != nil {
+		if ownedJIDs == nil {
+			ownedJIDs = []string{} // nil → SQL NULL, and ANY(NULL)/NOT(NULL) are both NULL (matches nothing); force empty text[] instead
+		}
+		args = append(args, ownedJIDs) // pgx 支持 []string → text[]
+		n := len(args)
 		if *f.Online {
-			conds = append(conds, "owner_node IS NOT NULL")
+			conds = append(conds, fmt.Sprintf("account_jid = ANY($%d)", n))
 		} else {
-			conds = append(conds, "owner_node IS NULL")
+			conds = append(conds, fmt.Sprintf("NOT (account_jid = ANY($%d))", n))
 		}
 	}
 	if len(conds) == 0 {

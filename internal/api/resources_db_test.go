@@ -9,36 +9,70 @@ import (
 	"testing"
 
 	"github.com/gin-gonic/gin"
+	"github.com/jackc/pgx/v5/pgxpool"
+	waLog "go.mau.fi/whatsmeow/util/log"
+
+	"github.com/acme/wadist/internal/store"
 )
 
-// seedDevice inserts one account_devices row.
-func seedDevice(t *testing.T, ctx context.Context, s *Server, tenantID int64, jid, phone, banStatus, ownerNode string) {
+// seedDevice inserts one account_devices row. Ownership ("online"-ness) is no
+// longer a column on this table — it's a Redis claim (owner:{jid}); callers
+// that need a device to show as owned must separately call
+// mgr.AcquireDeviceLock(ctx, jid) against the same Manager wired into the
+// Server under test (see newAdminDeviceServer).
+func seedDevice(t *testing.T, ctx context.Context, s *Server, tenantID int64, jid, phone, banStatus string) {
 	t.Helper()
-	var on any
-	if ownerNode != "" {
-		on = ownerNode
-	}
 	if _, err := s.systemPool().Exec(ctx,
-		`INSERT INTO account_devices (tenant_id, account_jid, phone_number, ban_status, owner_node) VALUES ($1,$2,$3,$4::ban_status_t,$5)`,
-		tenantID, jid, phone, banStatus, on); err != nil {
+		`INSERT INTO account_devices (tenant_id, account_jid, phone_number, ban_status) VALUES ($1,$2,$3,$4::ban_status_t)`,
+		tenantID, jid, phone, banStatus); err != nil {
 		t.Fatalf("seed device: %v", err)
 	}
+}
+
+// newAdminDeviceServer builds a Server whose deps.Mgr is a real store.Manager
+// backed by Postgres + Redis. handleAdminListDevices needs Mgr.OwnedJIDs /
+// Mgr.OwnersFor (ownership truth lives in Redis now) — the lighter
+// &Server{sysPool: testPool(t)} pattern used by other admin tests leaves
+// deps.Mgr nil, which would nil-panic on that call path.
+func newAdminDeviceServer(t *testing.T) (*Server, *store.Manager) {
+	t.Helper()
+	ctx := context.Background()
+	dsn := testDSN(t)
+	pool, err := pgxpool.New(ctx, dsn)
+	if err != nil {
+		t.Fatalf("pool: %v", err)
+	}
+	t.Cleanup(pool.Close)
+	applyAllMigrations(t, ctx, pool)
+
+	rdb := newTestRedis(t)
+	mgr, err := store.NewManager(ctx, store.Config{DSN: dsn, Redis: rdb, NodeID: "admin-test-node"}, waLog.Noop)
+	if err != nil {
+		t.Fatalf("store.NewManager: %v", err)
+	}
+	t.Cleanup(mgr.Close)
+
+	return &Server{sysPool: pool, deps: Deps{Mgr: mgr}}, mgr
 }
 
 func TestHandleAdminListDevices_pagination(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	ctx := context.Background()
-	s := &Server{sysPool: testPool(t)}
+	s, mgr := newAdminDeviceServer(t)
 	tid, _ := seedTenantUser(t, ctx, s, "dev-admin@acme.test")
 
 	// 3 active(online), 2 banned(offline), 1 logged_out(offline)
 	for i := 0; i < 3; i++ {
-		seedDevice(t, ctx, s, tid, fmt.Sprintf("a%d@wa", i), fmt.Sprintf("100%d", i), "active", "node-1")
+		jid := fmt.Sprintf("a%d@wa", i)
+		seedDevice(t, ctx, s, tid, jid, fmt.Sprintf("100%d", i), "active")
+		if _, err := mgr.AcquireDeviceLock(ctx, jid); err != nil {
+			t.Fatalf("claim %s: %v", jid, err)
+		}
 	}
 	for i := 0; i < 2; i++ {
-		seedDevice(t, ctx, s, tid, fmt.Sprintf("b%d@wa", i), fmt.Sprintf("200%d", i), "banned", "")
+		seedDevice(t, ctx, s, tid, fmt.Sprintf("b%d@wa", i), fmt.Sprintf("200%d", i), "banned")
 	}
-	seedDevice(t, ctx, s, tid, "c0@wa", "3000", "logged_out", "")
+	seedDevice(t, ctx, s, tid, "c0@wa", "3000", "logged_out")
 
 	call := func(q string) map[string]any {
 		w := httptest.NewRecorder()

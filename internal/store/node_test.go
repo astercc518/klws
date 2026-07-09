@@ -90,15 +90,17 @@ func TestClaimAccount(t *testing.T) {
 		t.Fatalf("apply migration 0007: %v", err)
 	}
 	seedAccountDevice(t, ctx, m, "jid-c1")
-	if err := m.ClaimAccount(ctx, "jid-c1", "node-x"); err != nil {
+	if err := m.ClaimAccount(ctx, "jid-c1"); err != nil {
 		t.Fatal(err)
 	}
-	var owner string
-	if err := m.bizPool.QueryRow(ctx, `SELECT owner_node FROM account_devices WHERE account_jid='jid-c1'`).Scan(&owner); err != nil {
+	// Ownership itself is Redis-only now (owner:{jid}) — ClaimAccount's only PG
+	// side effect left is touching last_connected_at.
+	var lastConnected *string
+	if err := m.bizPool.QueryRow(ctx, `SELECT last_connected_at::text FROM account_devices WHERE account_jid='jid-c1'`).Scan(&lastConnected); err != nil {
 		t.Fatal(err)
 	}
-	if owner != "node-x" {
-		t.Fatalf("owner_node=%q", owner)
+	if lastConnected == nil {
+		t.Fatal("last_connected_at not set by ClaimAccount")
 	}
 }
 
