@@ -27,3 +27,11 @@ services:
       postgres: { condition: service_healthy }
       redis: { condition: service_healthy }
     # No published ports: this is a worker, not an HTTP service.
+    volumes:
+      # Persistent Badger session store (internal/store/config.go BadgerDir
+      # default) — whatsmeow device sessions live here; without a named
+      # volume a container restart wipes all paired sessions.
+      - wadist_badger:/var/lib/wadist/badger
+
+volumes:
+  wadist_badger:

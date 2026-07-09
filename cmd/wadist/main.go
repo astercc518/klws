@@ -93,6 +93,15 @@ func run(ctx context.Context, cfg *config.Config) (*metrics.Server, func(), erro
 	m := metrics.New(promReg)
 
 	rdb := goredis.NewClient(&goredis.Options{Addr: cfg.RedisAddr})
+	// Redis is now a hard dependency (ownership leases + proxy cooldown are
+	// redis-only); fail fast at boot with a clear message instead of dying
+	// deeper in store.Init or on the first ownership/proxy operation.
+	pingCtx, pingCancel := context.WithTimeout(ctx, 5*time.Second)
+	err = rdb.Ping(pingCtx).Err()
+	pingCancel()
+	if err != nil {
+		log.Fatalf("redis required but unreachable: %v", err)
+	}
 	sc := cfg.Store()
 	sc.Redis = rdb
 	sc.OwnershipTTL = cfg.NodeStaleness
