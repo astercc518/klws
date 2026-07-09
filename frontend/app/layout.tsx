@@ -2,6 +2,8 @@ import type { Metadata } from "next";
 import { Geist, Geist_Mono, Noto_Sans_SC } from "next/font/google";
 import { Toaster } from "@/components/ui/sonner";
 import { ThemeProvider } from "@/components/theme-provider";
+import { LocaleProvider } from "@/components/locale-provider";
+import { getLocale } from "@/lib/server-locale";
 import "./globals.css";
 
 const geistSans = Geist({
@@ -32,14 +34,15 @@ export const metadata: Metadata = {
     "金融级计费、防封号隔离、高到达率 —— 为跨境营销量身打造的 WhatsApp 并发发送引擎。",
 };
 
-export default function RootLayout({
+export default async function RootLayout({
   children,
 }: Readonly<{
   children: React.ReactNode;
 }>) {
+  const locale = await getLocale();
   return (
     <html
-      lang="zh-CN"
+      lang={locale === "zh" ? "zh-CN" : "en"}
       suppressHydrationWarning
       className={`${geistSans.variable} ${geistMono.variable} ${notoSansSC.variable} h-full antialiased`}
     >
@@ -50,8 +53,10 @@ export default function RootLayout({
           enableSystem
           disableTransitionOnChange
         >
-          {children}
-          <Toaster />
+          <LocaleProvider locale={locale}>
+            {children}
+            <Toaster />
+          </LocaleProvider>
         </ThemeProvider>
       </body>
     </html>
