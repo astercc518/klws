@@ -167,18 +167,6 @@ func TestLoad_NodeRegionCustom(t *testing.T) {
 	}
 }
 
-func TestLoad_AsynqConcurrencyDefault(t *testing.T) {
-	t.Setenv("WADIST_POSTGRES_DSN", "postgres://x")
-	t.Setenv("WADIST_ASYNQ_CONCURRENCY", "")
-	cfg, err := Load()
-	if err != nil {
-		t.Fatalf("Load: %v", err)
-	}
-	if cfg.AsynqConcurrency != 32 {
-		t.Fatalf("AsynqConcurrency default: got %d, want 32", cfg.AsynqConcurrency)
-	}
-}
-
 func TestLoad_InvalidKeyLength_ReturnsError(t *testing.T) {
 	// Encode only 16 bytes (wrong length).
 	short := base64.StdEncoding.EncodeToString(make([]byte, 16))
@@ -275,17 +263,14 @@ func TestConfig_DispatchDefaults(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Load: %v", err)
 	}
-	if cfg.DispatchMode != "asynq" {
-		t.Fatalf("DispatchMode default = %q; want asynq", cfg.DispatchMode)
-	}
 	if cfg.PumpBuffer != 512 {
 		t.Fatalf("PumpBuffer default = %d; want 512", cfg.PumpBuffer)
 	}
-	if cfg.SendWorkers != cfg.AsynqConcurrency {
-		t.Fatalf("SendWorkers default = %d; want AsynqConcurrency %d", cfg.SendWorkers, cfg.AsynqConcurrency)
+	if cfg.SendWorkers != 32 {
+		t.Fatalf("SendWorkers default = %d; want 32", cfg.SendWorkers)
 	}
-	if cfg.SendRate <= 0 {
-		t.Fatalf("SendRate default = %v; want > 0", cfg.SendRate)
+	if cfg.SendRate != 160.0 {
+		t.Fatalf("SendRate default = %v; want 160.0", cfg.SendRate)
 	}
 }
 

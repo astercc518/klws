@@ -34,6 +34,11 @@ import (
 	"github.com/acme/wadist/internal/store"
 )
 
+// takeoverConcurrency is the asynq worker concurrency for the (low-throughput)
+// takeover queue. Fixed — the send path no longer runs on asynq, so this no
+// longer needs to scale with send worker count.
+const takeoverConcurrency = 8
+
 // placeholderUploader is a stub Uploader until the whatsmeow media adapter lands in a later milestone.
 type placeholderUploader struct{}
 
@@ -76,7 +81,7 @@ func main() {
 	stop()
 }
 
-// run assembles all dependencies, starts the /metrics server and the asynq
+// run assembles all dependencies, starts the /metrics server and the pump
 // send worker, and returns a stop func. It is the seam the smoke test drives.
 func run(ctx context.Context, cfg *config.Config) (*metrics.Server, func(), error) {
 	logger, flush, err := walog.Production()
@@ -147,26 +152,18 @@ func run(ctx context.Context, cfg *config.Config) (*metrics.Server, func(), erro
 
 	asynqClient := asynq.NewClient(asynq.RedisClientOpt{Addr: cfg.RedisAddr})
 
-	// Dispatch driver: "asynq" (durable queue + 1s batch tick, default) or
-	// "pump" (in-memory token-bucket Rolling-Wave pump). asynq is kept around
-	// in BOTH modes for the takeover queue (see mux/asynqSrv below) — only the
-	// send path itself moves onto the in-memory pump in "pump" mode.
-	var dispatcher *dispatch.Dispatcher
-	var pe *dispatch.PumpEnqueuer
-	if cfg.DispatchMode == "pump" {
-		// Boot recovery FIRST: reclaim recipients orphaned by a prior crash
-		// (assigned to an account but never sent) before any new dispatch begins.
-		if n, err := dispatch.ReclaimOrphanedAssignments(ctx, pool); err != nil {
-			log.Printf("warn: reclaim orphaned assignments: %v", err)
-		} else if n > 0 {
-			log.Printf("pump boot: reclaimed %d orphaned assignments", n)
-		}
-		pe = dispatch.NewPumpEnqueuer(cfg.PumpBuffer)
-		dispatcher = dispatch.NewDispatcher(pool, billingRepo, pe, priceFor, 3*time.Second).WithMetrics(m)
-	} else {
-		enqueuer := dispatch.NewAsynqEnqueuer(asynqClient, "default", 3)
-		dispatcher = dispatch.NewDispatcher(pool, billingRepo, enqueuer, priceFor, 3*time.Second).WithMetrics(m)
+	// Send driver: the in-memory token-bucket Rolling-Wave pump (sole driver).
+	// asynq is kept around for the takeover queue only (see mux/asynqSrv below).
+	//
+	// Boot recovery FIRST: reclaim recipients orphaned by a prior crash
+	// (assigned to an account but never sent) before any new dispatch begins.
+	if n, err := dispatch.ReclaimOrphanedAssignments(ctx, pool); err != nil {
+		log.Printf("warn: reclaim orphaned assignments: %v", err)
+	} else if n > 0 {
+		log.Printf("pump boot: reclaimed %d orphaned assignments", n)
 	}
+	pe := dispatch.NewPumpEnqueuer(cfg.PumpBuffer)
+	dispatcher := dispatch.NewDispatcher(pool, billingRepo, pe, priceFor, 3*time.Second).WithMetrics(m)
 
 	// cluster.NewRoutingSender routes sends to live sessions; returns a clear
 	// error when no active session exists rather than silently succeeding.
@@ -188,9 +185,8 @@ func run(ctx context.Context, cfg *config.Config) (*metrics.Server, func(), erro
 			return priceRepo.PriceFor(ctx, tenantID, country, priceFor(country))
 		})
 
-	// sendResolver loads the campaign body/media for a send. Shared by the
-	// asynq send handler (asynq mode) and the Pump (pump mode) so both drive
-	// the exact same resolution logic.
+	// sendResolver loads the campaign body/media for a send. Fed to the Pump
+	// below so it drives the resolution logic for every send.
 	sendResolver := func(ctx context.Context, campaignID int64) (string, string, string, []byte, error) {
 		body, mediaSha, mime, err := mgr.CampaignSendable(ctx, campaignID)
 		if err != nil {
@@ -201,22 +197,16 @@ func run(ctx context.Context, cfg *config.Config) (*metrics.Server, func(), erro
 		return body, mediaSha, mime, nil, nil
 	}
 
-	// asynqSrv/mux are built in BOTH modes: the takeover queue always runs on
-	// asynq (handler registered below, once `orch` exists). Only the "default"
-	// send queue's handler is mode-gated — in pump mode no send handler is ever
-	// registered, so no send task can reach asynq; the Pump owns the send path.
+	// asynqSrv/mux exist solely for the takeover queue (handler registered
+	// below, once `orch` exists); no send task is ever routed through asynq —
+	// the Pump owns the send path exclusively.
 	asynqSrv := asynq.NewServer(
 		asynq.RedisClientOpt{Addr: cfg.RedisAddr},
-		asynq.Config{Concurrency: cfg.AsynqConcurrency, ShutdownTimeout: cfg.ShutdownTimeout, Queues: map[string]int{"default": 6, "takeover": 1}},
+		asynq.Config{Concurrency: takeoverConcurrency, ShutdownTimeout: cfg.ShutdownTimeout, Queues: map[string]int{"default": 6, "takeover": 1}},
 	)
 	mux := asynq.NewServeMux()
 
-	var pump *dispatch.Pump
-	if cfg.DispatchMode == "pump" {
-		pump = dispatch.NewPump(pe, worker, sendResolver, cfg.SendRate, cfg.SendWorkers)
-	} else {
-		dispatch.RegisterSendHandler(mux, worker, sendResolver)
-	}
+	pump := dispatch.NewPump(pe, worker, sendResolver, cfg.SendRate, cfg.SendWorkers)
 
 	// Delivery/read receipt recorder. Wired into each WA connection unless
 	// WADIST_RECEIPTS=off (rollback knob; the send path is unaffected either way).
@@ -451,109 +441,86 @@ func run(ctx context.Context, cfg *config.Config) (*metrics.Server, func(), erro
 		}
 	})
 
-	if cfg.DispatchMode == "pump" {
-		// Pump mode: pump.Run drains PumpEnqueuer's channel and runs the send
-		// pipeline; the filler below is the sole producer feeding it.
-		sup.Go(func(lctx context.Context) error { return pump.Run(lctx) })
+	// pump.Run drains PumpEnqueuer's channel and runs the send pipeline; the
+	// filler below is the sole producer feeding it.
+	sup.Go(func(lctx context.Context) error { return pump.Run(lctx) })
 
-		// Risk Governor: adaptive-τ AIMD loop over the pump's send rate, driven
-		// by the fleet-wide ban rate. Only meaningful in pump mode (it holds
-		// the pump's SetRate) and only when explicitly enabled — default is
-		// off, which leaves the pump at fixed cfg.SendRate (M3 behavior, zero
-		// blast radius). asynq mode never constructs it (no pump to drive).
-		//
-		// Wired with mgr.SystemPool() (BYPASSRLS), matching riskbreaker below:
-		// FleetBanRate queries campaign_recipients, which has FORCE ROW LEVEL
-		// SECURITY. With a tenant-scoped (RLS) pool the fleet-wide aggregate
-		// would silently narrow to one tenant, so mgr.Pool() must never be
-		// used here.
-		if cfg.RiskGovernor == "on" {
-			gov := dispatch.NewGovernor(mgr.SystemPool(), pump.SetRate,
-				dispatch.GovParams{SLO: cfg.GovSLO, Step: cfg.GovStep, Factor: cfg.GovFactor, MinRate: cfg.GovMinRate, MaxRate: cfg.SendRate},
-				cfg.GovWindowSec, cfg.GovMinSample, cfg.SendRate /*start τ at the ceiling*/)
+	// Risk Governor: adaptive-τ AIMD loop over the pump's send rate, driven
+	// by the fleet-wide ban rate. Only active when explicitly enabled —
+	// default is off, which leaves the pump at fixed cfg.SendRate (M3
+	// behavior, zero blast radius).
+	//
+	// Wired with mgr.SystemPool() (BYPASSRLS), matching riskbreaker below:
+	// FleetBanRate queries campaign_recipients, which has FORCE ROW LEVEL
+	// SECURITY. With a tenant-scoped (RLS) pool the fleet-wide aggregate
+	// would silently narrow to one tenant, so mgr.Pool() must never be
+	// used here.
+	if cfg.RiskGovernor == "on" {
+		gov := dispatch.NewGovernor(mgr.SystemPool(), pump.SetRate,
+			dispatch.GovParams{SLO: cfg.GovSLO, Step: cfg.GovStep, Factor: cfg.GovFactor, MinRate: cfg.GovMinRate, MaxRate: cfg.SendRate},
+			cfg.GovWindowSec, cfg.GovMinSample, cfg.SendRate /*start τ at the ceiling*/)
 
-			// Segment Governor (L3): per-country slowdown layered on top of the
-			// fleet-wide L4 governor above. Only enabled when BOTH RiskGovernor
-			// and SegmentGovernor are "on" — default off leaves gov.setSegRate
-			// nil, so the segment pass in gov.Run is a no-op (M4 behavior,
-			// zero blast radius).
-			if cfg.SegmentGovernor == "on" {
-				gov.WithSegments(pump.SetSegmentRate, dispatch.SegParams{
-					Mult: cfg.SegMult, SegSLO: cfg.SegSLO, SlowRate: cfg.SegSlowRate, MinSample: cfg.SegMinSample,
-				})
-				log.Printf("segment governor on (mult=%.1f segSLO=%.3f slow=%.1f/s minSample=%d)",
-					cfg.SegMult, cfg.SegSLO, cfg.SegSlowRate, cfg.SegMinSample)
-			}
-
-			sup.Go(func(lctx context.Context) error {
-				return gov.Run(lctx, time.Duration(cfg.GovIntervalMs)*time.Millisecond)
+		// Segment Governor (L3): per-country slowdown layered on top of the
+		// fleet-wide L4 governor above. Only enabled when BOTH RiskGovernor
+		// and SegmentGovernor are "on" — default off leaves gov.setSegRate
+		// nil, so the segment pass in gov.Run is a no-op (M4 behavior,
+		// zero blast radius).
+		if cfg.SegmentGovernor == "on" {
+			gov.WithSegments(pump.SetSegmentRate, dispatch.SegParams{
+				Mult: cfg.SegMult, SegSLO: cfg.SegSLO, SlowRate: cfg.SegSlowRate, MinSample: cfg.SegMinSample,
 			})
-			log.Printf("risk governor on (SLO=%.3f step=%.1f factor=%.2f min=%.1f max=%.1f window=%ds interval=%dms)",
-				cfg.GovSLO, cfg.GovStep, cfg.GovFactor, cfg.GovMinRate, cfg.SendRate, cfg.GovWindowSec, cfg.GovIntervalMs)
+			log.Printf("segment governor on (mult=%.1f segSLO=%.3f slow=%.1f/s minSample=%d)",
+				cfg.SegMult, cfg.SegSLO, cfg.SegSlowRate, cfg.SegMinSample)
 		}
 
-		// Filler: backpressure-driven top-up (no 1s pulse) — tops the buffer up
-		// to its capacity every 50ms via Dispatcher.DispatchRunningBudget, which
-		// (unlike DispatchRunning, used by asynq mode) caps enqueues to `room`
-		// IN TOTAL across all running campaigns. This is required in pump mode:
-		// with ≥2 running campaigns, DispatchRunning would hand each campaign
-		// the full `room` batch, and a second campaign's dispatchBatch could
-		// push more payloads than there are free channel slots, hitting
-		// ErrPumpFull mid-transaction — rolling back the DB assignment while
-		// the already-pushed channel payloads survive (channel ops aren't
-		// transactional), orphaning them (sent with sent_today never bumped)
-		// and double-assigning the rolled-back recipient. Budget-capping the
-		// total sidesteps this: a single dispatchBatch pushing at most its
-		// budget always fits, since the filler is the sole producer and only
-		// workers ever free slots.
-		//
-		// SHUTDOWN ORDERING: this goroutine is the SOLE producer of
-		// EnqueueSend (via DispatchRunningBudget) AND the SOLE caller of pe.Close(),
-		// and it calls Close() only AFTER its own select loop has returned
-		// (same goroutine, strictly sequential) — so a send-after-close race is
-		// structurally impossible: no other goroutine ever writes to `pe` or
-		// closes it. Do not add pe.Close() to StopIntake or any other
-		// goroutine; StopIntake stays asynqSrv.Shutdown() (it only stops
-		// takeover intake) in both modes.
 		sup.Go(func(lctx context.Context) error {
-			t := time.NewTicker(50 * time.Millisecond)
-			defer t.Stop()
-			for {
-				select {
-				case <-lctx.Done():
-					pe.Close() // stop pump workers after drain; sole closer, called post-loop
-					return lctx.Err()
-				case <-t.C:
-					room := pe.Cap() - pe.Len()
-					if room <= 0 {
-						continue
-					}
-					if _, err := dispatcher.DispatchRunningBudget(lctx, room); err != nil {
-						log.Printf("pump filler: %v", err)
-					}
-				}
-			}
+			return gov.Run(lctx, time.Duration(cfg.GovIntervalMs)*time.Millisecond)
 		})
-	} else {
-		// Start the supervised dispatch loop: ticks every second, dispatches running
-		// campaigns. Per-tick errors are logged but do not exit the loop (transient
-		// DB errors recover on the next tick). The loop exits when lctx is cancelled.
-		sup.Go(func(lctx context.Context) error {
-			t := time.NewTicker(time.Second)
-			defer t.Stop()
-			for {
-				select {
-				case <-lctx.Done():
-					return lctx.Err()
-				case <-t.C:
-					if _, err := dispatcher.DispatchRunning(lctx, 100); err != nil {
-						log.Printf("dispatch loop: %v", err)
-						// log and continue — transient DB error; next tick retries
-					}
-				}
-			}
-		})
+		log.Printf("risk governor on (SLO=%.3f step=%.1f factor=%.2f min=%.1f max=%.1f window=%ds interval=%dms)",
+			cfg.GovSLO, cfg.GovStep, cfg.GovFactor, cfg.GovMinRate, cfg.SendRate, cfg.GovWindowSec, cfg.GovIntervalMs)
 	}
+
+	// Filler: backpressure-driven top-up (no 1s pulse) — tops the buffer up
+	// to its capacity every 50ms via Dispatcher.DispatchRunningBudget, which
+	// caps enqueues to `room` IN TOTAL across all running campaigns. This is
+	// required: with ≥2 running campaigns, an uncapped dispatch would hand
+	// each campaign a full batch, and a second campaign's dispatchBatch could
+	// push more payloads than there are free channel slots, hitting
+	// ErrPumpFull mid-transaction — rolling back the DB assignment while
+	// the already-pushed channel payloads survive (channel ops aren't
+	// transactional), orphaning them (sent with sent_today never bumped)
+	// and double-assigning the rolled-back recipient. Budget-capping the
+	// total sidesteps this: a single dispatchBatch pushing at most its
+	// budget always fits, since the filler is the sole producer and only
+	// workers ever free slots.
+	//
+	// SHUTDOWN ORDERING: this goroutine is the SOLE producer of
+	// EnqueueSend (via DispatchRunningBudget) AND the SOLE caller of pe.Close(),
+	// and it calls Close() only AFTER its own select loop has returned
+	// (same goroutine, strictly sequential) — so a send-after-close race is
+	// structurally impossible: no other goroutine ever writes to `pe` or
+	// closes it. Do not add pe.Close() to StopIntake or any other
+	// goroutine; StopIntake stays asynqSrv.Shutdown() (it only stops
+	// takeover intake).
+	sup.Go(func(lctx context.Context) error {
+		t := time.NewTicker(50 * time.Millisecond)
+		defer t.Stop()
+		for {
+			select {
+			case <-lctx.Done():
+				pe.Close() // stop pump workers after drain; sole closer, called post-loop
+				return lctx.Err()
+			case <-t.C:
+				room := pe.Cap() - pe.Len()
+				if room <= 0 {
+					continue
+				}
+				if _, err := dispatcher.DispatchRunningBudget(lctx, room); err != nil {
+					log.Printf("pump filler: %v", err)
+				}
+			}
+		}
+	})
 	// Side-car ban-rate circuit breaker: auto-pauses campaigns over the
 	// admin-configured threshold. Decoupled from the dispatch engine — it only
 	// flips campaign state, which the dispatch loop above already honors. Ships

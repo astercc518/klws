@@ -42,26 +42,22 @@ func TestRun_BootsMetrics(t *testing.T) {
 	}
 }
 
-// TestRun_PumpMode_BootsAndStopsCleanly exercises the "pump" DispatchMode
-// wiring added for M3 Task 5: reclaim-at-boot, PumpEnqueuer, Pump, and the
-// filler loop, in place of the asynq send handler + 1s×100 tick. Like
+// TestRun_PumpMode_BootsAndStopsCleanly exercises the pump send-path wiring
+// (reclaim-at-boot, PumpEnqueuer, Pump, and the filler loop) — pump is now
+// the sole send driver, wired unconditionally in run(). Like
 // TestRun_BootsMetrics it needs a live PG + Redis, so it skips gracefully
 // without WADIST_POSTGRES_DSN. The full send-path behavior (a payload
 // actually flowing PumpEnqueuer -> Pump -> ProcessSend) is Task 6's
 // integration test; this smoke test's job is narrower: prove run() boots
-// without building any asynq send-path wiring and that stop() — which
-// drives the filler's lctx.Done() -> pe.Close() -> pump.Run() drain —
-// returns cleanly within the test's own deadline (no goroutine leak/hang).
+// and that stop() — which drives the filler's lctx.Done() -> pe.Close() ->
+// pump.Run() drain — returns cleanly within the test's own deadline (no
+// goroutine leak/hang).
 func TestRun_PumpMode_BootsAndStopsCleanly(t *testing.T) {
 	if testing.Short() || os.Getenv("WADIST_POSTGRES_DSN") == "" {
 		t.Skip("integration: set WADIST_POSTGRES_DSN")
 	}
 	t.Setenv("WADIST_PRESTOP_DELAY", "1ms")
-	t.Setenv("WADIST_DISPATCH_MODE", "pump")
 	cfg := loadForTest(t)
-	if cfg.DispatchMode != "pump" {
-		t.Fatalf("loadForTest: DispatchMode = %q, want pump", cfg.DispatchMode)
-	}
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()

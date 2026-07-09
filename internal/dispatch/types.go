@@ -40,7 +40,7 @@ type Uploader interface {
 	Upload(ctx context.Context, jid string, data []byte, mediaSha, mime string) (*MediaHandle, error)
 }
 
-// Enqueuer schedules a send (asynq adapter in prod; fake in tests).
+// Enqueuer schedules a send (pump adapter in prod; fake in tests).
 type Enqueuer interface {
 	EnqueueSend(ctx context.Context, p SendPayload, delay time.Duration) error
 }
@@ -99,5 +99,5 @@ func (w *SendWorker) amountFor(ctx context.Context, tenantID int64, country stri
 }
 
 // SendBodyResolver resolves a campaign's message body/media at send time.
-// Consumed by both the pump send loop and (legacy) the asynq handler.
+// Consumed by the pump send loop.
 type SendBodyResolver func(ctx context.Context, campaignID int64) (body, mediaSha, mime string, raw []byte, err error)

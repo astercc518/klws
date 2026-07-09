@@ -34,8 +34,6 @@ type Config struct {
 	AppSystemDSN string // WADIST_APP_SYSTEM_DSN — role app_system (BYPASSRLS)
 	// NodeRegion is the data-residency region for this node (M10 stub; M11 adds per-region pools).
 	NodeRegion string // WADIST_NODE_REGION default "default"
-	// AsynqConcurrency is the number of concurrent Asynq workers (default 32).
-	AsynqConcurrency int // WADIST_ASYNQ_CONCURRENCY default 32
 	// CanaryPercent is the percentage (0..100) of JIDs assigned to the canary cohort.
 	// Out-of-range or unparseable values fall back to 0 (feature off).
 	CanaryPercent uint8 // WADIST_CANARY_PERCENT default 0
@@ -65,15 +63,12 @@ type Config struct {
 	// Reconciler: periodic sweep that re-enqueues active accounts missing from
 	// the scheduler's due set (closes the scheduling loop against drift).
 	ReconcileInterval time.Duration // WADIST_RECONCILE_INTERVAL_MS default 300000ms (5m)
-	// DispatchMode selects the send driver: "asynq" (durable queue + 1s batch tick,
-	// default) or "pump" (in-memory token-bucket Rolling-Wave pump).
-	DispatchMode string // WADIST_DISPATCH_MODE default "asynq"
-	// SendRate is the global token-bucket rate (sends/sec) in pump mode.
+	// SendRate is the global token-bucket rate (sends/sec) for the pump.
 	SendRate float64 // WADIST_SEND_RATE default 160.0
-	// PumpBuffer is the in-memory SendPayload channel capacity in pump mode.
+	// PumpBuffer is the in-memory SendPayload channel capacity for the pump.
 	PumpBuffer int // WADIST_PUMP_BUFFER default 512
-	// SendWorkers is the number of concurrent send workers in pump mode.
-	SendWorkers int // WADIST_SEND_WORKERS default = AsynqConcurrency
+	// SendWorkers is the number of concurrent send workers driving the pump.
+	SendWorkers int // WADIST_SEND_WORKERS default 32
 	// RiskGovernor enables the adaptive-τ risk governor ("on") or leaves the pump
 	// rate fixed at SendRate ("off", default). Only active in pump dispatch mode.
 	RiskGovernor string // WADIST_RISK_GOVERNOR default "off"
@@ -160,12 +155,6 @@ func Load() (*Config, error) {
 	cfg.AppSystemDSN = getenv("WADIST_APP_SYSTEM_DSN", "")
 	cfg.OwnershipBackend = getenv("WADIST_OWNERSHIP_BACKEND", "pg")
 	cfg.NodeRegion = getenv("WADIST_NODE_REGION", "default")
-	cfg.AsynqConcurrency = 32
-	if v := getenv("WADIST_ASYNQ_CONCURRENCY", ""); v != "" {
-		if n, err := strconv.Atoi(v); err == nil && n > 0 {
-			cfg.AsynqConcurrency = n
-		}
-	}
 	cfg.PreStopDelay = 5 * time.Second
 	if v := getenv("WADIST_PRESTOP_DELAY", ""); v != "" {
 		if d, err := time.ParseDuration(v); err == nil && d > 0 {
@@ -197,7 +186,6 @@ func Load() (*Config, error) {
 	cfg.ProxyJanitorBatch = intEnv("WADIST_PROXY_JANITOR_BATCH", 256)
 	cfg.ReconcileInterval = msEnv("WADIST_RECONCILE_INTERVAL_MS", 300000)
 
-	cfg.DispatchMode = getenv("WADIST_DISPATCH_MODE", "asynq")
 	cfg.PumpBuffer = intEnv("WADIST_PUMP_BUFFER", 512)
 	cfg.SendWorkers = intEnv("WADIST_SEND_WORKERS", 32)
 	cfg.SendRate = floatEnv("WADIST_SEND_RATE", 160.0)

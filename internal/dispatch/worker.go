@@ -16,11 +16,11 @@ import (
 //
 //	Admit (deny → requeue recipient, no charge) → Hold → render → (resolve media)
 //	→ Sender.Send → success: Settle + mark sent ; failure: health signal (if ban) +
-//	RequestRefund + mark failed, return the send error so asynq retries.
+//	RequestRefund + mark failed, return the send error so the pump reclaims it.
 //
 // mediaSha=="" means text-only.
 func (w *SendWorker) ProcessSend(ctx context.Context, pl SendPayload, body, mediaSha, mime string, raw []byte) error {
-	// Idempotency guard: asynq delivers at-least-once; skip if already terminal.
+	// Idempotency guard: pump reclaim delivers at-least-once; skip if already terminal.
 	var st string
 	if err := w.pool.QueryRow(ctx, `SELECT state::text FROM campaign_recipients WHERE id=$1`, pl.RecipientID).Scan(&st); err != nil {
 		return fmt.Errorf("load recipient state: %w", err)

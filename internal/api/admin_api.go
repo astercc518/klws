@@ -46,7 +46,7 @@ type adminStats struct {
 	AccountsActive int     `json:"accounts_active"` // ban_status='active'
 	AccountsBanned int     `json:"accounts_banned"` // banned|flagged
 	BanRate        float64 `json:"ban_rate"`        // banned / total
-	QueueBacklog   int     `json:"queue_backlog"`   // pending recipients (asynq backlog proxy)
+	QueueBacklog   int     `json:"queue_backlog"`   // pending recipients (pump in-memory buffer depth)
 }
 
 // handleAdminStats: GET /api/v1/admin/stats.
