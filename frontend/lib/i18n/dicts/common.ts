@@ -5,7 +5,7 @@ import type { Locale } from "@/lib/i18n";
 export const common: Record<Locale, Record<string, string>> = {
   zh: {
     "header.brand": "管理后台",
-    "header.searchPlaceholder": "搜索客户、设备、代理…",
+    "header.searchPlaceholder": "搜索租户、设备、代理…",
     "header.searchAria": "全局搜索",
     "header.notifications": "通知",
     "header.accountMenu": "账户菜单",
@@ -19,7 +19,7 @@ export const common: Record<Locale, Record<string, string>> = {
   },
   en: {
     "header.brand": "Admin",
-    "header.searchPlaceholder": "Search customers, devices, proxies…",
+    "header.searchPlaceholder": "Search tenants, devices, proxies…",
     "header.searchAria": "Global search",
     "header.notifications": "Notifications",
     "header.accountMenu": "Account menu",

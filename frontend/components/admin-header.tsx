@@ -5,6 +5,8 @@ import { usePathname } from "next/navigation";
 import { Search, Bell, LogOut, ChevronRight } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { ThemeToggle } from "@/components/theme-toggle";
+import { LanguageToggle } from "@/components/language-toggle";
+import { useT } from "@/components/locale-provider";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -33,6 +35,7 @@ function useCrumbs() {
 
 export function AdminHeader() {
   const me = useMe();
+  const t = useT();
   const crumbs = useCrumbs();
 
   async function handleLogout() {
@@ -78,8 +81,8 @@ export function AdminHeader() {
           <Search className="size-3.5 shrink-0" />
           <input
             type="search"
-            placeholder="搜索租户、设备、代理…"
-            aria-label="全局搜索"
+            placeholder={t("header.searchPlaceholder")}
+            aria-label={t("header.searchAria")}
             className="min-w-0 flex-1 bg-transparent text-sm outline-none placeholder:text-muted-foreground/70"
           />
           <kbd className="hidden shrink-0 rounded border bg-background px-1.5 font-mono text-[10px] text-muted-foreground lg:inline-block">
@@ -92,13 +95,14 @@ export function AdminHeader() {
       <Button
         variant="ghost"
         size="icon-sm"
-        aria-label="通知"
+        aria-label={t("header.notifications")}
         className="relative ml-auto text-muted-foreground md:ml-0"
       >
         <Bell className="size-4" />
         <span className="absolute right-1.5 top-1.5 size-1.5 rounded-full bg-rose-500 ring-2 ring-background" />
       </Button>
 
+      <LanguageToggle />
       <ThemeToggle />
 
       <div className="h-5 w-px bg-border" />
@@ -109,7 +113,7 @@ export function AdminHeader() {
           render={
             <button
               type="button"
-              aria-label="账户菜单"
+              aria-label={t("header.accountMenu")}
               className="rounded-full outline-none transition-opacity hover:opacity-80 focus-visible:ring-3 focus-visible:ring-ring/50"
             />
           }
@@ -123,7 +127,7 @@ export function AdminHeader() {
           <DropdownMenuSeparator />
           <DropdownMenuItem variant="destructive" onClick={handleLogout}>
             <LogOut className="size-4" />
-            退出登录
+            {t("menu.logout")}
           </DropdownMenuItem>
         </DropdownMenuContent>
       </DropdownMenu>
