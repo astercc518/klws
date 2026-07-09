@@ -65,7 +65,7 @@ func newTestManager(t *testing.T) *store.Manager {
 	t.Cleanup(flush)
 
 	appTenantDSN := buildAppTenantDSN(t, dsn)
-	mgr, err := store.NewManager(ctx, store.Config{DSN: dsn, AppTenantDSN: appTenantDSN, NodeID: "console-test", Redis: newTestRedis(t)}, logger)
+	mgr, err := store.NewManager(ctx, store.Config{DSN: dsn, AppTenantDSN: appTenantDSN, NodeID: "console-test", Redis: newTestRedis(t), BadgerDir: t.TempDir()}, logger)
 	if err != nil {
 		t.Fatalf("manager: %v", err)
 	}

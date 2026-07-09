@@ -95,7 +95,7 @@ func newTestPool(t *testing.T) *store.Manager {
 		t.Fatalf("logger: %v", err)
 	}
 	t.Cleanup(flush)
-	mgr, err := store.NewManager(ctx, store.Config{DSN: dsn, NodeID: "pricing-test", Redis: newTestRedis(t)}, logger)
+	mgr, err := store.NewManager(ctx, store.Config{DSN: dsn, NodeID: "pricing-test", Redis: newTestRedis(t), BadgerDir: t.TempDir()}, logger)
 	if err != nil {
 		t.Fatalf("manager: %v", err)
 	}

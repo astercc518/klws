@@ -31,6 +31,7 @@ func newPgbouncerTestManager(t *testing.T, queryMode string) (*Manager, context.
 		PoolMode:  "pgbouncer",
 		QueryMode: queryMode,
 		Redis:     rdb,
+		BadgerDir: t.TempDir(),
 	}, waLog.Noop)
 	if err != nil {
 		t.Fatalf("manager: %v", err)

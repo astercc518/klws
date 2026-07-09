@@ -119,7 +119,7 @@ func newTestManager(t *testing.T) *store.Manager {
 	rdb := goredis.NewClient(&goredis.Options{Addr: redisAddr})
 	t.Cleanup(func() { _ = rdb.Close() })
 
-	m, err := store.NewManager(ctx, store.Config{DSN: dsn, Redis: rdb, NodeID: testManagerNodeID}, waLog.Noop)
+	m, err := store.NewManager(ctx, store.Config{DSN: dsn, Redis: rdb, NodeID: testManagerNodeID, BadgerDir: t.TempDir()}, waLog.Noop)
 	if err != nil {
 		t.Fatalf("newManager: %v", err)
 	}

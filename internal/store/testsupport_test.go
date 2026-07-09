@@ -67,7 +67,7 @@ func newTestManager(t *testing.T) *Manager {
 	migPool.Close()
 
 	rdb := newTestRedis(t)
-	m, err := newManager(ctx, Config{DSN: dsn, Redis: rdb}, waLog.Noop)
+	m, err := newManager(ctx, Config{DSN: dsn, Redis: rdb, BadgerDir: t.TempDir()}, waLog.Noop)
 	if err != nil {
 		t.Fatalf("newTestManager: %v", err)
 	}

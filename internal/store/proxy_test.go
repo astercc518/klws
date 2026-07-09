@@ -29,7 +29,7 @@ func newManagerWithSchema(t *testing.T) (*Manager, context.Context) {
 	migPool.Close()
 
 	rdb := newTestRedis(t)
-	m, err := newManager(ctx, Config{DSN: dsn, Redis: rdb}, waLog.Noop)
+	m, err := newManager(ctx, Config{DSN: dsn, Redis: rdb, BadgerDir: t.TempDir()}, waLog.Noop)
 	if err != nil {
 		t.Fatalf("manager: %v", err)
 	}
