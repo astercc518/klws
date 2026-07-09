@@ -45,7 +45,7 @@ wadist 的立项主需求就是**单机日发百万**。M1–M7 高density重构
 
 | 层 | 删除 | 独留（唯一路径） |
 |---|---|---|
-| **发送** | `internal/dispatch/asynqadapter.go`、asynq worker 装配（`worker.go` 的 asynq 部分）、`cmd/wadist` 的 asynq 接线、`WADIST_DISPATCH_MODE`、`AsynqConcurrency` env | pump（`internal/dispatch/pump.go`）；`SendRate`/`SendWorkers`/`PumpBuffer` 保留为**数值调参**（非模式开关）|
+| **发送** | `internal/dispatch/asynqadapter.go`（`AsynqEnqueuer`/`RegisterSendHandler`/`TypeSend`）、main.go 的 asynq **发送**分支、`WADIST_DISPATCH_MODE`、`WADIST_ASYNQ_CONCURRENCY` env | pump（`internal/dispatch/pump.go`）；`SendRate`/`SendWorkers`/`PumpBuffer` 保留为**数值调参**。**注意：asynq 库不整删**——takeover 队列（`internal/node/takeover.go`）仍跑在 asynq 上，`asynqSrv`/`mux`/`asynqClient` 因 takeover 保留，其 Concurrency 改用常量 |
 | **所有权** | `internal/store/lock.go`、`internal/store/ownership_pg.go`、shadow 后端及其 divergence 回调、`MaxLockConns`/lockPool/`acquirePGLock`、`WADIST_OWNERSHIP_BACKEND`、`owner_node` 列（DROP 迁移）| `internal/store/ownership_redis.go` + `ownership.go` 接口 + fence token |
 | **会话存储** | `internal/store/manager.go` 里 sqlstore 分支与 `sqlstore` import、`WADIST_SESSION_STORE`；whatsmeow 16 张 PG session 表停用（保留或后续 DROP，不阻塞）| `internal/store/wabadger`（`WADIST_BADGER_DIR` 保留为路径配置，须挂 NVMe 持久卷）|
 | **代理** | pg proxy 分配分支（`FOR UPDATE SKIP LOCKED` 路径）、`WADIST_PROXY_BACKEND` | `internal/store/proxy_redis.go`（ZSET 冷却圈）；`PROXY_COOLDOWN_MS` 保留；**PG `chk_bindings` 原子兜底保留**（防超配的 durable 约束）|
@@ -76,7 +76,7 @@ wadist 的立项主需求就是**单机日发百万**。M1–M7 高density重构
 - **Badger 目录须挂持久卷**进 wadist 容器（`docker-compose.worker.yml` 现未挂载，需补 `wadist_badger:/var/lib/wadist/badger`）。
 - **PG 退成纯 durable 真相源**：账号、计费、campaign、recipients；不再存 Signal 会话。
 - **会话迁移 = 全量重扫码**（决策）：切 badger 后现有账号登录态不迁移，账号重新扫码登录。仅在当前池可重建/基本为 demo 时可接受——已确认可接受。
-- **owner_node DROP 迁移**：M2 曾把 owner_node 保留为只读镜像并门控 DROP 到 cutover 后；本次直接执行 DROP 迁移。
+- **owner_node DROP 迁移 + 管理后台改读 Redis**（决策，修订自初稿）：owner_node 不再是死镜像——管理后台账号列表/「已归属」筛选/归属计数在读它（`internal/api/admin_api.go` 账号列表 SELECT、`internal/api/resources_query.go` 的 `owner_node IS NOT NULL/NULL` 筛选、stats FILTER）。本次**执行 DROP 迁移**，同时把这三处 admin 读取**改为从 Redis `owner:{jid}` 查真实所有权**：新增 Manager 方法枚举/批查 redis 归属，账号列表按页 MGET 注解 OwnerNode/Online，「已归属/未归属」筛选与计数按 redis 归属的 jid 集过滤。删 pg 所有权后端时随之删除的是**读 owner_node 做所有权判定**的 `staleOwnedAccountsPG`/`listUnownedActiveAccountsPG`；orchestrator 的 `ClaimAccount` 对 owner_node 的写入也随列 DROP 移除（保留 last_connected_at 写入）。
 
 ## 6. 验证策略（无 fallback，安全底线）
 
