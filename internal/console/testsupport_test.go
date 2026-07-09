@@ -14,6 +14,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/testcontainers/testcontainers-go"
 	"github.com/testcontainers/testcontainers-go/modules/postgres"
 	"github.com/testcontainers/testcontainers-go/wait"
@@ -24,6 +25,10 @@ import (
 
 // newTestManager starts a throwaway PG16, applies every migration, and returns
 // a non-singleton store.Manager wired to it. The container is torn down on cleanup.
+//
+// Migrations are applied BEFORE constructing the Manager: newManager's
+// boot-time redis proxy-index rebuild queries proxy_pool immediately, and
+// that table must already exist.
 func newTestManager(t *testing.T) *store.Manager {
 	t.Helper()
 	ctx := context.Background()
@@ -46,6 +51,13 @@ func newTestManager(t *testing.T) *store.Manager {
 		t.Fatalf("dsn: %v", err)
 	}
 
+	migPool, err := pgxpool.New(ctx, dsn)
+	if err != nil {
+		t.Fatalf("migration pool: %v", err)
+	}
+	applyAllMigrations(t, ctx, migPool)
+	migPool.Close()
+
 	logger, flush, err := walog.Production()
 	if err != nil {
 		t.Fatalf("logger: %v", err)
@@ -53,17 +65,15 @@ func newTestManager(t *testing.T) *store.Manager {
 	t.Cleanup(flush)
 
 	appTenantDSN := buildAppTenantDSN(t, dsn)
-	mgr, err := store.NewManager(ctx, store.Config{DSN: dsn, AppTenantDSN: appTenantDSN, NodeID: "console-test"}, logger)
+	mgr, err := store.NewManager(ctx, store.Config{DSN: dsn, AppTenantDSN: appTenantDSN, NodeID: "console-test", Redis: newTestRedis(t)}, logger)
 	if err != nil {
 		t.Fatalf("manager: %v", err)
 	}
 	t.Cleanup(mgr.Close)
-
-	applyAllMigrations(t, ctx, mgr)
 	return mgr
 }
 
-func applyAllMigrations(t *testing.T, ctx context.Context, mgr *store.Manager) {
+func applyAllMigrations(t *testing.T, ctx context.Context, pool *pgxpool.Pool) {
 	t.Helper()
 	files, err := filepath.Glob("../../migrations/*.sql")
 	if err != nil {
@@ -78,7 +88,7 @@ func applyAllMigrations(t *testing.T, ctx context.Context, mgr *store.Manager) {
 		if err != nil {
 			t.Fatalf("read %s: %v", f, err)
 		}
-		if _, err := mgr.SystemPool().Exec(ctx, string(b)); err != nil {
+		if _, err := pool.Exec(ctx, string(b)); err != nil {
 			t.Fatalf("apply %s: %v", f, err)
 		}
 	}

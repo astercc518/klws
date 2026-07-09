@@ -49,7 +49,7 @@ type Manager struct {
 	sqlDB      *sql.DB
 	log        waLog.Logger
 	ownership  Ownership            // account ownership backend: redis lease w/ fence tokens
-	proxyAlloc *redisProxyAllocator // set when cfg.ProxyBackend=="redis"; nil in pg mode (default)
+	proxyAlloc *redisProxyAllocator // redis ZSET cooldown allocator; the sole proxy allocation backend
 }
 
 var (
@@ -196,15 +196,17 @@ func newManager(ctx context.Context, cfg Config, logger waLog.Logger) (*Manager,
 	}
 	m.ownership = newOwnership(m)
 
-	if cfg.ProxyBackend == "redis" && cfg.Redis != nil {
-		m.proxyAlloc = newRedisProxyAllocator(cfg.Redis, cfg.ProxyCooldown)
-		rctx, rcancel := context.WithTimeout(ctx, 10*time.Second)
-		_, err := m.proxyAlloc.rebuildFromPG(rctx, m.bizPool, time.Now().UnixMilli())
-		rcancel()
-		if err != nil {
-			m.Close()
-			return nil, fmt.Errorf("rebuild redis proxy index: %w", err)
-		}
+	if cfg.Redis == nil {
+		m.Close()
+		return nil, fmt.Errorf("store: redis is required (proxy allocator)")
+	}
+	m.proxyAlloc = newRedisProxyAllocator(cfg.Redis, cfg.ProxyCooldown)
+	rctx, rcancel := context.WithTimeout(ctx, 10*time.Second)
+	_, err = m.proxyAlloc.rebuildFromPG(rctx, m.bizPool, time.Now().UnixMilli())
+	rcancel()
+	if err != nil {
+		m.Close()
+		return nil, fmt.Errorf("rebuild redis proxy index: %w", err)
 	}
 	return m, nil
 }

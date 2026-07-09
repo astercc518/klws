@@ -15,10 +15,17 @@ func TestListDeadProxyAccountsAll_CrossTenant(t *testing.T) {
 	pid := seedProxy(t, ctx, m.BizPool(), "socks5://u:p@h:1080", "US", 5)
 	seedAccount(t, ctx, m.BizPool(), 1, "t1@s.whatsapp.net", "15550000001")
 	seedAccount(t, ctx, m.BizPool(), 2, "t2@s.whatsapp.net", "15550000002")
-	if _, err := m.BindProxy(ctx, "t1@s.whatsapp.net", "US"); err != nil {
+	base := nowMsForTest()
+	if _, err := m.proxyAlloc.rebuildFromPG(ctx, m.BizPool(), base); err != nil {
+		t.Fatalf("rebuildFromPG: %v", err)
+	}
+	// t1's bind rearms the proxy's cooldown score to base+cooldown even though
+	// capacity remains (max_bindings=5) — bind t2 with an explicit timestamp
+	// past the default 60s cooldown so this test isn't about cooldown timing.
+	if _, err := m.proxyAlloc.bind(ctx, m.BizPool(), "t1@s.whatsapp.net", "US", base); err != nil {
 		t.Fatalf("bind t1: %v", err)
 	}
-	if _, err := m.BindProxy(ctx, "t2@s.whatsapp.net", "US"); err != nil {
+	if _, err := m.proxyAlloc.bind(ctx, m.BizPool(), "t2@s.whatsapp.net", "US", base+61_000); err != nil {
 		t.Fatalf("bind t2: %v", err)
 	}
 

@@ -12,6 +12,7 @@ import (
 
 	"github.com/acme/wadist/internal/cluster"
 	"github.com/acme/wadist/internal/store"
+	"github.com/jackc/pgx/v5/pgxpool"
 	goredis "github.com/redis/go-redis/v9"
 	"github.com/testcontainers/testcontainers-go"
 	"github.com/testcontainers/testcontainers-go/modules/postgres"
@@ -88,18 +89,12 @@ func newTestManager(t *testing.T) *store.Manager {
 		t.Fatalf("dsn: %v", err)
 	}
 
-	// Ownership is redis-only now — AcquireDeviceLock needs a live client.
-	redisAddr := startRedis(t)
-	rdb := goredis.NewClient(&goredis.Options{Addr: redisAddr})
-	t.Cleanup(func() { _ = rdb.Close() })
-
-	m, err := store.NewManager(ctx, store.Config{DSN: dsn, Redis: rdb, NodeID: testManagerNodeID}, waLog.Noop)
+	// Migrations must be applied BEFORE constructing the Manager: newManager's
+	// boot-time redis proxy-index rebuild queries proxy_pool immediately.
+	migPool, err := pgxpool.New(ctx, dsn)
 	if err != nil {
-		t.Fatalf("newManager: %v", err)
+		t.Fatalf("migration pool: %v", err)
 	}
-	t.Cleanup(m.Close)
-
-	// Apply all business migrations in order (glob ../../migrations/*.sql).
 	files, err := filepath.Glob("../../migrations/*.sql")
 	if err != nil {
 		t.Fatalf("glob migrations: %v", err)
@@ -113,10 +108,22 @@ func newTestManager(t *testing.T) *store.Manager {
 		if err != nil {
 			t.Fatalf("read %s: %v", f, err)
 		}
-		if _, err := m.BizPool().Exec(ctx, string(b)); err != nil {
+		if _, err := migPool.Exec(ctx, string(b)); err != nil {
 			t.Fatalf("apply %s: %v", f, err)
 		}
 	}
+	migPool.Close()
+
+	// Ownership is redis-only now — AcquireDeviceLock needs a live client.
+	redisAddr := startRedis(t)
+	rdb := goredis.NewClient(&goredis.Options{Addr: redisAddr})
+	t.Cleanup(func() { _ = rdb.Close() })
+
+	m, err := store.NewManager(ctx, store.Config{DSN: dsn, Redis: rdb, NodeID: testManagerNodeID}, waLog.Noop)
+	if err != nil {
+		t.Fatalf("newManager: %v", err)
+	}
+	t.Cleanup(m.Close)
 	return m
 }
 

@@ -236,7 +236,6 @@ func (c *Config) Store() store.Config {
 		AppTenantDSN:  c.AppTenantDSN,
 		AppSystemDSN:  c.AppSystemDSN,
 		BadgerDir:     os.Getenv("WADIST_BADGER_DIR"),
-		ProxyBackend:  os.Getenv("WADIST_PROXY_BACKEND"),
 		ProxyCooldown: msEnvZero("WADIST_PROXY_COOLDOWN_MS"),
 		PoolMode:      c.PgPoolMode,
 		QueryMode:     c.PgQueryMode,

@@ -8,18 +8,32 @@ import (
 	"sync/atomic"
 	"testing"
 
+	"github.com/jackc/pgx/v5/pgxpool"
 	waLog "go.mau.fi/whatsmeow/util/log"
 )
 
+// newManagerWithSchema builds a schema-applied Manager wired to a real Redis
+// (the sole proxy allocation backend). Migrations are applied BEFORE
+// constructing the Manager: newManager's boot-time rebuildFromPG queries
+// proxy_pool immediately, and that table must already exist.
 func newManagerWithSchema(t *testing.T) (*Manager, context.Context) {
 	t.Helper()
 	ctx := context.Background()
-	m, err := newManager(ctx, Config{DSN: testDSN(t)}, waLog.Noop)
+	dsn := testDSN(t)
+
+	migPool, err := pgxpool.New(ctx, dsn)
+	if err != nil {
+		t.Fatalf("migration pool: %v", err)
+	}
+	applyMigrations(t, ctx, migPool)
+	migPool.Close()
+
+	rdb := newTestRedis(t)
+	m, err := newManager(ctx, Config{DSN: dsn, Redis: rdb}, waLog.Noop)
 	if err != nil {
 		t.Fatalf("manager: %v", err)
 	}
 	t.Cleanup(m.Close)
-	applyMigrations(t, ctx, m.BizPool())
 	return m, ctx
 }
 
@@ -30,6 +44,9 @@ func TestBindProxy_Success(t *testing.T) {
 	m, ctx := newManagerWithSchema(t)
 	pid := seedProxy(t, ctx, m.BizPool(), "socks5://u:p@h:1080", "US", 1)
 	seedAccount(t, ctx, m.BizPool(), 1, "111@s.whatsapp.net", "15550000001")
+	if _, err := m.proxyAlloc.rebuildFromPG(ctx, m.BizPool(), nowMsForTest()); err != nil {
+		t.Fatalf("rebuildFromPG: %v", err)
+	}
 
 	b, err := m.BindProxy(ctx, "111@s.whatsapp.net", "US")
 	if err != nil {
@@ -71,6 +88,9 @@ func TestBindProxy_NoOversellUnderConcurrency(t *testing.T) {
 	// 3 proxies, each capacity 1 → at most 3 accounts can bind
 	for i := 0; i < 3; i++ {
 		seedProxy(t, ctx, m.BizPool(), "socks5://h:"+string(rune('a'+i)), "US", 1)
+	}
+	if _, err := m.proxyAlloc.rebuildFromPG(ctx, m.BizPool(), nowMsForTest()); err != nil {
+		t.Fatalf("rebuildFromPG: %v", err)
 	}
 	const n = 10
 	jids := make([]string, n)

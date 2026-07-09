@@ -37,9 +37,6 @@ func TestConfig_withDefaults_keepsExplicit(t *testing.T) {
 func TestConfig_ProxyDefaults(t *testing.T) {
 	var c Config
 	c.withDefaults()
-	if c.ProxyBackend != "pg" {
-		t.Fatalf("ProxyBackend default = %q; want pg", c.ProxyBackend)
-	}
 	if c.ProxyCooldown != 60*time.Second {
 		t.Fatalf("ProxyCooldown default = %v; want 60s", c.ProxyCooldown)
 	}

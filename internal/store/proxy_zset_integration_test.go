@@ -23,7 +23,7 @@ func TestProxyRedis_EndToEnd(t *testing.T) {
 	if testing.Short() {
 		t.Skip("integration")
 	}
-	m, ctx := newManagerWithSchemaProxyRedis(t)
+	m, ctx := newManagerWithSchema(t)
 
 	seedAccount(t, ctx, m.BizPool(), 1, "a1", "15550000001")
 	seedAccount(t, ctx, m.BizPool(), 1, "a2", "15550000002")

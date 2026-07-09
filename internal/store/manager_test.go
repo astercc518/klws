@@ -5,6 +5,7 @@ import (
 	"context"
 	"testing"
 
+	"github.com/jackc/pgx/v5/pgxpool"
 	waLog "go.mau.fi/whatsmeow/util/log"
 )
 
@@ -13,7 +14,16 @@ func TestManager_Init_BadgerOnly(t *testing.T) {
 		t.Skip("integration")
 	}
 	ctx := context.Background()
-	m, err := Init(ctx, Config{DSN: testDSN(t)}, waLog.Noop)
+	dsn := testDSN(t)
+
+	migPool, err := pgxpool.New(ctx, dsn)
+	if err != nil {
+		t.Fatalf("migration pool: %v", err)
+	}
+	applyMigrations(t, ctx, migPool)
+	migPool.Close()
+
+	m, err := Init(ctx, Config{DSN: dsn, Redis: newTestRedis(t)}, waLog.Noop)
 	if err != nil {
 		t.Fatalf("init: %v", err)
 	}

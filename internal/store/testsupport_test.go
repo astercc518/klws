@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/testcontainers/testcontainers-go"
 	"github.com/testcontainers/testcontainers-go/modules/postgres"
 	"github.com/testcontainers/testcontainers-go/wait"
@@ -49,21 +50,28 @@ func readMigration(t *testing.T) string {
 }
 
 // newTestManager constructs an isolated Manager backed by a fresh Postgres
-// container, applies the 0001 account_devices migration, and closes when done.
-// No Redis client is configured — only usable by tests that don't exercise
-// the ownership delegators (AcquireDeviceLock/UpsertNodeHeartbeat/etc.).
+// container and a real Redis (the sole proxy allocation backend). All
+// migrations are applied BEFORE constructing the Manager: newManager's
+// boot-time redis proxy-index rebuild queries proxy_pool immediately, so that
+// table (and account_devices) must already exist.
 func newTestManager(t *testing.T) *Manager {
 	t.Helper()
 	ctx := context.Background()
-	m, err := newManager(ctx, Config{DSN: testDSN(t)}, waLog.Noop)
+	dsn := testDSN(t)
+
+	migPool, err := pgxpool.New(ctx, dsn)
+	if err != nil {
+		t.Fatalf("migration pool: %v", err)
+	}
+	applyMigrations(t, ctx, migPool)
+	migPool.Close()
+
+	rdb := newTestRedis(t)
+	m, err := newManager(ctx, Config{DSN: dsn, Redis: rdb}, waLog.Noop)
 	if err != nil {
 		t.Fatalf("newTestManager: %v", err)
 	}
 	t.Cleanup(m.Close)
-	// Apply the application migration (account_devices) so seedAccountDevice works.
-	if _, err := m.bizPool.Exec(ctx, readMigration(t)); err != nil {
-		t.Fatalf("newTestManager apply migration: %v", err)
-	}
 	return m
 }
 

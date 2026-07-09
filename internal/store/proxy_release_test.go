@@ -12,6 +12,9 @@ func TestReleaseProxy_DecrementsAndIdempotent(t *testing.T) {
 	m, ctx := newManagerWithSchema(t)
 	pid := seedProxy(t, ctx, m.BizPool(), "socks5://h:1080", "US", 1)
 	seedAccount(t, ctx, m.BizPool(), 1, "111@s.whatsapp.net", "15550000001")
+	if _, err := m.proxyAlloc.rebuildFromPG(ctx, m.BizPool(), nowMsForTest()); err != nil {
+		t.Fatalf("rebuildFromPG: %v", err)
+	}
 	if _, err := m.BindProxy(ctx, "111@s.whatsapp.net", "US"); err != nil {
 		t.Fatalf("bind: %v", err)
 	}
