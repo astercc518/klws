@@ -32,10 +32,8 @@ type Config struct {
 	// backend (a node is considered dead when its hb key expires). Should equal
 	// the cluster NodeStaleness. Heartbeat interval MUST be < OwnershipTTL.
 	OwnershipTTL time.Duration
-	// SessionStore selects the whatsmeow store backend: "pg" (sqlstore, default) or
-	// "badger" (local NVMe KV via internal/store/wabadger).
-	SessionStore string
-	// BadgerDir is the on-disk directory for the Badger session store (SessionStore=="badger").
+	// BadgerDir is the on-disk directory for the Badger session store (the sole
+	// whatsmeow session backend; local NVMe KV via internal/store/wabadger).
 	BadgerDir string
 	// ProxyBackend selects proxy allocation: "pg" (FOR UPDATE SKIP LOCKED, default)
 	// or "redis" (proxy:avail:{cc} ZSET cooldown ring). PG stays the durable source.
@@ -57,9 +55,6 @@ func (c *Config) withDefaults() {
 	}
 	if c.ConnMaxIdleTime == 0 {
 		c.ConnMaxIdleTime = 5 * time.Minute
-	}
-	if c.SessionStore == "" {
-		c.SessionStore = "pg"
 	}
 	if c.BadgerDir == "" {
 		c.BadgerDir = "/var/lib/wadist/badger"

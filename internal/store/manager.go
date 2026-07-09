@@ -13,7 +13,6 @@ import (
 	_ "github.com/jackc/pgx/v5/stdlib" // 注册 "pgx" database/sql 驱动
 
 	"go.mau.fi/whatsmeow/store"
-	"go.mau.fi/whatsmeow/store/sqlstore"
 	"go.mau.fi/whatsmeow/types"
 	waLog "go.mau.fi/whatsmeow/util/log"
 
@@ -33,8 +32,8 @@ func applyQueryMode(poolCfg *pgxpool.Config, poolMode, queryMode string) {
 	}
 }
 
-// deviceContainer is the subset of container behaviour Manager needs (both
-// sqlstore.Container and wabadger.Container satisfy it via store.DeviceContainer).
+// deviceContainer is the subset of container behaviour Manager needs
+// (wabadger.Container satisfies it via store.DeviceContainer).
 type deviceContainer interface {
 	GetDevice(ctx context.Context, jid types.JID) (*store.Device, error)
 	NewDevice() *store.Device
@@ -43,7 +42,7 @@ type deviceContainer interface {
 type Manager struct {
 	cfg        Config
 	container  deviceContainer
-	badgerDB   *wabadger.DB // set when cfg.SessionStore=="badger"; closed by Manager.Close
+	badgerDB   *wabadger.DB // the whatsmeow session store; closed by Manager.Close
 	bizPool    *pgxpool.Pool
 	tenantPool *pgxpool.Pool // RLS-constrained role app_tenant (or bizPool fallback)
 	systemPool *pgxpool.Pool // BYPASSRLS role app_system (or bizPool fallback)
@@ -100,7 +99,7 @@ func newManager(ctx context.Context, cfg Config, logger waLog.Logger) (*Manager,
 	var container deviceContainer
 	var badgerDB *wabadger.DB
 	// closeBadger releases the Badger DB (and its exclusive on-disk dir lock) on
-	// error-return paths. It's a no-op in the pg backend (badgerDB stays nil).
+	// error-return paths.
 	// Every post-open error path below must call this alongside sqlDB.Close(),
 	// or a transient pool-config failure would leak the dir lock and block any
 	// later NewManager/Init on the same BadgerDir until process restart.
@@ -109,26 +108,14 @@ func newManager(ctx context.Context, cfg Config, logger waLog.Logger) (*Manager,
 			_ = badgerDB.Close()
 		}
 	}
-	switch cfg.SessionStore {
-	case "badger":
-		bdb, err := wabadger.Open(cfg.BadgerDir)
-		if err != nil {
-			_ = sqlDB.Close()
-			return nil, fmt.Errorf("open badger: %w", err)
-		}
-		badgerDB = bdb
-		container = wabadger.NewContainer(bdb, logger)
-		// NOTE: sqlDB is still opened for business tables; whatsmeow tables are unused.
-	default: // "pg"
-		sc := sqlstore.NewWithDB(sqlDB, "postgres", logger)
-		upgradeCtx, upgradeCancel := context.WithTimeout(ctx, 30*time.Second)
-		defer upgradeCancel()
-		if err := sc.Upgrade(upgradeCtx); err != nil {
-			_ = sqlDB.Close()
-			return nil, fmt.Errorf("upgrade whatsmeow schema: %w", err)
-		}
-		container = sc
+	bdb, err := wabadger.Open(cfg.BadgerDir)
+	if err != nil {
+		_ = sqlDB.Close()
+		return nil, fmt.Errorf("open badger: %w", err)
 	}
+	badgerDB = bdb
+	container = wabadger.NewContainer(bdb, logger)
+	// NOTE: sqlDB 仍为业务表打开；whatsmeow session 表不再使用。
 
 	poolCfg, err := pgxpool.ParseConfig(cfg.DSN)
 	if err != nil {

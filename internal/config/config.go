@@ -235,7 +235,6 @@ func (c *Config) Store() store.Config {
 		NodeID:        c.NodeID,
 		AppTenantDSN:  c.AppTenantDSN,
 		AppSystemDSN:  c.AppSystemDSN,
-		SessionStore:  os.Getenv("WADIST_SESSION_STORE"),
 		BadgerDir:     os.Getenv("WADIST_BADGER_DIR"),
 		ProxyBackend:  os.Getenv("WADIST_PROXY_BACKEND"),
 		ProxyCooldown: msEnvZero("WADIST_PROXY_COOLDOWN_MS"),
