@@ -2,7 +2,6 @@
 package store
 
 import (
-	"strings"
 	"testing"
 	"time"
 
@@ -46,41 +45,16 @@ func TestConfig_ProxyDefaults(t *testing.T) {
 	}
 }
 
-func TestConfig_withDefaults_lockConns(t *testing.T) {
-	// Zero value should default to 300.
-	c := Config{DSN: "postgres://x"}
-	c.withDefaults()
-	if c.MaxLockConns != 300 {
-		t.Fatalf("MaxLockConns = %d, want 300", c.MaxLockConns)
-	}
-
-	// Explicit value must be preserved.
-	c2 := Config{DSN: "postgres://x", MaxLockConns: 200}
-	c2.withDefaults()
-	if c2.MaxLockConns != 200 {
-		t.Fatalf("explicit MaxLockConns overwritten: %d", c2.MaxLockConns)
-	}
-}
-
-func TestConfigValidate_PgbouncerRequiresRedis(t *testing.T) {
-	c := Config{PoolMode: "pgbouncer", OwnershipBackend: "pg"}
-	c.withDefaults()
-	err := c.validate()
-	if err == nil || !strings.Contains(err.Error(), "redis") {
-		t.Fatalf("want error mentioning redis; got %v", err)
-	}
-}
-
-func TestConfigValidate_PgbouncerWithRedisOK(t *testing.T) {
-	c := Config{PoolMode: "pgbouncer", OwnershipBackend: "redis"}
+func TestConfigValidate_PgbouncerOK(t *testing.T) {
+	c := Config{PoolMode: "pgbouncer"}
 	c.withDefaults()
 	if err := c.validate(); err != nil {
-		t.Fatalf("pgbouncer+redis should validate; got %v", err)
+		t.Fatalf("pgbouncer should validate; got %v", err)
 	}
 }
 
 func TestConfigValidate_CapsMaxConns(t *testing.T) {
-	c := Config{PoolMode: "pgbouncer", OwnershipBackend: "redis", MaxOpenConns: 500}
+	c := Config{PoolMode: "pgbouncer", MaxOpenConns: 500}
 	c.withDefaults()
 	if err := c.validate(); err != nil {
 		t.Fatalf("unexpected err: %v", err)

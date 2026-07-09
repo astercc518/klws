@@ -43,7 +43,7 @@ type LivenessConn interface {
 }
 
 // DeviceLockHandle is the cross-process ownership lock for an account.
-// *store.DeviceLock satisfies this structurally.
+// store.LockHandle satisfies this structurally.
 type DeviceLockHandle interface {
 	Healthy(ctx context.Context) bool
 	Release(ctx context.Context)

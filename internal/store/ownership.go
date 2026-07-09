@@ -32,28 +32,18 @@ type Ownership interface {
 	Unowned(ctx context.Context) ([]string, error)
 }
 
-// newOwnership constructs the Ownership backend selected by m.cfg.OwnershipBackend.
+// newOwnership constructs the Ownership backend. Redis leases (with fence
+// tokens) are the sole ownership backend.
 func newOwnership(m *Manager) Ownership {
-	switch m.cfg.OwnershipBackend {
-	case "redis":
-		return newRedisOwnershipWithRoster(m.cfg.Redis, m.ListActiveAccounts, m.cfg.OwnershipTTL)
-	case "shadow":
-		return newShadowOwnership(&pgOwnership{m: m}, newRedisOwnershipWithRoster(m.cfg.Redis, m.ListActiveAccounts, m.cfg.OwnershipTTL), m.cfg.OnShadowDivergence)
-	default:
-		return &pgOwnership{m: m}
-	}
+	return newRedisOwnershipWithRoster(m.cfg.Redis, m.ListActiveAccounts, m.cfg.OwnershipTTL)
 }
 
 // backendName returns a short string identifying the concrete Ownership type.
 // Used in tests and observability.
 func backendName(o Ownership) string {
 	switch o.(type) {
-	case *pgOwnership:
-		return "pg"
 	case *redisOwnership:
 		return "redis"
-	case *shadowOwnership:
-		return "shadow"
 	default:
 		return "unknown"
 	}

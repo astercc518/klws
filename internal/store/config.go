@@ -2,7 +2,6 @@
 package store
 
 import (
-	"fmt"
 	"time"
 
 	goredis "github.com/redis/go-redis/v9"
@@ -16,32 +15,21 @@ type Config struct {
 	ConnMaxLifetime time.Duration
 	ConnMaxIdleTime time.Duration
 	NodeID          string
-	// MaxLockConns bounds the number of concurrently-held device advisory locks
-	// on this node. Each held lock pins one dedicated connection for its full
-	// session lifetime, so this value equals the per-node account ceiling.
-	MaxLockConns int32
 	// AppTenantDSN is the DSN for the RLS-constrained app_tenant role.
 	// Empty → falls back to bizPool (single-DSN dev mode; RLS not enforced).
 	AppTenantDSN string
 	// AppSystemDSN is the DSN for the app_system role (BYPASSRLS).
 	// Empty → falls back to bizPool.
 	AppSystemDSN string
-	// OwnershipBackend selects the ownership implementation: "pg" (default) | "redis" | "shadow".
-	OwnershipBackend string
 	// PoolMode selects the PG connection strategy: "direct" (default) or
-	// "pgbouncer" (transaction-pooled: simple/exec protocol, no lockPool,
-	// requires OwnershipBackend=="redis").
+	// "pgbouncer" (transaction-pooled: simple/exec protocol).
 	PoolMode string
 	// QueryMode is the pgx exec mode under pgbouncer: "exec" (default) | "simple".
 	QueryMode string
-	// Redis is the client used by the redis/shadow ownership backends.
-	// Must be non-nil when OwnershipBackend is "redis" or "shadow".
+	// Redis is the client used by the redis ownership backend. Must be non-nil.
 	Redis *goredis.Client
-	// OnShadowDivergence is called when the shadow backend detects a divergence
-	// between the pg and redis ownership states. Placeholder until Task 6.
-	OnShadowDivergence func(op string)
-	// OwnershipTTL is the Redis heartbeat key TTL for the redis/shadow ownership
-	// backends (a node is considered dead when its hb key expires). Should equal
+	// OwnershipTTL is the Redis heartbeat key TTL for the redis ownership
+	// backend (a node is considered dead when its hb key expires). Should equal
 	// the cluster NodeStaleness. Heartbeat interval MUST be < OwnershipTTL.
 	OwnershipTTL time.Duration
 	// SessionStore selects the whatsmeow store backend: "pg" (sqlstore, default) or
@@ -70,12 +58,6 @@ func (c *Config) withDefaults() {
 	if c.ConnMaxIdleTime == 0 {
 		c.ConnMaxIdleTime = 5 * time.Minute
 	}
-	if c.MaxLockConns == 0 {
-		c.MaxLockConns = 300
-	}
-	if c.OwnershipBackend == "" {
-		c.OwnershipBackend = "pg"
-	}
 	if c.SessionStore == "" {
 		c.SessionStore = "pg"
 	}
@@ -100,14 +82,11 @@ func (c *Config) withDefaults() {
 }
 
 // validate enforces cross-field constraints after defaults are applied.
-// pgbouncer transaction pooling is incompatible with session-level advisory
-// locks, so it requires the redis ownership backend; MaxOpenConns is capped at
-// the PgBouncer client-conn ceiling.
+// pgbouncer transaction pooling caps MaxOpenConns at the PgBouncer
+// client-conn ceiling. (Ownership is unconditionally redis now, so the
+// former OwnershipBackend=="redis" requirement here is moot.)
 func (c *Config) validate() error {
 	if c.PoolMode == "pgbouncer" {
-		if c.OwnershipBackend != "redis" {
-			return fmt.Errorf("store: pgbouncer mode requires WADIST_OWNERSHIP_BACKEND=redis, got %q", c.OwnershipBackend)
-		}
 		if c.MaxOpenConns > 200 {
 			c.MaxOpenConns = 200
 		}

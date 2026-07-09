@@ -18,7 +18,6 @@ type Config struct {
 	RedisAddr           string
 	NodeID              string
 	MaxOpenConns        int32 // business pool size
-	MaxLockConns        int32 // dedicated advisory-lock pool size (per-node account ceiling)
 	MetricsAddr         string
 	ShutdownTimeout     time.Duration
 	MaxConcurrentStarts int
@@ -40,8 +39,6 @@ type Config struct {
 	// PreStopDelay is the time to wait after /readyz → 503 before beginning
 	// supervisor shutdown, giving k8s time to remove the endpoint (default 5s).
 	PreStopDelay time.Duration // WADIST_PRESTOP_DELAY default 5s
-	// OwnershipBackend selects the ownership implementation: "pg" (default) | "redis" | "shadow".
-	OwnershipBackend string // WADIST_OWNERSHIP_BACKEND default "pg"
 	// Anti-fingerprint / anthropomorphic pacing.
 	AntifpOn    bool          // WADIST_ANTIFP default "on" (off to disable)
 	FenceOnSend bool          // WADIST_OWNERSHIP_FENCE_ON_SEND default "true"
@@ -118,7 +115,6 @@ func Load() (*Config, error) {
 		RedisAddr:    getenv("WADIST_REDIS_ADDR", "localhost:6379"),
 		NodeID:       getenv("WADIST_NODE_ID", hostnameOr("node-unknown")),
 		MaxOpenConns: getenvInt32("WADIST_MAX_OPEN_CONNS", 50),
-		MaxLockConns: getenvInt32("WADIST_MAX_LOCK_CONNS", 300),
 		MetricsAddr:  getenv("WADIST_METRICS_ADDR", ":9090"),
 	}
 	cfg.ShutdownTimeout = 30 * time.Second
@@ -153,7 +149,6 @@ func Load() (*Config, error) {
 	}
 	cfg.AppTenantDSN = getenv("WADIST_APP_TENANT_DSN", "")
 	cfg.AppSystemDSN = getenv("WADIST_APP_SYSTEM_DSN", "")
-	cfg.OwnershipBackend = getenv("WADIST_OWNERSHIP_BACKEND", "pg")
 	cfg.NodeRegion = getenv("WADIST_NODE_REGION", "default")
 	cfg.PreStopDelay = 5 * time.Second
 	if v := getenv("WADIST_PRESTOP_DELAY", ""); v != "" {
@@ -235,19 +230,17 @@ func Load() (*Config, error) {
 // Store projects the app config onto the storage layer's Config.
 func (c *Config) Store() store.Config {
 	return store.Config{
-		DSN:              c.PostgresDSN,
-		MaxOpenConns:     c.MaxOpenConns,
-		MaxLockConns:     c.MaxLockConns,
-		NodeID:           c.NodeID,
-		AppTenantDSN:     c.AppTenantDSN,
-		AppSystemDSN:     c.AppSystemDSN,
-		OwnershipBackend: c.OwnershipBackend,
-		SessionStore:     os.Getenv("WADIST_SESSION_STORE"),
-		BadgerDir:        os.Getenv("WADIST_BADGER_DIR"),
-		ProxyBackend:     os.Getenv("WADIST_PROXY_BACKEND"),
-		ProxyCooldown:    msEnvZero("WADIST_PROXY_COOLDOWN_MS"),
-		PoolMode:         c.PgPoolMode,
-		QueryMode:        c.PgQueryMode,
+		DSN:           c.PostgresDSN,
+		MaxOpenConns:  c.MaxOpenConns,
+		NodeID:        c.NodeID,
+		AppTenantDSN:  c.AppTenantDSN,
+		AppSystemDSN:  c.AppSystemDSN,
+		SessionStore:  os.Getenv("WADIST_SESSION_STORE"),
+		BadgerDir:     os.Getenv("WADIST_BADGER_DIR"),
+		ProxyBackend:  os.Getenv("WADIST_PROXY_BACKEND"),
+		ProxyCooldown: msEnvZero("WADIST_PROXY_COOLDOWN_MS"),
+		PoolMode:      c.PgPoolMode,
+		QueryMode:     c.PgQueryMode,
 		// Redis is injected by cmd/wadist after Store() returns.
 	}
 }

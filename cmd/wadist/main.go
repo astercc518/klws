@@ -95,7 +95,6 @@ func run(ctx context.Context, cfg *config.Config) (*metrics.Server, func(), erro
 	rdb := goredis.NewClient(&goredis.Options{Addr: cfg.RedisAddr})
 	sc := cfg.Store()
 	sc.Redis = rdb
-	sc.OnShadowDivergence = func(op string) { m.ObserveOwnershipDivergence(op) }
 	sc.OwnershipTTL = cfg.NodeStaleness
 	if cfg.HeartbeatInterval >= cfg.NodeStaleness {
 		log.Printf("warn: HeartbeatInterval(%s) >= NodeStaleness(%s); ownership leases may expire before refresh", cfg.HeartbeatInterval, cfg.NodeStaleness)

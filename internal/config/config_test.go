@@ -78,7 +78,6 @@ func TestLoad_DefaultsAndStoreMapping(t *testing.T) {
 	t.Setenv("WADIST_REDIS_ADDR", "")
 	t.Setenv("WADIST_NODE_ID", "node-7")
 	t.Setenv("WADIST_MAX_OPEN_CONNS", "")
-	t.Setenv("WADIST_MAX_LOCK_CONNS", "200")
 
 	c, err := Load()
 	if err != nil {
@@ -90,12 +89,9 @@ func TestLoad_DefaultsAndStoreMapping(t *testing.T) {
 	if c.MaxOpenConns != 50 {
 		t.Fatalf("MaxOpenConns default = %d, want 50", c.MaxOpenConns)
 	}
-	if c.MaxLockConns != 200 {
-		t.Fatalf("MaxLockConns = %d, want 200", c.MaxLockConns)
-	}
 
 	sc := c.Store()
-	if sc.DSN != "postgres://x" || sc.NodeID != "node-7" || sc.MaxLockConns != 200 {
+	if sc.DSN != "postgres://x" || sc.NodeID != "node-7" {
 		t.Fatalf("Store() mapping wrong: %+v", sc)
 	}
 }

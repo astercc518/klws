@@ -61,16 +61,19 @@ func TestRunTakeoverScanner_EnqueuesStale(t *testing.T) {
 	if testing.Short() {
 		t.Skip("integration")
 	}
-	m := newTestManager(t)
+	m := newTestManager(t) // NodeID=testManagerNodeID, redis-wired
 	ctx := context.Background()
 	redisAddr := startRedis(t)
 	client := asynq.NewClient(asynq.RedisClientOpt{Addr: redisAddr})
 	defer client.Close()
 
-	// Insert a dead node and claim an account under it
-	m.BizPool().Exec(ctx, `INSERT INTO cluster_nodes (node_id, last_heartbeat_at) VALUES ('dead', now() - interval '10 minutes')`)
+	// Acquire ownership under this manager's node without ever heartbeating —
+	// StaleOwned (redis backend) treats an owned account with no live
+	// heartbeat key as a takeover candidate.
 	seedAccountDevice(t, ctx, m, "jid-stale")
-	m.ClaimAccount(ctx, "jid-stale", "dead")
+	if _, err := m.AcquireDeviceLock(ctx, "jid-stale"); err != nil {
+		t.Fatalf("acquire jid-stale: %v", err)
+	}
 
 	o := NewOrchestrator(m, nil, nil, "node-scan", nil, time.Second, nil)
 	enq := NewTakeoverEnqueuer(client, 30*time.Second)
@@ -88,18 +91,22 @@ func TestScanOnce_EnqueuesUnowned(t *testing.T) {
 	if testing.Short() {
 		t.Skip("integration")
 	}
-	m := newTestManager(t)
+	m := newTestManager(t) // NodeID=testManagerNodeID, redis-wired
 	ctx := context.Background()
 	redisAddr := startRedis(t)
 	client := asynq.NewClient(asynq.RedisClientOpt{Addr: redisAddr})
 	defer client.Close()
 
-	// Seed one owned (live) account — must NOT be picked up by unowned path.
-	m.BizPool().Exec(ctx, `INSERT INTO cluster_nodes (node_id, last_heartbeat_at) VALUES ('live', now())`)
+	// Seed one owned (live) account — must NOT be picked up by the unowned path.
 	seedAccountDevice(t, ctx, m, "jid-owned-scan")
-	m.ClaimAccount(ctx, "jid-owned-scan", "live")
+	if _, err := m.AcquireDeviceLock(ctx, "jid-owned-scan"); err != nil {
+		t.Fatalf("acquire jid-owned-scan: %v", err)
+	}
+	if err := m.UpsertNodeHeartbeat(ctx, testManagerNodeID); err != nil {
+		t.Fatalf("heartbeat: %v", err)
+	}
 
-	// Seed one unowned active account (owner_node IS NULL).
+	// Seed one unowned active account (no redis owner key set).
 	seedAccountDevice(t, ctx, m, "jid-unowned-scan")
 
 	o := NewOrchestrator(m, nil, nil, "node-scan2", nil, time.Second, nil)

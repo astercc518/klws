@@ -45,12 +45,11 @@ type Manager struct {
 	container  deviceContainer
 	badgerDB   *wabadger.DB // set when cfg.SessionStore=="badger"; closed by Manager.Close
 	bizPool    *pgxpool.Pool
-	lockPool   *pgxpool.Pool
 	tenantPool *pgxpool.Pool // RLS-constrained role app_tenant (or bizPool fallback)
 	systemPool *pgxpool.Pool // BYPASSRLS role app_system (or bizPool fallback)
 	sqlDB      *sql.DB
 	log        waLog.Logger
-	ownership  Ownership            // pluggable ownership backend; default: pgOwnership
+	ownership  Ownership            // account ownership backend: redis lease w/ fence tokens
 	proxyAlloc *redisProxyAllocator // set when cfg.ProxyBackend=="redis"; nil in pg mode (default)
 }
 
@@ -151,39 +150,11 @@ func newManager(ctx context.Context, cfg Config, logger waLog.Logger) (*Manager,
 		return nil, fmt.Errorf("create biz pool: %w", err)
 	}
 
-	var lockPool *pgxpool.Pool
-	if cfg.PoolMode != "pgbouncer" {
-		lockPoolCfg, err := pgxpool.ParseConfig(cfg.DSN)
-		if err != nil {
-			bizPool.Close()
-			closeBadger()
-			_ = sqlDB.Close()
-			return nil, fmt.Errorf("parse lock pool config: %w", err)
-		}
-		lockPoolCfg.MaxConns = cfg.MaxLockConns
-		lockPoolCfg.MinConns = 0
-		// Use a very large lifetime so pgxpool never lifetime-reaps a pinned lock connection.
-		// pgxpool treats MaxConnLifetime=0 as time.Now() (immediately expired), so we use
-		// a 100-year sentinel instead of 0 to mean "effectively unlimited".
-		lockPoolCfg.MaxConnLifetime = 100 * 365 * 24 * time.Hour
-
-		lockPool, err = pgxpool.NewWithConfig(ctx, lockPoolCfg)
-		if err != nil {
-			bizPool.Close()
-			closeBadger()
-			_ = sqlDB.Close()
-			return nil, fmt.Errorf("create lock pool: %w", err)
-		}
-	}
-
 	// RLS role pools: if DSN is provided build a dedicated pool, else fall back to bizPool.
 	tenantPool := bizPool
 	if cfg.AppTenantDSN != "" {
 		tCfg, err := pgxpool.ParseConfig(cfg.AppTenantDSN)
 		if err != nil {
-			if lockPool != nil {
-				lockPool.Close()
-			}
 			bizPool.Close()
 			closeBadger()
 			_ = sqlDB.Close()
@@ -193,9 +164,6 @@ func newManager(ctx context.Context, cfg Config, logger waLog.Logger) (*Manager,
 		applyQueryMode(tCfg, cfg.PoolMode, cfg.QueryMode)
 		tenantPool, err = pgxpool.NewWithConfig(ctx, tCfg)
 		if err != nil {
-			if lockPool != nil {
-				lockPool.Close()
-			}
 			bizPool.Close()
 			closeBadger()
 			_ = sqlDB.Close()
@@ -210,9 +178,6 @@ func newManager(ctx context.Context, cfg Config, logger waLog.Logger) (*Manager,
 			if tenantPool != bizPool {
 				tenantPool.Close()
 			}
-			if lockPool != nil {
-				lockPool.Close()
-			}
 			bizPool.Close()
 			closeBadger()
 			_ = sqlDB.Close()
@@ -224,9 +189,6 @@ func newManager(ctx context.Context, cfg Config, logger waLog.Logger) (*Manager,
 		if err != nil {
 			if tenantPool != bizPool {
 				tenantPool.Close()
-			}
-			if lockPool != nil {
-				lockPool.Close()
 			}
 			bizPool.Close()
 			closeBadger()
@@ -240,7 +202,6 @@ func newManager(ctx context.Context, cfg Config, logger waLog.Logger) (*Manager,
 		container:  container,
 		badgerDB:   badgerDB,
 		bizPool:    bizPool,
-		lockPool:   lockPool,
 		tenantPool: tenantPool,
 		systemPool: systemPool,
 		sqlDB:      sqlDB,
@@ -276,9 +237,6 @@ func (m *Manager) Close() {
 	}
 	if m.bizPool != nil {
 		m.bizPool.Close()
-	}
-	if m.lockPool != nil {
-		m.lockPool.Close()
 	}
 	if m.sqlDB != nil {
 		_ = m.sqlDB.Close()

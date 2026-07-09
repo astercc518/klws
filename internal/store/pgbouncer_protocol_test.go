@@ -11,7 +11,7 @@ import (
 
 // newPgbouncerTestManager builds a schema-applied Manager configured for
 // PoolMode=="pgbouncer" with the given pgx QueryMode ("simple" or "exec").
-// pgbouncer mode mandates the redis ownership backend, so this mirrors
+// Ownership is unconditionally redis now, so this mirrors
 // newManagerWithSchemaProxyRedis's redis testcontainer wiring.
 func newPgbouncerTestManager(t *testing.T, queryMode string) (*Manager, context.Context) {
 	t.Helper()
@@ -27,11 +27,10 @@ func newPgbouncerTestManager(t *testing.T, queryMode string) (*Manager, context.
 
 	rdb := newTestRedis(t)
 	m, err := newManager(ctx, Config{
-		DSN:              dsn,
-		PoolMode:         "pgbouncer",
-		QueryMode:        queryMode,
-		OwnershipBackend: "redis",
-		Redis:            rdb,
+		DSN:       dsn,
+		PoolMode:  "pgbouncer",
+		QueryMode: queryMode,
+		Redis:     rdb,
 	}, waLog.Noop)
 	if err != nil {
 		t.Fatalf("manager: %v", err)

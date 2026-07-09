@@ -12,11 +12,17 @@ import (
 
 	"github.com/acme/wadist/internal/cluster"
 	"github.com/acme/wadist/internal/store"
+	goredis "github.com/redis/go-redis/v9"
 	"github.com/testcontainers/testcontainers-go"
 	"github.com/testcontainers/testcontainers-go/modules/postgres"
 	"github.com/testcontainers/testcontainers-go/wait"
 	waLog "go.mau.fi/whatsmeow/util/log"
 )
+
+// testManagerNodeID is the fixed cfg.NodeID used by newTestManager. Ownership
+// is redis-only now, so AcquireDeviceLock/UpsertNodeHeartbeat calls against
+// the returned Manager act under this identity.
+const testManagerNodeID = "node-1"
 
 // ---------------------------------------------------------------------------
 // Fakes (cluster's internal fakes are not exported)
@@ -82,7 +88,12 @@ func newTestManager(t *testing.T) *store.Manager {
 		t.Fatalf("dsn: %v", err)
 	}
 
-	m, err := store.NewManager(ctx, store.Config{DSN: dsn}, waLog.Noop)
+	// Ownership is redis-only now — AcquireDeviceLock needs a live client.
+	redisAddr := startRedis(t)
+	rdb := goredis.NewClient(&goredis.Options{Addr: redisAddr})
+	t.Cleanup(func() { _ = rdb.Close() })
+
+	m, err := store.NewManager(ctx, store.Config{DSN: dsn, Redis: rdb, NodeID: testManagerNodeID}, waLog.Noop)
 	if err != nil {
 		t.Fatalf("newManager: %v", err)
 	}
@@ -161,8 +172,14 @@ func TestStartAccountWithLock_SkipsWhenLockedByPeer(t *testing.T) {
 	m := newTestManager(t)
 	ctx := context.Background()
 	seedAccountDevice(t, ctx, m, "jid-s2")
+	// A live heartbeat must exist for the owning node, otherwise the redis
+	// lease's "still locked" check treats it as abandoned and lets a second
+	// Acquire steal it immediately.
+	if err := m.UpsertNodeHeartbeat(ctx, testManagerNodeID); err != nil {
+		t.Fatal(err)
+	}
 	// Pre-acquire the lock from the same manager — a second AcquireDeviceLock on
-	// the same JID returns ErrDeviceLocked (different pinned conn, same PG advisory key).
+	// the same JID returns ErrDeviceLocked (owning node's heartbeat still live).
 	peerLock, err := m.AcquireDeviceLock(ctx, "jid-s2")
 	if err != nil {
 		t.Fatal(err)
