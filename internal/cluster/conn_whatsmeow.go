@@ -37,9 +37,10 @@ type waConn struct {
 // Connect time (per-account dynamic 4G proxy) before dialing. When onReceipt is
 // non-nil, a delivery/read receipt event handler is registered before connect —
 // a thin translation that forwards events.Receipt to onReceipt and nothing else.
-// When manageLifecycle is true, whatsmeow's built-in auto-reconnect is disabled
-// and a terminal-signal event handler is installed (see below).
-func NewWAConn(device *waproto.Device, logger waLog.Logger, proxy *store.ProxyBinding, onReceipt ReceiptFunc, manageLifecycle bool) *waConn {
+// whatsmeow's built-in auto-reconnect is always disabled and a terminal-signal
+// event handler is always installed (see below); the ghost reaper owns
+// reconnect/reclaim lifecycle instead.
+func NewWAConn(device *waproto.Device, logger waLog.Logger, proxy *store.ProxyBinding, onReceipt ReceiptFunc) *waConn {
 	client := whatsmeow.NewClient(device, logger)
 	c := &waConn{client: client, proxy: proxy}
 	if onReceipt != nil {
@@ -66,19 +67,17 @@ func NewWAConn(device *waproto.Device, logger waLog.Logger, proxy *store.ProxyBi
 			onReceipt(ids, kind, r.Timestamp)
 		})
 	}
-	if manageLifecycle {
-		// Take back lifecycle control: stop whatsmeow's invisible auto-reconnect
-		// so a half-dead socket surfaces as a ghost instead of self-healing while
-		// leaking FDs/goroutines/proxy sockets. Terminal signals set Permanent so
-		// the reaper marks the account logged-out rather than re-warming it.
-		client.EnableAutoReconnect = false
-		client.AddEventHandler(func(evt any) {
-			switch evt.(type) {
-			case *events.LoggedOut, *events.StreamReplaced:
-				c.permanent.Store(true)
-			}
-		})
-	}
+	// Take back lifecycle control: stop whatsmeow's invisible auto-reconnect so
+	// a half-dead socket surfaces as a ghost instead of self-healing while
+	// leaking FDs/goroutines/proxy sockets. Terminal signals set Permanent so
+	// the reaper marks the account logged-out rather than re-warming it.
+	client.EnableAutoReconnect = false
+	client.AddEventHandler(func(evt any) {
+		switch evt.(type) {
+		case *events.LoggedOut, *events.StreamReplaced:
+			c.permanent.Store(true)
+		}
+	})
 	return c
 }
 

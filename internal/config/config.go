@@ -40,7 +40,6 @@ type Config struct {
 	// supervisor shutdown, giving k8s time to remove the endpoint (default 5s).
 	PreStopDelay time.Duration // WADIST_PRESTOP_DELAY default 5s
 	// Anti-fingerprint / anthropomorphic pacing.
-	AntifpOn    bool          // WADIST_ANTIFP default "on" (off to disable)
 	FenceOnSend bool          // WADIST_OWNERSHIP_FENCE_ON_SEND default "true"
 	TypingMin   time.Duration // WADIST_TYPING_MIN_MS default 1200ms
 	TypingMax   time.Duration // WADIST_TYPING_MAX_MS default 3500ms
@@ -66,34 +65,30 @@ type Config struct {
 	PumpBuffer int // WADIST_PUMP_BUFFER default 512
 	// SendWorkers is the number of concurrent send workers driving the pump.
 	SendWorkers int // WADIST_SEND_WORKERS default 32
-	// RiskGovernor enables the adaptive-τ risk governor ("on") or leaves the pump
-	// rate fixed at SendRate ("off", default). Only active in pump dispatch mode.
-	RiskGovernor string // WADIST_RISK_GOVERNOR default "off"
-	// AIMD params: banRate>=GovSLO → τ*=GovFactor (floored at GovMinRate);
+	// Risk governor tuning: adaptive-τ AIMD loop, always active, driven by the
+	// fleet-wide ban rate.
+	// banRate>=GovSLO → τ*=GovFactor (floored at GovMinRate);
 	// banRate<GovSLO → τ+=GovStep (capped at SendRate). Evaluated every
 	// GovIntervalMs over a GovWindowSec window, skipped when attempted<GovMinSample.
 	GovSLO, GovStep, GovFactor, GovMinRate    float64
 	GovIntervalMs, GovWindowSec, GovMinSample int
-	// SegmentGovernor enables L3 per-country segment slowdown ("on") on top of the
-	// L4 risk governor, or leaves segments uncapped ("off", default). Requires
-	// RiskGovernor=="on". Only active in pump dispatch mode.
-	SegmentGovernor string
+	// Segment governor tuning: L3 per-country segment slowdown layered on top of
+	// the L4 risk governor, always active.
 	// A country cc is "hot" when its window ban rate >= max(fleetBaseline*SegMult,
 	// SegSLO) and its attempted >= SegMinSample; a hot cc's sends are capped at
 	// SegSlowRate/s (uncapped again on recovery).
 	SegMult, SegSLO, SegSlowRate float64
 	SegMinSample                 int
 	// Ghost Reaper (M6): bounded reclamation of dead/ghost whatsmeow connections.
-	// Master gate off → auto-reconnect stays on, no lifecycle handlers, no reaper
-	// loop (today's behavior). ttl≤30s per design.
-	GhostReaper string        // WADIST_GHOST_REAPER default "off"
-	GhostTTL    time.Duration // WADIST_GHOST_TTL_MS default 20000
-	GhostMax    int           // WADIST_GHOST_MAX default 128
-	GhostTick   time.Duration // WADIST_GHOST_TICK_MS default 5000
+	// Always active: auto-reconnect stays off and the reaper loop runs
+	// unconditionally. ttl≤30s per design.
+	GhostTTL  time.Duration // WADIST_GHOST_TTL_MS default 20000
+	GhostMax  int           // WADIST_GHOST_MAX default 128
+	GhostTick time.Duration // WADIST_GHOST_TICK_MS default 5000
 	// BootRamp spreads the post-restart warm burst; 0 disables (default).
 	BootRamp time.Duration // WADIST_BOOT_RAMP_MS default 0
-	// Admission backoff (segment-level exponential slowdown on wa_warning).
-	BackoffOn     bool          // WADIST_BACKOFF_ON default "off"
+	// Admission backoff (segment-level exponential slowdown on wa_warning),
+	// always active.
 	BackoffFactor int           // WADIST_BACKOFF_FACTOR default 2
 	BackoffMax    int           // WADIST_BACKOFF_MAX default 8
 	BackoffTTL    time.Duration // WADIST_BACKOFF_TTL_MS default 300000ms
@@ -160,7 +155,6 @@ func Load() (*Config, error) {
 		}
 	}
 
-	cfg.AntifpOn = getenv("WADIST_ANTIFP", "on") != "off"
 	cfg.FenceOnSend = getenv("WADIST_OWNERSHIP_FENCE_ON_SEND", "true") != "false"
 	cfg.TypingMin = msEnv("WADIST_TYPING_MIN_MS", 1200)
 	cfg.TypingMax = msEnv("WADIST_TYPING_MAX_MS", 3500)
@@ -181,7 +175,6 @@ func Load() (*Config, error) {
 	cfg.SendWorkers = intEnv("WADIST_SEND_WORKERS", 32)
 	cfg.SendRate = floatEnv("WADIST_SEND_RATE", 160.0)
 
-	cfg.RiskGovernor = getenv("WADIST_RISK_GOVERNOR", "off")
 	cfg.GovSLO = floatEnv("WADIST_GOV_SLO", 0.02)
 	cfg.GovStep = floatEnv("WADIST_GOV_STEP", 5)
 	cfg.GovFactor = floatEnv("WADIST_GOV_FACTOR", 0.5)
@@ -190,19 +183,16 @@ func Load() (*Config, error) {
 	cfg.GovWindowSec = intEnv("WADIST_GOV_WINDOW_SEC", 900)
 	cfg.GovMinSample = intEnv("WADIST_GOV_MIN_SAMPLE", 20)
 
-	cfg.SegmentGovernor = getenv("WADIST_SEGMENT_GOVERNOR", "off")
 	cfg.SegMult = floatEnv("WADIST_SEG_MULT", 3)
 	cfg.SegSLO = floatEnv("WADIST_SEG_SLO", 0.05)
 	cfg.SegSlowRate = floatEnv("WADIST_SEG_SLOW_RATE", 1)
 	cfg.SegMinSample = intEnv("WADIST_SEG_MIN_SAMPLE", 10)
 
-	cfg.GhostReaper = getenv("WADIST_GHOST_REAPER", "off")
 	cfg.GhostTTL = msEnv("WADIST_GHOST_TTL_MS", 20000)
 	cfg.GhostMax = intEnv("WADIST_GHOST_MAX", 128)
 	cfg.GhostTick = msEnv("WADIST_GHOST_TICK_MS", 5000)
 	cfg.BootRamp = msEnvZero("WADIST_BOOT_RAMP_MS")
 
-	cfg.BackoffOn = getenv("WADIST_BACKOFF_ON", "off") != "off"
 	cfg.BackoffFactor = intEnv("WADIST_BACKOFF_FACTOR", 2)
 	cfg.BackoffMax = intEnv("WADIST_BACKOFF_MAX", 8)
 	cfg.BackoffTTL = msEnv("WADIST_BACKOFF_TTL_MS", 300000)

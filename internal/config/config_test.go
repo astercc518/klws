@@ -277,9 +277,6 @@ func TestLoad_AntifpDefaults(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !cfg.AntifpOn {
-		t.Fatal("AntifpOn 默认应为 true")
-	}
 	if !cfg.FenceOnSend {
 		t.Fatal("FenceOnSend 默认应为 true")
 	}
@@ -297,9 +294,6 @@ func TestConfig_RiskGovernorDefaults(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Load: %v", err)
 	}
-	if cfg.RiskGovernor != "off" {
-		t.Fatalf("RiskGovernor default = %q; want off", cfg.RiskGovernor)
-	}
 	if cfg.GovSLO != 0.02 || cfg.GovFactor != 0.5 || cfg.GovStep != 5 || cfg.GovMinRate != 1 {
 		t.Fatalf("AIMD defaults wrong: slo=%v step=%v factor=%v min=%v", cfg.GovSLO, cfg.GovStep, cfg.GovFactor, cfg.GovMinRate)
 	}
@@ -313,9 +307,6 @@ func TestConfig_SegmentGovernorDefaults(t *testing.T) {
 	cfg, err := Load()
 	if err != nil {
 		t.Fatalf("Load: %v", err)
-	}
-	if cfg.SegmentGovernor != "off" {
-		t.Fatalf("SegmentGovernor default = %q; want off", cfg.SegmentGovernor)
 	}
 	if cfg.SegMult != 3 || cfg.SegSLO != 0.05 || cfg.SegSlowRate != 1 {
 		t.Fatalf("seg AIMD defaults wrong: mult=%v slo=%v slow=%v", cfg.SegMult, cfg.SegSLO, cfg.SegSlowRate)

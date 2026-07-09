@@ -9,21 +9,9 @@ import (
 	goredis "github.com/redis/go-redis/v9"
 )
 
-// admitLua atomically enforces a daily quota hard cap AND a minimum inter-send
-// gap (human-like pacing). KEYS[1]=daily counter, KEYS[2]=last-send timestamp.
-// ARGV: 1=daily_quota 2=min_gap_ms 3=now_ms 4=daily_ttl_seconds.
-const admitLua = `
-local sent = tonumber(redis.call('GET', KEYS[1]) or '0')
-if sent >= tonumber(ARGV[1]) then return {0, 'daily_quota'} end
-local last = tonumber(redis.call('GET', KEYS[2]) or '0')
-if tonumber(ARGV[3]) - last < tonumber(ARGV[2]) then return {0, 'pacing'} end
-redis.call('INCR', KEYS[1])
-if redis.call('TTL', KEYS[1]) < 0 then redis.call('EXPIRE', KEYS[1], tonumber(ARGV[4])) end
-redis.call('SET', KEYS[2], ARGV[3])
-return {1, 'ok'}`
-
-// admitLuaBackoff is admitLua with the min_gap widened by the max of two
-// segment backoff multipliers before the pacing check. KEYS[1]=daily counter,
+// admitLuaBackoff atomically enforces a daily quota hard cap AND a minimum
+// inter-send gap (human-like pacing), with the min_gap widened by the max of
+// two segment backoff multipliers before the pacing check. KEYS[1]=daily counter,
 // KEYS[2]=last-send timestamp, KEYS[3]=cc backoff key, KEYS[4]=net backoff key.
 // ARGV: 1=daily_quota 2=min_gap_ms 3=now_ms 4=daily_ttl_seconds.
 const admitLuaBackoff = `
@@ -49,10 +37,9 @@ if nv > tonumber(ARGV[2]) then nv = tonumber(ARGV[2]) end
 redis.call('SET', KEYS[1], nv, 'PX', tonumber(ARGV[3]))
 return nv`
 
-// BackoffParams controls per-segment exponential backoff on warnings. When On
-// is false, RecordWarning is a no-op.
+// BackoffParams controls per-segment exponential backoff on warnings. Backoff
+// is always active; these are tuning knobs only.
 type BackoffParams struct {
-	On     bool
 	Factor int
 	Max    int
 	TTL    time.Duration
@@ -66,13 +53,9 @@ type Admission struct {
 }
 
 func NewAdmission(rdb *goredis.Client, bp BackoffParams) *Admission {
-	script := admitLua
-	if bp.On {
-		script = admitLuaBackoff
-	}
 	return &Admission{
 		rdb:     rdb,
-		admit:   goredis.NewScript(script),
+		admit:   goredis.NewScript(admitLuaBackoff),
 		backoff: goredis.NewScript(backoffLua),
 		bp:      bp,
 	}
@@ -80,11 +63,8 @@ func NewAdmission(rdb *goredis.Client, bp BackoffParams) *Admission {
 
 // RecordWarning multiplicatively increases each segment's backoff multiplier
 // (capped at bp.Max) with a fresh TTL, so admission widens that segment's
-// min_gap. No-op when backoff is disabled.
+// min_gap.
 func (a *Admission) RecordWarning(ctx context.Context, segKeys ...string) error {
-	if !a.bp.On {
-		return nil
-	}
 	for _, k := range segKeys {
 		if err := a.backoff.Run(ctx, a.rdb, []string{k},
 			a.bp.Factor, a.bp.Max, a.bp.TTL.Milliseconds()).Err(); err != nil {
@@ -103,9 +83,9 @@ type Ticket struct {
 
 // Admit atomically checks daily quota + pacing. On success returns a Ticket and
 // "ok"; on rejection returns (nil, reason) where reason is "daily_quota"/"pacing".
-// ccKey/netKey are per-segment backoff multiplier keys; they are always passed
-// (4 KEYS) — when backoff is off, admit is admitLua which only references
-// KEYS[1,2], so the extra keys are harmless.
+// ccKey/netKey are per-segment backoff multiplier keys (always passed, 4 KEYS)
+// that widen the pacing gap when either segment has an active backoff
+// multiplier.
 func (a *Admission) Admit(ctx context.Context, jid string, quota int, minGap time.Duration, now time.Time, ccKey, netKey string) (*Ticket, string, error) {
 	u := now.UTC()
 	dayKey := "q:" + jid + ":" + u.Format("20060102")

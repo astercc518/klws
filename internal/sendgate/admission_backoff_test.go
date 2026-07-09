@@ -10,7 +10,7 @@ import (
 func TestRecordWarning_DoublesToCap(t *testing.T) {
 	rdb := redisClient(t)
 	ctx := context.Background()
-	a := NewAdmission(rdb, BackoffParams{On: true, Factor: 2, Max: 8, TTL: 300 * time.Second})
+	a := NewAdmission(rdb, BackoffParams{Factor: 2, Max: 8, TTL: 300 * time.Second})
 	key := "backoff:cc:BR"
 	want := []int{2, 4, 8, 8}
 	for i, w := range want {
@@ -27,22 +27,10 @@ func TestRecordWarning_DoublesToCap(t *testing.T) {
 	}
 }
 
-func TestRecordWarning_OffWritesNothing(t *testing.T) {
-	rdb := redisClient(t)
-	ctx := context.Background()
-	a := NewAdmission(rdb, BackoffParams{On: false, Factor: 2, Max: 8, TTL: 300 * time.Second})
-	if err := a.RecordWarning(ctx, "backoff:cc:BR"); err != nil {
-		t.Fatalf("record: %v", err)
-	}
-	if n, _ := rdb.Exists(ctx, "backoff:cc:BR").Result(); n != 0 {
-		t.Fatalf("key exists=%d; want 0 (off writes nothing)", n)
-	}
-}
-
 func TestRecordWarning_SetsTTL(t *testing.T) {
 	rdb := redisClient(t)
 	ctx := context.Background()
-	a := NewAdmission(rdb, BackoffParams{On: true, Factor: 2, Max: 8, TTL: 300 * time.Second})
+	a := NewAdmission(rdb, BackoffParams{Factor: 2, Max: 8, TTL: 300 * time.Second})
 	_ = a.RecordWarning(ctx, "backoff:cc:BR")
 	ttl, _ := rdb.TTL(ctx, "backoff:cc:BR").Result()
 	if ttl <= 0 || ttl > 300*time.Second {
@@ -53,7 +41,7 @@ func TestRecordWarning_SetsTTL(t *testing.T) {
 func TestRecordWarning_MultiSegIndependent(t *testing.T) {
 	rdb := redisClient(t)
 	ctx := context.Background()
-	a := NewAdmission(rdb, BackoffParams{On: true, Factor: 2, Max: 8, TTL: 300 * time.Second})
+	a := NewAdmission(rdb, BackoffParams{Factor: 2, Max: 8, TTL: 300 * time.Second})
 	_ = a.RecordWarning(ctx, "backoff:cc:BR", "backoff:net:1.2.3.0/24")
 	br, _ := rdb.Get(ctx, "backoff:cc:BR").Int()
 	nt, _ := rdb.Get(ctx, "backoff:net:1.2.3.0/24").Int()
@@ -65,7 +53,7 @@ func TestRecordWarning_MultiSegIndependent(t *testing.T) {
 func TestAdmit_BackoffWidensMinGap(t *testing.T) {
 	rdb := redisClient(t)
 	ctx := context.Background()
-	a := NewAdmission(rdb, BackoffParams{On: true, Factor: 2, Max: 8, TTL: 300 * time.Second})
+	a := NewAdmission(rdb, BackoffParams{Factor: 2, Max: 8, TTL: 300 * time.Second})
 	base := time.Unix(1_000_000, 0).UTC()
 	minGap := 100 * time.Millisecond
 	ccKey, netKey := "backoff:cc:BR", "backoff:net:x"
@@ -85,21 +73,5 @@ func TestAdmit_BackoffWidensMinGap(t *testing.T) {
 	}
 	if reason != "pacing" {
 		t.Fatalf("reason=%q; want pacing (backoff widened gap to 400ms)", reason)
-	}
-}
-
-func TestAdmit_OffModeUnchanged(t *testing.T) {
-	rdb := redisClient(t)
-	ctx := context.Background()
-	a := NewAdmission(rdb, BackoffParams{On: false})
-	base := time.Unix(2_000_000, 0).UTC()
-	// even with a backoff key present, off-mode admit ignores it.
-	rdb.Set(ctx, "backoff:cc:BR", 8, 0)
-	if tk, _, err := a.Admit(ctx, "j2", 100, 100*time.Millisecond, base, "backoff:cc:BR", "backoff:net:x"); err != nil || tk == nil {
-		t.Fatalf("first: %v", err)
-	}
-	// 150ms later > 100ms base gap → passes (backoff ignored in off mode).
-	if tk, _, err := a.Admit(ctx, "j2", 100, 100*time.Millisecond, base.Add(150*time.Millisecond), "backoff:cc:BR", "backoff:net:x"); err != nil || tk == nil {
-		t.Fatalf("second should pass in off mode; tk=%v err=%v", tk, err)
 	}
 }

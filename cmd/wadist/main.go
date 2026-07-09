@@ -140,11 +140,9 @@ func run(ctx context.Context, cfg *config.Config) (*metrics.Server, func(), erro
 
 	promReg.MustRegister(metrics.NewDBCollector(pool, 10*time.Second, reg))
 
-	adm := sendgate.NewAdmission(rdb, sendgate.BackoffParams{On: cfg.BackoffOn, Factor: cfg.BackoffFactor, Max: cfg.BackoffMax, TTL: cfg.BackoffTTL})
+	adm := sendgate.NewAdmission(rdb, sendgate.BackoffParams{Factor: cfg.BackoffFactor, Max: cfg.BackoffMax, TTL: cfg.BackoffTTL})
 	gate := sendgate.NewSendGate(pool, adm, 3*time.Second)
-	if cfg.BackoffOn {
-		log.Printf("admission backoff on (factor=%d max=%d ttl=%s)", cfg.BackoffFactor, cfg.BackoffMax, cfg.BackoffTTL)
-	}
+	log.Printf("admission backoff (factor=%d max=%d ttl=%s)", cfg.BackoffFactor, cfg.BackoffMax, cfg.BackoffTTL)
 	asynqClient := asynq.NewClient(asynq.RedisClientOpt{Addr: cfg.RedisAddr})
 
 	// Send driver: the in-memory token-bucket Rolling-Wave pump (sole driver).
@@ -162,14 +160,9 @@ func run(ctx context.Context, cfg *config.Config) (*metrics.Server, func(), erro
 
 	// cluster.NewRoutingSender routes sends to live sessions; returns a clear
 	// error when no active session exists rather than silently succeeding.
-	// When AntifpOn, upgrade to policy-based sender with typing pacing + fence.
-	var routing *cluster.RoutingSender
-	if cfg.AntifpOn {
-		routing = cluster.NewRoutingSenderWithPolicy(reg, cfg.FenceOnSend,
-			cluster.TypingPolicy{Min: cfg.TypingMin, Max: cfg.TypingMax})
-	} else {
-		routing = cluster.NewRoutingSender(reg)
-	}
+	// Always upgraded to the policy-based sender with typing pacing + fence.
+	routing := cluster.NewRoutingSenderWithPolicy(reg, cfg.FenceOnSend,
+		cluster.TypingPolicy{Min: cfg.TypingMin, Max: cfg.TypingMax})
 	priceRepo := pricing.NewRepo(pool)
 	// priceFor falls back to the existing per-country default table when a tenant
 	// has no explicit price configured.
@@ -234,14 +227,12 @@ func run(ctx context.Context, cfg *config.Config) (*metrics.Server, func(), erro
 			}
 		}
 		// proxy may be nil if no proxy is bound — that's acceptable
-		conn := cluster.NewWAConn(device, logger, proxyBinding, onReceipt, cfg.GhostReaper == "on")
+		conn := cluster.NewWAConn(device, logger, proxyBinding, onReceipt)
 		if err := conn.Connect(fctx); err != nil {
 			return nil, err
 		}
-		if cfg.AntifpOn {
-			if pc, ok := any(conn).(cluster.PresenceConn); ok {
-				_ = pc.SetPresence(fctx, true)
-			}
+		if pc, ok := any(conn).(cluster.PresenceConn); ok {
+			_ = pc.SetPresence(fctx, true)
 		}
 		return cluster.NewSessionWithSender(jid, conn, lock, conn), nil
 	})
@@ -337,31 +328,30 @@ func run(ctx context.Context, cfg *config.Config) (*metrics.Server, func(), erro
 	})
 	sup.Go(func(lctx context.Context) error { return ws.Run(lctx, cfg.WSTick) })
 
-	// Ghost Reaper (M6): bounded reclamation of dead whatsmeow sockets. Only when
-	// WADIST_GHOST_REAPER=on — default off keeps auto-reconnect on and runs no
-	// reaper (zero blast radius). Transient ghosts are re-warmed via warm:req
-	// (empty cc reuses the sticky proxy binding); terminal LoggedOut/StreamReplaced
-	// ghosts are marked logged_out (excluded from the active set, not re-warmed).
-	if cfg.GhostReaper == "on" {
-		reaper := node.NewGhostReaper(
-			node.GhostReaperConfig{TTL: cfg.GhostTTL, Max: cfg.GhostMax},
-			node.GhostReaperDeps{
-				Now:      time.Now,
-				Snapshot: func() []node.GhostCandidate { return node.GhostCandidatesFrom(reg.Snapshot()) },
-				Reap: func(ctx context.Context, jid string) error {
-					if s, ok := reg.Remove(jid); ok {
-						s.Close(ctx)
-					}
-					return nil
-				},
-				RequestWarm:   func(ctx context.Context, jid string) error { return rdb.RPush(ctx, "warm:req", jid+"|").Err() },
-				MarkLoggedOut: mgr.MarkAccountLoggedOut,
-				Metrics:       m,
+	// Ghost Reaper (M6): bounded reclamation of dead whatsmeow sockets. Always
+	// active — auto-reconnect is always off (see conn_whatsmeow.go), so the
+	// reaper is the sole path back to a live session. Transient ghosts are
+	// re-warmed via warm:req (empty cc reuses the sticky proxy binding);
+	// terminal LoggedOut/StreamReplaced ghosts are marked logged_out (excluded
+	// from the active set, not re-warmed).
+	reaper := node.NewGhostReaper(
+		node.GhostReaperConfig{TTL: cfg.GhostTTL, Max: cfg.GhostMax},
+		node.GhostReaperDeps{
+			Now:      time.Now,
+			Snapshot: func() []node.GhostCandidate { return node.GhostCandidatesFrom(reg.Snapshot()) },
+			Reap: func(ctx context.Context, jid string) error {
+				if s, ok := reg.Remove(jid); ok {
+					s.Close(ctx)
+				}
+				return nil
 			},
-		)
-		sup.Go(func(lctx context.Context) error { return reaper.Run(lctx, cfg.GhostTick) })
-		log.Printf("ghost reaper on (ttl=%s max=%d tick=%s)", cfg.GhostTTL, cfg.GhostMax, cfg.GhostTick)
-	}
+			RequestWarm:   func(ctx context.Context, jid string) error { return rdb.RPush(ctx, "warm:req", jid+"|").Err() },
+			MarkLoggedOut: mgr.MarkAccountLoggedOut,
+			Metrics:       m,
+		},
+	)
+	sup.Go(func(lctx context.Context) error { return reaper.Run(lctx, cfg.GhostTick) })
+	log.Printf("ghost reaper on (ttl=%s max=%d tick=%s)", cfg.GhostTTL, cfg.GhostMax, cfg.GhostTick)
 	if cfg.BootRamp > 0 {
 		log.Printf("boot warm ramp on (%s)", cfg.BootRamp)
 	}
@@ -441,39 +431,30 @@ func run(ctx context.Context, cfg *config.Config) (*metrics.Server, func(), erro
 	sup.Go(func(lctx context.Context) error { return pump.Run(lctx) })
 
 	// Risk Governor: adaptive-τ AIMD loop over the pump's send rate, driven
-	// by the fleet-wide ban rate. Only active when explicitly enabled —
-	// default is off, which leaves the pump at fixed cfg.SendRate (M3
-	// behavior, zero blast radius).
+	// by the fleet-wide ban rate. Always active.
 	//
 	// Wired with mgr.SystemPool() (BYPASSRLS), matching riskbreaker below:
 	// FleetBanRate queries campaign_recipients, which has FORCE ROW LEVEL
 	// SECURITY. With a tenant-scoped (RLS) pool the fleet-wide aggregate
 	// would silently narrow to one tenant, so mgr.Pool() must never be
 	// used here.
-	if cfg.RiskGovernor == "on" {
-		gov := dispatch.NewGovernor(mgr.SystemPool(), pump.SetRate,
-			dispatch.GovParams{SLO: cfg.GovSLO, Step: cfg.GovStep, Factor: cfg.GovFactor, MinRate: cfg.GovMinRate, MaxRate: cfg.SendRate},
-			cfg.GovWindowSec, cfg.GovMinSample, cfg.SendRate /*start τ at the ceiling*/)
+	gov := dispatch.NewGovernor(mgr.SystemPool(), pump.SetRate,
+		dispatch.GovParams{SLO: cfg.GovSLO, Step: cfg.GovStep, Factor: cfg.GovFactor, MinRate: cfg.GovMinRate, MaxRate: cfg.SendRate},
+		cfg.GovWindowSec, cfg.GovMinSample, cfg.SendRate /*start τ at the ceiling*/)
 
-		// Segment Governor (L3): per-country slowdown layered on top of the
-		// fleet-wide L4 governor above. Only enabled when BOTH RiskGovernor
-		// and SegmentGovernor are "on" — default off leaves gov.setSegRate
-		// nil, so the segment pass in gov.Run is a no-op (M4 behavior,
-		// zero blast radius).
-		if cfg.SegmentGovernor == "on" {
-			gov.WithSegments(pump.SetSegmentRate, dispatch.SegParams{
-				Mult: cfg.SegMult, SegSLO: cfg.SegSLO, SlowRate: cfg.SegSlowRate, MinSample: cfg.SegMinSample,
-			})
-			log.Printf("segment governor on (mult=%.1f segSLO=%.3f slow=%.1f/s minSample=%d)",
-				cfg.SegMult, cfg.SegSLO, cfg.SegSlowRate, cfg.SegMinSample)
-		}
+	// Segment Governor (L3): per-country slowdown layered on top of the
+	// fleet-wide L4 governor above. Always active.
+	gov.WithSegments(pump.SetSegmentRate, dispatch.SegParams{
+		Mult: cfg.SegMult, SegSLO: cfg.SegSLO, SlowRate: cfg.SegSlowRate, MinSample: cfg.SegMinSample,
+	})
+	log.Printf("segment governor on (mult=%.1f segSLO=%.3f slow=%.1f/s minSample=%d)",
+		cfg.SegMult, cfg.SegSLO, cfg.SegSlowRate, cfg.SegMinSample)
 
-		sup.Go(func(lctx context.Context) error {
-			return gov.Run(lctx, time.Duration(cfg.GovIntervalMs)*time.Millisecond)
-		})
-		log.Printf("risk governor on (SLO=%.3f step=%.1f factor=%.2f min=%.1f max=%.1f window=%ds interval=%dms)",
-			cfg.GovSLO, cfg.GovStep, cfg.GovFactor, cfg.GovMinRate, cfg.SendRate, cfg.GovWindowSec, cfg.GovIntervalMs)
-	}
+	sup.Go(func(lctx context.Context) error {
+		return gov.Run(lctx, time.Duration(cfg.GovIntervalMs)*time.Millisecond)
+	})
+	log.Printf("risk governor on (SLO=%.3f step=%.1f factor=%.2f min=%.1f max=%.1f window=%ds interval=%dms)",
+		cfg.GovSLO, cfg.GovStep, cfg.GovFactor, cfg.GovMinRate, cfg.SendRate, cfg.GovWindowSec, cfg.GovIntervalMs)
 
 	// Filler: backpressure-driven top-up (no 1s pulse) — tops the buffer up
 	// to its capacity every 50ms via Dispatcher.DispatchRunningBudget, which
