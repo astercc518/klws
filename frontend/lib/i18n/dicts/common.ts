@@ -4,6 +4,7 @@ import type { Locale } from "@/lib/i18n";
  *  toggles, sidebar affordances). Keys are dot-namespaced. */
 export const common: Record<Locale, Record<string, string>> = {
   zh: {
+    "common.loading": "加载中…",
     "header.brand": "管理后台",
     "header.searchPlaceholder": "搜索租户、设备、代理…",
     "header.searchAria": "全局搜索",
@@ -18,6 +19,7 @@ export const common: Record<Locale, Record<string, string>> = {
     "sidebar.collapse": "折叠侧边栏",
   },
   en: {
+    "common.loading": "Loading…",
     "header.brand": "Admin",
     "header.searchPlaceholder": "Search tenants, devices, proxies…",
     "header.searchAria": "Global search",

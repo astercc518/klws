@@ -1,5 +1,8 @@
+"use client";
+
 import { cn } from "@/lib/utils";
 import type { Me } from "@/components/admin/use-me";
+import { useT } from "@/components/locale-provider";
 
 const ROLE_LABEL: Record<Me["role"], string> = {
   admin: "Super Admin",
@@ -27,11 +30,12 @@ export function AdminAvatar({ me, className }: { me: Me | null; className?: stri
 
 /** Avatar + two-line identity, used in the sidebar footer and header menu. */
 export function AdminIdentity({ me, className }: { me: Me | null; className?: string }) {
+  const t = useT();
   return (
     <div className={cn("flex min-w-0 items-center gap-2.5", className)}>
       <AdminAvatar me={me} />
       <div className="min-w-0 leading-tight">
-        <div className="truncate text-sm font-medium">{me ? ROLE_LABEL[me.role] : "加载中…"}</div>
+        <div className="truncate text-sm font-medium">{me ? ROLE_LABEL[me.role] : t("common.loading")}</div>
         <div className="truncate font-mono text-[11px] text-muted-foreground">
           {me ? `uid #${me.user_id}` : "—"}
         </div>

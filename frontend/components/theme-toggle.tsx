@@ -3,15 +3,17 @@
 import { useTheme } from "next-themes";
 import { Moon, Sun } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { useT } from "@/components/locale-provider";
 
 export function ThemeToggle() {
   const { resolvedTheme, setTheme } = useTheme();
+  const t = useT();
 
   return (
     <Button
       variant="ghost"
       size="icon-sm"
-      aria-label="切换主题"
+      aria-label={t("toggle.theme")}
       onClick={() => setTheme(resolvedTheme === "dark" ? "light" : "dark")}
       className="text-muted-foreground"
     >
