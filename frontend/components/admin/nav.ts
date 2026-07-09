@@ -31,16 +31,20 @@ export interface NavItem {
 export interface NavGroup {
   /** Section heading shown above its items (hidden when collapsed). */
   title: string;
+  /** English section heading, used when locale is "en". */
+  en: string;
   items: NavItem[];
 }
 
 export const NAV_GROUPS: NavGroup[] = [
   {
     title: "概览",
+    en: "Overview",
     items: [{ href: "/admin", label: "运行信息", en: "Overview", icon: LayoutDashboard }],
   },
   {
     title: "客户与财务",
+    en: "Customers & Finance",
     items: [
       { href: "/admin/users", label: "客户", en: "Customers", icon: Users },
       { href: "/admin/ledger", label: "财务流水", en: "Ledger", icon: ReceiptText },
@@ -49,6 +53,7 @@ export const NAV_GROUPS: NavGroup[] = [
   },
   {
     title: "资源",
+    en: "Resources",
     items: [
       { href: "/admin/resources", label: "代理网络池", en: "Proxies", icon: Globe },
       { href: "/admin/devices", label: "节点与设备", en: "Devices", icon: Smartphone },
@@ -56,6 +61,7 @@ export const NAV_GROUPS: NavGroup[] = [
   },
   {
     title: "发送中心",
+    en: "Sending",
     items: [
       { href: "/admin/campaigns", label: "发送任务", en: "Campaigns", icon: Send },
       { href: "/admin/send-records", label: "发送记录", en: "Send Records", icon: ListChecks },
@@ -77,12 +83,14 @@ export const NAV_GROUPS: NavGroup[] = [
   },
   {
     title: "策略中心",
+    en: "Policy",
     items: [
       { href: "/admin/settings/risk", label: "风控策略", en: "Risk", icon: SlidersHorizontal },
     ],
   },
   {
     title: "系统审计",
+    en: "Audit",
     items: [{ href: "/admin/audit", label: "风控与审计", en: "Audit", icon: ScrollText }],
   },
 ];

@@ -6,7 +6,7 @@ import { Search, Bell, LogOut, ChevronRight } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { ThemeToggle } from "@/components/theme-toggle";
 import { LanguageToggle } from "@/components/language-toggle";
-import { useT } from "@/components/locale-provider";
+import { useLocale, useT } from "@/components/locale-provider";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -22,13 +22,18 @@ import { logout } from "@/lib/api";
 
 function useCrumbs() {
   const pathname = usePathname();
+  const { locale } = useLocale();
+  const t = useT();
   const resolved = resolveRoute(pathname);
+  const en = locale === "en";
   // Root crumb + the section (when it adds information) + the current page.
-  const crumbs: { label: string; href?: string }[] = [{ label: "管理后台", href: "/admin" }];
+  const crumbs: { label: string; href?: string }[] = [
+    { label: t("header.brand"), href: "/admin" },
+  ];
   if (resolved) {
     const onOverview = resolved.item.href === "/admin";
-    if (!onOverview) crumbs.push({ label: resolved.group.title });
-    crumbs.push({ label: resolved.item.label });
+    if (!onOverview) crumbs.push({ label: en ? resolved.group.en : resolved.group.title });
+    crumbs.push({ label: en ? resolved.item.en : resolved.item.label });
   }
   return crumbs;
 }
@@ -46,7 +51,7 @@ export function AdminHeader() {
   return (
     <header className="sticky top-0 z-20 flex h-16 shrink-0 items-center gap-4 border-b border-border/60 bg-background/80 px-5 backdrop-blur supports-[backdrop-filter]:bg-background/65 lg:px-8">
       {/* Breadcrumbs */}
-      <nav aria-label="面包屑" className="flex min-w-0 items-center gap-1.5 text-sm">
+      <nav aria-label={t("header.breadcrumb")} className="flex min-w-0 items-center gap-1.5 text-sm">
         {crumbs.map((c, i) => {
           const last = i === crumbs.length - 1;
           return (

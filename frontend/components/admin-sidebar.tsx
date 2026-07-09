@@ -8,6 +8,7 @@ import { NAV_GROUPS } from "@/components/admin/nav";
 import { AdminIdentity } from "@/components/admin/admin-avatar";
 import { useMe } from "@/components/admin/use-me";
 import { Logo } from "@/components/landing/logo";
+import { useLocale, useT } from "@/components/locale-provider";
 
 export function AdminSidebar({
   collapsed,
@@ -18,6 +19,9 @@ export function AdminSidebar({
 }) {
   const pathname = usePathname();
   const me = useMe();
+  const { locale } = useLocale();
+  const t = useT();
+  const en = locale === "en";
 
   return (
     <aside
@@ -47,7 +51,7 @@ export function AdminSidebar({
               <div className="mx-2 mb-2 h-px bg-border first:hidden" />
             ) : (
               <div className="px-2 pb-1.5 font-mono text-[10px] uppercase tracking-[0.16em] text-muted-foreground/70">
-                {group.title}
+                {en ? group.en : group.title}
               </div>
             )}
             <ul className="space-y-0.5">
@@ -61,7 +65,7 @@ export function AdminSidebar({
                   <li key={item.href}>
                     <Link
                       href={item.href}
-                      title={collapsed ? item.label : undefined}
+                      title={collapsed ? (en ? item.en : item.label) : undefined}
                       aria-current={active ? "page" : undefined}
                       className={cn(
                         "group relative flex items-center rounded-md text-sm transition-colors",
@@ -84,15 +88,17 @@ export function AdminSidebar({
                       />
                       {!collapsed && (
                         <>
-                          <span className="truncate">{item.label}</span>
-                          <span
-                            className={cn(
-                              "ml-auto font-mono text-[10px] uppercase tracking-wider",
-                              active ? "text-muted-foreground" : "text-muted-foreground/45",
-                            )}
-                          >
-                            {item.en}
-                          </span>
+                          <span className="truncate">{en ? item.en : item.label}</span>
+                          {!en && (
+                            <span
+                              className={cn(
+                                "ml-auto font-mono text-[10px] uppercase tracking-wider",
+                                active ? "text-muted-foreground" : "text-muted-foreground/45",
+                              )}
+                            >
+                              {item.en}
+                            </span>
+                          )}
                         </>
                       )}
                     </Link>
@@ -111,7 +117,7 @@ export function AdminSidebar({
           <button
             type="button"
             onClick={onToggle}
-            aria-label={collapsed ? "展开侧边栏" : "折叠侧边栏"}
+            aria-label={collapsed ? t("sidebar.expand") : t("sidebar.collapse")}
             className="flex size-8 shrink-0 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
           >
             {collapsed ? (
