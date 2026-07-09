@@ -57,13 +57,52 @@ func run(ctx context.Context) (*api.Server, func(), error) {
 	if err != nil {
 		return nil, nil, err
 	}
-	mgr, err := store.Init(ctx, baseCfg.Store(), logger)
+	// Redis is a hard dependency for store.Init (newManager fails closed with
+	// "store: redis is required (proxy allocator)" when cfg.Redis == nil —
+	// see internal/store/manager.go) and the admin ownership reads
+	// (Mgr.OwnedJIDs/OwnersFor) need it too. Create the client and fail fast
+	// with a clear message, mirroring cmd/wadist/main.go's redis-injection
+	// block, instead of dying deeper inside store.Init. This is the ONLY
+	// redis client the console process creates — it is reused below for the
+	// web session store so we never open two connections to the same redis.
+	rdb := goredis.NewClient(&goredis.Options{Addr: baseCfg.RedisAddr})
+	pingCtx, pingCancel := context.WithTimeout(ctx, 5*time.Second)
+	err = rdb.Ping(pingCtx).Err()
+	pingCancel()
 	if err != nil {
 		flush()
+		_ = rdb.Close()
+		return nil, nil, fmt.Errorf("redis required but unreachable: %w", err)
+	}
+
+	sc := baseCfg.Store()
+	sc.Redis = rdb
+	// Distinct BadgerDir: the console never sends WhatsApp messages, so the
+	// Badger session store newManager opens (badger is now the sole session
+	// backend, unconditionally opened) is unused here — but it still takes
+	// an exclusive on-disk dir-lock. It must NOT reuse the send node's dir:
+	// docker-compose.worker.yml's `wadist` service shares the SAME .env as
+	// this `backend` service, so baseCfg.Store()'s WADIST_BADGER_DIR (which
+	// points at the send node's persistent volume, /var/lib/wadist/badger)
+	// would otherwise collide if the two are ever co-located. Use a
+	// console-specific override (WADIST_CONSOLE_BADGER_DIR) and default to a
+	// container-local ephemeral path — verified writable by the distroless
+	// nonroot image (/var/lib is root-owned 0755 and NOT writable by
+	// nonroot; /tmp is 1777 and is) — since the store is unused, no
+	// persistent volume is needed.
+	if v := os.Getenv("WADIST_CONSOLE_BADGER_DIR"); v != "" {
+		sc.BadgerDir = v
+	} else {
+		sc.BadgerDir = "/tmp/wadist-console-badger"
+	}
+
+	mgr, err := store.Init(ctx, sc, logger)
+	if err != nil {
+		flush()
+		_ = rdb.Close()
 		return nil, nil, err
 	}
 
-	rdb := goredis.NewClient(&goredis.Options{Addr: baseCfg.RedisAddr})
 	sessions := console.NewSessionStore(rdb, webCfg.SessionTTL)
 	users := console.NewUserRepo(mgr.SystemPool())
 
