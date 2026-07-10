@@ -53,3 +53,25 @@ func TestInstanceResolver_RoundTrip(t *testing.T) {
 		t.Fatalf("InstanceForJID = %q ok=%v err=%v", inst, ok, err)
 	}
 }
+
+func TestBindInstanceJID_EmptyIsNull(t *testing.T) {
+	if testing.Short() {
+		t.Skip("integration")
+	}
+	ctx := context.Background()
+	m := newTestManager(t)
+	if err := m.UpsertInstance(ctx, InstanceRow{
+		InstanceName: "wa_1_default_empty", TenantID: 1, EvoNode: "default", State: "created",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	// Binding an empty jid must store NULL (not a literal ''), so the instance
+	// stays unbound and JIDForInstance reports ok=false.
+	if err := m.BindInstanceJID(ctx, "wa_1_default_empty", ""); err != nil {
+		t.Fatal(err)
+	}
+	jid, ok, err := m.JIDForInstance(ctx, "wa_1_default_empty")
+	if err != nil || ok || jid != "" {
+		t.Fatalf("JIDForInstance after empty bind = %q ok=%v err=%v; want ok=false", jid, ok, err)
+	}
+}

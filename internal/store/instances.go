@@ -34,7 +34,7 @@ ON CONFLICT (instance_name) DO UPDATE
 // BindInstanceJID back-fills the jid once pairing completes. Idempotent.
 func (m *Manager) BindInstanceJID(ctx context.Context, instanceName, jid string) error {
 	_, err := m.SystemPool().Exec(ctx,
-		`UPDATE account_instances SET jid=$2, updated_at=now() WHERE instance_name=$1`,
+		`UPDATE account_instances SET jid=NULLIF($2,''), updated_at=now() WHERE instance_name=$1`,
 		instanceName, jid)
 	return err
 }
