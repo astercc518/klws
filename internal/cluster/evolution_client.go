@@ -9,6 +9,8 @@ import (
 	"net/http"
 	"strings"
 	"time"
+
+	"github.com/acme/wadist/internal/store"
 )
 
 // EvoClient is the low-level HTTP client to one Evolution API node. It caps
@@ -78,4 +80,32 @@ func (c *EvoClient) FetchState(ctx context.Context, instanceName string) (string
 		return "", err
 	}
 	return out.Instance.State, nil
+}
+
+// CreateInstance provisions an Evolution instance bound to a proxy in one call.
+// Proxy stickiness: callers invoke this only on first bind or after proxy death
+// — never per-send. When webhookURL is non-empty the instance is configured to
+// POST callbacks (connection/messages) back to the control plane.
+// TODO(evo-verify): confirm path/fields against real Evolution v2.
+func (c *EvoClient) CreateInstance(ctx context.Context, instanceName string, proxy *store.ProxyBinding, webhookURL string) error {
+	body := map[string]any{
+		"instanceName": instanceName,
+		"integration":  "WHATSAPP-BAILEYS",
+	}
+	if p, ok := proxyFromBinding(proxy); ok {
+		body["proxyHost"] = p.Host
+		body["proxyPort"] = p.Port
+		body["proxyProtocol"] = p.Protocol
+		if p.Username != "" {
+			body["proxyUsername"] = p.Username
+			body["proxyPassword"] = p.Password
+		}
+	}
+	if webhookURL != "" {
+		body["webhook"] = map[string]any{
+			"url":    webhookURL,
+			"events": []string{"CONNECTION_UPDATE", "MESSAGES_UPDATE", "QRCODE_UPDATED"},
+		}
+	}
+	return c.doJSON(ctx, http.MethodPost, "/instance/create", body, nil)
 }
