@@ -52,6 +52,10 @@ var (
 	_ LivenessConn = (*evoInstance)(nil)
 )
 
+// *EvoClient must satisfy evoAPI so the production wiring (E2+) compiles;
+// assert it now so any EvoClient signature drift fails the build here.
+var _ evoAPI = (*EvoClient)(nil)
+
 // Connect provisions the instance (idempotent, sticky proxy + webhook) then
 // triggers pairing. The QR (if unpaired) arrives via the QRCODE_UPDATED
 // webhook; Connect propagates only errors.

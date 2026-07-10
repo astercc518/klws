@@ -79,6 +79,25 @@ func TestEvoClient_CreateInstance_NoProxyOmitsProxyFields(t *testing.T) {
 	}
 }
 
+func TestEvoClient_CreateInstance_UnparseableProxyFailsClosed(t *testing.T) {
+	called := false
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		called = true
+		_, _ = w.Write([]byte(`{}`))
+	}))
+	defer srv.Close()
+	c := NewEvoClient(srv.URL, "k")
+	// Non-nil binding whose URL has no port -> proxyFromBinding returns false.
+	b := &store.ProxyBinding{ProxyURL: "http://1.2.3.4"}
+	err := c.CreateInstance(context.Background(), "wa_x", b, "")
+	if err == nil {
+		t.Fatal("expected fail-closed error for unparseable proxy binding, got nil")
+	}
+	if called {
+		t.Fatal("must NOT create a proxyless instance when a proxy binding was intended")
+	}
+}
+
 func TestEvoClient_ConnectInstance_ReturnsQR(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet || r.URL.Path != "/instance/connect/wa_1" {

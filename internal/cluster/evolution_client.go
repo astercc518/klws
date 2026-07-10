@@ -92,7 +92,11 @@ func (c *EvoClient) CreateInstance(ctx context.Context, instanceName string, pro
 		"instanceName": instanceName,
 		"integration":  "WHATSAPP-BAILEYS",
 	}
-	if p, ok := proxyFromBinding(proxy); ok {
+	if proxy != nil {
+		p, ok := proxyFromBinding(proxy)
+		if !ok {
+			return fmt.Errorf("evolution create %s: proxy binding present but unparseable: %q", instanceName, proxy.ProxyURL)
+		}
 		body["proxyHost"] = p.Host
 		body["proxyPort"] = p.Port
 		body["proxyProtocol"] = p.Protocol
