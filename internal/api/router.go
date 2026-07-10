@@ -44,6 +44,8 @@ type Deps struct {
 	SessionKey []byte // HMAC key for signing/verifying the session token
 	BlindKey   []byte // HMAC blind-index key (campaign recipient dedup/suppression)
 	CORSOrigin string // allowed browser origin (default http://localhost:3000)
+
+	EvolutionWebhookSecret string // HMAC secret for the Evolution webhook (WADIST_EVOLUTION_WEBHOOK_SECRET); empty = dev, accept unsigned
 }
 
 // Server holds the injected deps plus a readiness flag (mirrors console.Server
@@ -89,6 +91,9 @@ func (s *Server) Router() *gin.Engine {
 	})
 
 	v1 := r.Group("/api/v1")
+
+	// Evolution 数据面回调（HMAC 鉴权，非用户鉴权）。E0 log-only。
+	NewEvolutionWebhook(s.deps.EvolutionWebhookSecret).Register(v1)
 
 	// --- Auth controller ---
 	// login is public; logout/me require a valid token.

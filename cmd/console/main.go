@@ -126,6 +126,8 @@ func run(ctx context.Context) (*api.Server, func(), error) {
 		SessionKey:      webCfg.SessionKey,               // same HMAC key as the old console cookie
 		BlindKey:        baseCfg.BlindIndexKey,           // same blind-index key for recipient dedup
 		CORSOrigin:      os.Getenv("WADIST_CORS_ORIGIN"), // empty -> defaults to http://localhost:3000
+
+		EvolutionWebhookSecret: baseCfg.EvolutionWebhookSecret,
 	})
 	if len(baseCfg.BlindIndexKey) == 0 {
 		log.Printf("api: WADIST_BLIND_INDEX_KEY not set — send endpoints will fail-closed (ErrSendNotConfigured)")
