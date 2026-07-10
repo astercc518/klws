@@ -109,3 +109,29 @@ func (c *EvoClient) CreateInstance(ctx context.Context, instanceName string, pro
 	}
 	return c.doJSON(ctx, http.MethodPost, "/instance/create", body, nil)
 }
+
+// ConnectInstance triggers pairing and returns a QR (base64 data URI) when the
+// instance is unpaired; returns "" when already connected. QR also arrives via
+// the QRCODE_UPDATED webhook.
+// TODO(evo-verify): confirm path/fields against real Evolution v2.
+func (c *EvoClient) ConnectInstance(ctx context.Context, instanceName string) (string, error) {
+	var out struct {
+		Base64 string `json:"base64"`
+	}
+	if err := c.doJSON(ctx, http.MethodGet, "/instance/connect/"+instanceName, nil, &out); err != nil {
+		return "", err
+	}
+	return out.Base64, nil
+}
+
+// LogoutInstance ends the WA session (device unlinked). Terminal.
+// TODO(evo-verify): confirm path against real Evolution v2.
+func (c *EvoClient) LogoutInstance(ctx context.Context, instanceName string) error {
+	return c.doJSON(ctx, http.MethodDelete, "/instance/logout/"+instanceName, nil, nil)
+}
+
+// DeleteInstance removes the instance and its Redis session. Idempotent.
+// TODO(evo-verify): confirm path against real Evolution v2.
+func (c *EvoClient) DeleteInstance(ctx context.Context, instanceName string) error {
+	return c.doJSON(ctx, http.MethodDelete, "/instance/delete/"+instanceName, nil, nil)
+}

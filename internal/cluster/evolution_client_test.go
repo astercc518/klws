@@ -78,3 +78,43 @@ func TestEvoClient_CreateInstance_NoProxyOmitsProxyFields(t *testing.T) {
 		t.Fatalf("proxyHost must be omitted when no proxy: %+v", gotBody)
 	}
 }
+
+func TestEvoClient_ConnectInstance_ReturnsQR(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet || r.URL.Path != "/instance/connect/wa_1" {
+			t.Errorf("unexpected %s %s", r.Method, r.URL.Path)
+		}
+		_, _ = w.Write([]byte(`{"base64":"data:image/png;base64,QRDATA"}`))
+	}))
+	defer srv.Close()
+	c := NewEvoClient(srv.URL, "k")
+	qr, err := c.ConnectInstance(context.Background(), "wa_1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if qr != "data:image/png;base64,QRDATA" {
+		t.Fatalf("qr=%q", qr)
+	}
+}
+
+func TestEvoClient_LogoutAndDelete(t *testing.T) {
+	var paths []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodDelete {
+			t.Errorf("method=%s", r.Method)
+		}
+		paths = append(paths, r.URL.Path)
+		_, _ = w.Write([]byte(`{}`))
+	}))
+	defer srv.Close()
+	c := NewEvoClient(srv.URL, "k")
+	if err := c.LogoutInstance(context.Background(), "wa_1"); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.DeleteInstance(context.Background(), "wa_1"); err != nil {
+		t.Fatal(err)
+	}
+	if len(paths) != 2 || paths[0] != "/instance/logout/wa_1" || paths[1] != "/instance/delete/wa_1" {
+		t.Fatalf("paths=%v", paths)
+	}
+}
