@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -12,6 +13,41 @@ import (
 
 	"github.com/acme/wadist/internal/store"
 )
+
+// EvoHTTPError is a non-2xx response from Evolution, carrying the status code
+// so the send path can classify it (throttle vs permanent vs transient).
+type EvoHTTPError struct {
+	StatusCode int
+	Method     string
+	Path       string
+	Body       string
+}
+
+func (e *EvoHTTPError) Error() string {
+	return fmt.Sprintf("evolution %s %s: %d %s", e.Method, e.Path, e.StatusCode, e.Body)
+}
+
+// IsThrottle reports whether err is a rate/overload signal (retry after backoff,
+// and shed the global rate). TODO(evo-verify): confirm Evolution's throttle codes.
+func IsThrottle(err error) bool {
+	var he *EvoHTTPError
+	return errors.As(err, &he) && (he.StatusCode == 429 || he.StatusCode == 503)
+}
+
+// IsPermanent reports whether err will not be fixed by retrying (client errors:
+// bad request, unauthorized, logged-out / not-connected instance, gone).
+// TODO(evo-verify): confirm which statuses Evolution returns for logged-out.
+func IsPermanent(err error) bool {
+	var he *EvoHTTPError
+	if !errors.As(err, &he) {
+		return false // network/transport errors are transient → retryable
+	}
+	switch he.StatusCode {
+	case 400, 401, 403, 404, 422:
+		return true
+	}
+	return false
+}
 
 // EvoClient is the low-level HTTP client to one Evolution API node. It caps
 // connections per host so a burst of sends cannot exhaust the (single-process,
@@ -60,7 +96,7 @@ func (c *EvoClient) doJSON(ctx context.Context, method, path string, body, out a
 	defer resp.Body.Close()
 	if resp.StatusCode >= 300 {
 		msg, _ := io.ReadAll(io.LimitReader(resp.Body, 2048))
-		return fmt.Errorf("evolution %s %s: %d %s", method, path, resp.StatusCode, msg)
+		return &EvoHTTPError{StatusCode: resp.StatusCode, Method: method, Path: path, Body: string(msg)}
 	}
 	if out == nil {
 		return nil

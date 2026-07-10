@@ -3,6 +3,7 @@ package cluster
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -198,5 +199,44 @@ func TestEvoClient_SendText_ReturnsKeyID(t *testing.T) {
 	}
 	if res.RemoteID != "WAMID123" || res.Status != "PENDING" {
 		t.Fatalf("res=%+v", res)
+	}
+}
+
+func TestEvoHTTPError_Classification(t *testing.T) {
+	throttle := &EvoHTTPError{StatusCode: 429}
+	perm := &EvoHTTPError{StatusCode: 400}
+	other := errors.New("dial tcp: timeout")
+
+	if !IsThrottle(throttle) || IsThrottle(perm) || IsThrottle(other) {
+		t.Fatal("IsThrottle wrong")
+	}
+	if !IsPermanent(perm) || IsPermanent(throttle) || IsPermanent(other) {
+		t.Fatal("IsPermanent wrong")
+	}
+	if !IsPermanent(&EvoHTTPError{StatusCode: 404}) {
+		t.Fatal("404 should be permanent")
+	}
+	if !IsThrottle(&EvoHTTPError{StatusCode: 503}) {
+		t.Fatal("503 should be throttle")
+	}
+}
+
+func TestEvoClient_doJSON_ReturnsTypedHTTPError(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusTooManyRequests)
+		_, _ = w.Write([]byte(`{"error":"rate"}`))
+	}))
+	defer srv.Close()
+	c := NewEvoClient(srv.URL, "k")
+	_, err := c.SendText(context.Background(), "wa_1", "1555", "hi")
+	if err == nil {
+		t.Fatal("expected error on 429")
+	}
+	var he *EvoHTTPError
+	if !errors.As(err, &he) || he.StatusCode != 429 {
+		t.Fatalf("want *EvoHTTPError 429, got %T %v", err, err)
+	}
+	if !IsThrottle(err) {
+		t.Fatal("429 send error should classify as throttle")
 	}
 }
