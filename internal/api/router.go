@@ -20,6 +20,7 @@ import (
 	"github.com/acme/wadist/internal/billing"
 	"github.com/acme/wadist/internal/console"
 	"github.com/acme/wadist/internal/pricing"
+	"github.com/acme/wadist/internal/receipt"
 	"github.com/acme/wadist/internal/store"
 )
 
@@ -34,6 +35,7 @@ type Deps struct {
 	Tenants  *console.TenantRepo   // tenant registry (admin/sales)
 	Sessions *console.SessionStore // Redis-backed sessions (shared with console)
 	Audit    *audit.AuditWriter    // append-only audit_log writer (shared with billing)
+	Receipt  *receipt.Recorder     // delivery/read receipt writer (Evolution webhook)
 
 	// ProtectedAdmins holds console_users.email identifiers (the login field,
 	// email or username) of super/bootstrap admins that must be hidden from
@@ -93,7 +95,7 @@ func (s *Server) Router() *gin.Engine {
 	v1 := r.Group("/api/v1")
 
 	// Evolution 数据面回调（HMAC 鉴权，非用户鉴权）。E0 log-only。
-	NewEvolutionWebhook(s.deps.EvolutionWebhookSecret, nil, s.deps.Mgr, nil).Register(v1)
+	NewEvolutionWebhook(s.deps.EvolutionWebhookSecret, s.deps.Receipt, s.deps.Mgr, nil).Register(v1)
 
 	// --- Auth controller ---
 	// login is public; logout/me require a valid token.

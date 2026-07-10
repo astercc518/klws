@@ -20,6 +20,7 @@ import (
 	"github.com/acme/wadist/internal/console"
 	walog "github.com/acme/wadist/internal/log"
 	"github.com/acme/wadist/internal/pricing"
+	"github.com/acme/wadist/internal/receipt"
 	"github.com/acme/wadist/internal/store"
 )
 
@@ -121,6 +122,7 @@ func run(ctx context.Context) (*api.Server, func(), error) {
 		Tenants:  tenants,
 		Sessions: sessions,
 		Audit:    audit.NewAuditWriter(mgr.SystemPool()),
+		Receipt:  receipt.New(mgr.SystemPool()),
 		// Super/bootstrap admins hidden from the console + write-protected (403).
 		ProtectedAdmins: api.ParseProtectedAdmins(os.Getenv("WADIST_PROTECTED_ADMINS")),
 		SessionKey:      webCfg.SessionKey,               // same HMAC key as the old console cookie
