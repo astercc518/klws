@@ -173,3 +173,30 @@ func TestEvoClient_SendTyping(t *testing.T) {
 		t.Fatalf("path=%q body=%+v", gotPath, gotBody)
 	}
 }
+
+func TestEvoClient_SendText_ReturnsKeyID(t *testing.T) {
+	var gotPath string
+	var gotBody map[string]any
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPath = r.URL.Path
+		_ = json.NewDecoder(r.Body).Decode(&gotBody)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"key":{"id":"WAMID123","fromMe":true},"status":"PENDING"}`))
+	}))
+	defer srv.Close()
+
+	c := NewEvoClient(srv.URL, "k")
+	res, err := c.SendText(context.Background(), "wa_1", "15551234", "hello")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if gotPath != "/message/sendText/wa_1" {
+		t.Fatalf("path=%q", gotPath)
+	}
+	if gotBody["number"] != "15551234" || gotBody["text"] != "hello" {
+		t.Fatalf("body=%+v", gotBody)
+	}
+	if res.RemoteID != "WAMID123" || res.Status != "PENDING" {
+		t.Fatalf("res=%+v", res)
+	}
+}

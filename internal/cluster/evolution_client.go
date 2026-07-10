@@ -161,3 +161,28 @@ func (c *EvoClient) SendTyping(ctx context.Context, instanceName, toPhone string
 	return c.doJSON(ctx, http.MethodPost, "/chat/sendPresence/"+instanceName,
 		map[string]any{"number": toPhone, "presence": presence}, nil)
 }
+
+// SendResult carries Evolution's returned message key. RemoteID (key.id) IS the
+// WhatsApp message id and MUST be persisted as campaign_recipients.message_id so
+// the webhook receipt path (E3) matches on the same key the receipt carries.
+type SendResult struct {
+	RemoteID string
+	Status   string
+}
+
+// SendText sends a plain-text message and returns the WA message id (key.id).
+// TODO(evo-verify): confirm path/fields against real Evolution v2.
+func (c *EvoClient) SendText(ctx context.Context, instanceName, toPhone, body string) (SendResult, error) {
+	var out struct {
+		Key struct {
+			ID string `json:"id"`
+		} `json:"key"`
+		Status string `json:"status"`
+	}
+	err := c.doJSON(ctx, http.MethodPost, "/message/sendText/"+instanceName,
+		map[string]any{"number": toPhone, "text": body}, &out)
+	if err != nil {
+		return SendResult{}, err
+	}
+	return SendResult{RemoteID: out.Key.ID, Status: out.Status}, nil
+}
