@@ -1,0 +1,11 @@
+-- 0019_public_schema_usage.sql — grant USAGE on schema public to the RLS roles.
+--
+-- 0008 grants table/sequence privileges to app_tenant/app_system but assumes the
+-- roles already hold USAGE on schema public — which is true on a DB whose public
+-- schema was provisioned externally, but NOT on a DB rebuilt via `DROP SCHEMA
+-- public CASCADE; CREATE SCHEMA public` (a full-rebuild reset only grants the
+-- superuser). Without schema USAGE, the RLS-role pools resolve every unqualified
+-- table reference to "relation does not exist" (SQLSTATE 42P01, not 42501), which
+-- silently breaks the wadist engine's riskbreaker/governor and any tenant-scoped
+-- console query. Idempotent; safe under replay-all.
+GRANT USAGE ON SCHEMA public TO app_tenant, app_system;
