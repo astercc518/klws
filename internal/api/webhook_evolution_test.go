@@ -115,7 +115,7 @@ func TestWebhook_ConnectionClose_FiresHealthSignal(t *testing.T) {
 	h := NewEvolutionWebhook("", &fakeReceipt{}, inst, health)
 	body := []byte(`{"event":"connection.update","instance":"wa_1","data":{"state":"close"}}`)
 	postWebhook(t, h, body)
-	if len(health.calls) != 1 || health.calls[0] != "123@s.whatsapp.net:offline" {
+	if len(health.calls) != 1 || health.calls[0] != "123@s.whatsapp.net:conn_churn" {
 		t.Fatalf("health calls=%v", health.calls)
 	}
 }

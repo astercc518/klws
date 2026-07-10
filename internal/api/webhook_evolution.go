@@ -73,7 +73,7 @@ func (h *EvolutionWebhook) handle(c *gin.Context) {
 		}
 		if w.Data.State == "close" && h.health != nil {
 			if jid := h.resolveJID(ctx, w); jid != "" {
-				_ = h.health.ApplyHealthSignal(ctx, jid, "offline", 5*time.Minute)
+				_ = h.health.ApplyHealthSignal(ctx, jid, "conn_churn", 5*time.Minute)
 			}
 		}
 	case "messages.update":
