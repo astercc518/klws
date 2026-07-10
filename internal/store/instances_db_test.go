@@ -29,3 +29,27 @@ func TestMigration0020_AccountInstances_Idempotent(t *testing.T) {
 		t.Fatalf("account_instances not present after migrate-twice: reg=%v err=%v", reg, err)
 	}
 }
+
+func TestInstanceResolver_RoundTrip(t *testing.T) {
+	if testing.Short() {
+		t.Skip("integration")
+	}
+	ctx := context.Background()
+	m := newTestManager(t)
+	if err := m.UpsertInstance(ctx, InstanceRow{
+		InstanceName: "wa_1_default_1", TenantID: 1, EvoNode: "default", State: "created",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := m.BindInstanceJID(ctx, "wa_1_default_1", "123@s.whatsapp.net"); err != nil {
+		t.Fatal(err)
+	}
+	jid, ok, err := m.JIDForInstance(ctx, "wa_1_default_1")
+	if err != nil || !ok || jid != "123@s.whatsapp.net" {
+		t.Fatalf("JIDForInstance = %q ok=%v err=%v", jid, ok, err)
+	}
+	inst, ok, err := m.InstanceForJID(ctx, "123@s.whatsapp.net")
+	if err != nil || !ok || inst != "wa_1_default_1" {
+		t.Fatalf("InstanceForJID = %q ok=%v err=%v", inst, ok, err)
+	}
+}
