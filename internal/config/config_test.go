@@ -315,3 +315,19 @@ func TestConfig_SegmentGovernorDefaults(t *testing.T) {
 		t.Fatalf("SegMinSample = %d; want 10", cfg.SegMinSample)
 	}
 }
+
+func TestLoad_EvolutionDefaults(t *testing.T) {
+	t.Setenv("WADIST_POSTGRES_DSN", "postgres://x")
+	t.Setenv("WADIST_EVOLUTION_BASE_URL", "")
+	t.Setenv("WADIST_EVOLUTION_NODE", "")
+	cfg, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.EvolutionBaseURL != "http://localhost:8080" {
+		t.Fatalf("base url default = %q", cfg.EvolutionBaseURL)
+	}
+	if cfg.EvolutionNode != "default" {
+		t.Fatalf("node default = %q", cfg.EvolutionNode)
+	}
+}

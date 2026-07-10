@@ -92,6 +92,11 @@ type Config struct {
 	BackoffFactor int           // WADIST_BACKOFF_FACTOR default 2
 	BackoffMax    int           // WADIST_BACKOFF_MAX default 8
 	BackoffTTL    time.Duration // WADIST_BACKOFF_TTL_MS default 300000ms
+	// Evolution API 数据面（换栈）。E0 仅装载，未接线。
+	EvolutionBaseURL       string
+	EvolutionAPIKey        string
+	EvolutionWebhookSecret string
+	EvolutionNode          string
 }
 
 // Load reads configuration from the environment. PostgresDSN is required;
@@ -102,11 +107,15 @@ func Load() (*Config, error) {
 		return nil, fmt.Errorf("config: WADIST_POSTGRES_DSN is required")
 	}
 	cfg := &Config{
-		PostgresDSN:  dsn,
-		RedisAddr:    getenv("WADIST_REDIS_ADDR", "localhost:6379"),
-		NodeID:       getenv("WADIST_NODE_ID", hostnameOr("node-unknown")),
-		MaxOpenConns: getenvInt32("WADIST_MAX_OPEN_CONNS", 50),
-		MetricsAddr:  getenv("WADIST_METRICS_ADDR", ":9090"),
+		PostgresDSN:            dsn,
+		RedisAddr:              getenv("WADIST_REDIS_ADDR", "localhost:6379"),
+		NodeID:                 getenv("WADIST_NODE_ID", hostnameOr("node-unknown")),
+		MaxOpenConns:           getenvInt32("WADIST_MAX_OPEN_CONNS", 50),
+		MetricsAddr:            getenv("WADIST_METRICS_ADDR", ":9090"),
+		EvolutionBaseURL:       getenv("WADIST_EVOLUTION_BASE_URL", "http://localhost:8080"),
+		EvolutionAPIKey:        getenv("WADIST_EVOLUTION_APIKEY", ""),
+		EvolutionWebhookSecret: getenv("WADIST_EVOLUTION_WEBHOOK_SECRET", ""),
+		EvolutionNode:          getenv("WADIST_EVOLUTION_NODE", "default"),
 	}
 	cfg.ShutdownTimeout = 30 * time.Second
 	if v := getenv("WADIST_SHUTDOWN_TIMEOUT", ""); v != "" {
