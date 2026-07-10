@@ -118,3 +118,39 @@ func TestEvoClient_LogoutAndDelete(t *testing.T) {
 		t.Fatalf("paths=%v", paths)
 	}
 }
+
+func TestEvoClient_SetPresence(t *testing.T) {
+	var gotPath string
+	var gotBody map[string]any
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPath = r.URL.Path
+		_ = json.NewDecoder(r.Body).Decode(&gotBody)
+		_, _ = w.Write([]byte(`{}`))
+	}))
+	defer srv.Close()
+	c := NewEvoClient(srv.URL, "k")
+	if err := c.SetPresence(context.Background(), "wa_1", true); err != nil {
+		t.Fatal(err)
+	}
+	if gotPath != "/instance/setPresence/wa_1" || gotBody["presence"] != "available" {
+		t.Fatalf("path=%q body=%+v", gotPath, gotBody)
+	}
+}
+
+func TestEvoClient_SendTyping(t *testing.T) {
+	var gotPath string
+	var gotBody map[string]any
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPath = r.URL.Path
+		_ = json.NewDecoder(r.Body).Decode(&gotBody)
+		_, _ = w.Write([]byte(`{}`))
+	}))
+	defer srv.Close()
+	c := NewEvoClient(srv.URL, "k")
+	if err := c.SendTyping(context.Background(), "wa_1", "15551234", true); err != nil {
+		t.Fatal(err)
+	}
+	if gotPath != "/chat/sendPresence/wa_1" || gotBody["number"] != "15551234" || gotBody["presence"] != "composing" {
+		t.Fatalf("path=%q body=%+v", gotPath, gotBody)
+	}
+}

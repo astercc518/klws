@@ -135,3 +135,25 @@ func (c *EvoClient) LogoutInstance(ctx context.Context, instanceName string) err
 func (c *EvoClient) DeleteInstance(ctx context.Context, instanceName string) error {
 	return c.doJSON(ctx, http.MethodDelete, "/instance/delete/"+instanceName, nil, nil)
 }
+
+// SetPresence sets the instance's global online/offline presence.
+// TODO(evo-verify): confirm path/fields against real Evolution v2.
+func (c *EvoClient) SetPresence(ctx context.Context, instanceName string, available bool) error {
+	presence := "unavailable"
+	if available {
+		presence = "available"
+	}
+	return c.doJSON(ctx, http.MethodPost, "/instance/setPresence/"+instanceName,
+		map[string]any{"presence": presence}, nil)
+}
+
+// SendTyping toggles a per-chat typing indicator (anthropomorphic dwell).
+// TODO(evo-verify): confirm path/fields against real Evolution v2.
+func (c *EvoClient) SendTyping(ctx context.Context, instanceName, toPhone string, composing bool) error {
+	presence := "paused"
+	if composing {
+		presence = "composing"
+	}
+	return c.doJSON(ctx, http.MethodPost, "/chat/sendPresence/"+instanceName,
+		map[string]any{"number": toPhone, "presence": presence}, nil)
+}
