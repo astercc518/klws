@@ -19,6 +19,7 @@ type Ring struct {
 
 // New builds a ring placing `replicas` virtual points per node. replicas<1 → 1.
 // Zero nodes is valid (an empty ring that resolves nothing).
+// Use a high replica count (>=50) for even distribution; a low count skews.
 func New(replicas int, nodes ...string) *Ring {
 	if replicas < 1 {
 		replicas = 1
@@ -76,6 +77,10 @@ func (r *Ring) Successors(key string) []string {
 // AssignNode picks the first node (in ring successor order from key) whose
 // current instance count is below capPerNode. ok=false if all are at capacity
 // or the ring is empty. Pure: the caller supplies counts (e.g. store.NodeCounts).
+// NOTE: counts is a point-in-time snapshot and AssignNode is pure, so under
+// concurrent instance-creates the per-node cap is ADVISORY, not a hard guarantee
+// — the caller (E6) must serialize creates or do the assignment atomically
+// DB-side if the cap must be strict.
 func AssignNode(r *Ring, counts map[string]int, key string, capPerNode int) (string, bool) {
 	for _, node := range r.Successors(key) {
 		if counts[node] < capPerNode {
