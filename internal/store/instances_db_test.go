@@ -140,3 +140,25 @@ func TestTenantForJID(t *testing.T) {
 		t.Fatalf("TenantForJID = %d err=%v want 1", tid, err)
 	}
 }
+
+func TestBindInstanceJIDIfUnset_FirstSeeOnly(t *testing.T) {
+	ctx := context.Background()
+	m := newTestManager(t)
+	if err := m.UpsertInstance(ctx, InstanceRow{InstanceName: "i1", TenantID: 1, EvoNode: "n", State: "created"}); err != nil {
+		t.Fatal(err)
+	}
+	// first bind sets it
+	if err := m.BindInstanceJIDIfUnset(ctx, "i1", "111@s.whatsapp.net"); err != nil {
+		t.Fatal(err)
+	}
+	if jid, ok, _ := m.JIDForInstance(ctx, "i1"); !ok || jid != "111@s.whatsapp.net" {
+		t.Fatalf("first bind failed: %q ok=%v", jid, ok)
+	}
+	// second (different) bind is ignored — jid unchanged
+	if err := m.BindInstanceJIDIfUnset(ctx, "i1", "999@s.whatsapp.net"); err != nil {
+		t.Fatal(err)
+	}
+	if jid, _, _ := m.JIDForInstance(ctx, "i1"); jid != "111@s.whatsapp.net" {
+		t.Fatalf("rebind must be ignored, got %q", jid)
+	}
+}

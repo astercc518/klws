@@ -95,6 +95,7 @@ func (s *Server) Router() *gin.Engine {
 	v1 := r.Group("/api/v1")
 
 	// Evolution 数据面回调（HMAC 鉴权，非用户鉴权）。E0 log-only。
+	// health sink (sendgate) deferred: E6-followup wires console sendgate
 	NewEvolutionWebhook(s.deps.EvolutionWebhookSecret, s.deps.Receipt, s.deps.Mgr, nil).Register(v1)
 
 	// --- Auth controller ---

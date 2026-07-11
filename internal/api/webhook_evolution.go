@@ -23,7 +23,7 @@ type receiptSink interface {
 // (satisfied by *store.Manager).
 type instanceStore interface {
 	JIDForInstance(ctx context.Context, instanceName string) (string, bool, error)
-	BindInstanceJID(ctx context.Context, instanceName, jid string) error
+	BindInstanceJIDIfUnset(ctx context.Context, instanceName, jid string) error
 	SetInstanceState(ctx context.Context, instanceName, state string) error
 }
 
@@ -66,7 +66,7 @@ func (h *EvolutionWebhook) handle(c *gin.Context) {
 	switch normalizeEvent(w.Event) {
 	case "connection.update":
 		if w.Data.RemoteJID != "" {
-			_ = h.inst.BindInstanceJID(ctx, w.Instance, w.Data.RemoteJID)
+			_ = h.inst.BindInstanceJIDIfUnset(ctx, w.Instance, w.Data.RemoteJID)
 		}
 		if w.Data.State != "" {
 			_ = h.inst.SetInstanceState(ctx, w.Instance, w.Data.State)
@@ -85,12 +85,15 @@ func (h *EvolutionWebhook) handle(c *gin.Context) {
 		if err != nil || !ok {
 			break
 		}
-		_ = h.rec.Record(ctx, receipt.Event{
+		if err := h.rec.Record(ctx, receipt.Event{
 			MessageIDs: []string{w.Data.Key.ID},
 			SenderJID:  jid,
 			Kind:       kind,
 			At:         time.Now(),
-		})
+		}); err != nil {
+			c.AbortWithStatus(http.StatusInternalServerError)
+			return
+		}
 	}
 	c.Status(http.StatusOK)
 }

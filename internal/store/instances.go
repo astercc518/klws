@@ -39,6 +39,17 @@ func (m *Manager) BindInstanceJID(ctx context.Context, instanceName, jid string)
 	return err
 }
 
+// BindInstanceJIDIfUnset binds the jid only when the row's jid is currently
+// NULL (first-see). Idempotent; a later differing jid is ignored (prevents a
+// forged connection.update from rebinding an instance). NULLIF guards empty.
+func (m *Manager) BindInstanceJIDIfUnset(ctx context.Context, instanceName, jid string) error {
+	_, err := m.SystemPool().Exec(ctx,
+		`UPDATE account_instances SET jid=NULLIF($2,''), updated_at=now()
+		 WHERE instance_name=$1 AND jid IS NULL`,
+		instanceName, jid)
+	return err
+}
+
 // SetInstanceState updates lifecycle state (created/qr/connected/disconnected/loggedOut).
 func (m *Manager) SetInstanceState(ctx context.Context, instanceName, state string) error {
 	_, err := m.SystemPool().Exec(ctx,

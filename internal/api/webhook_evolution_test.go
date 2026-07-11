@@ -6,6 +6,7 @@ import (
 	"crypto/hmac"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -65,7 +66,7 @@ func (f *fakeInst) JIDForInstance(_ context.Context, inst string) (string, bool,
 	j, ok := f.jidByInst[inst]
 	return j, ok, nil
 }
-func (f *fakeInst) BindInstanceJID(_ context.Context, inst, jid string) error {
+func (f *fakeInst) BindInstanceJIDIfUnset(_ context.Context, inst, jid string) error {
 	f.bound[inst] = jid
 	f.jidByInst[inst] = jid
 	return nil
@@ -73,6 +74,12 @@ func (f *fakeInst) BindInstanceJID(_ context.Context, inst, jid string) error {
 func (f *fakeInst) SetInstanceState(_ context.Context, inst, state string) error {
 	f.states[inst] = state
 	return nil
+}
+
+type errReceipt struct{}
+
+func (errReceipt) Record(_ context.Context, _ receipt.Event) error {
+	return errors.New("db down")
 }
 
 type fakeHealth struct{ calls []string }
@@ -156,5 +163,17 @@ func TestWebhook_MessagesUpdate_NotFromMeSkipped(t *testing.T) {
 	postWebhook(t, h, body)
 	if len(rec.evs) != 0 {
 		t.Fatalf("inbound (not fromMe) must be skipped: %+v", rec.evs)
+	}
+}
+
+func TestWebhook_MessagesUpdate_DBErrorReturns500(t *testing.T) {
+	inst := newFakeInst()
+	inst.jidByInst["wa_1"] = "123@s.whatsapp.net"
+	rec := &errReceipt{} // Record returns an error
+	h := NewEvolutionWebhook("", rec, inst, nil)
+	body := []byte(`{"event":"messages.update","instance":"wa_1","data":{"ack":4,"key":{"id":"X","fromMe":true}}}`)
+	code := postWebhook(t, h, body)
+	if code != http.StatusInternalServerError {
+		t.Fatalf("db error must yield 500, got %d", code)
 	}
 }
