@@ -342,8 +342,8 @@ func TestLoad_EvolutionCutoverDefaults(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cfg.Sender != "whatsmeow" || cfg.Conn != "whatsmeow" {
-		t.Fatalf("defaults must stay whatsmeow: sender=%q conn=%q", cfg.Sender, cfg.Conn)
+	if cfg.Sender != "evolution" || cfg.Conn != "evolution" {
+		t.Fatalf("defaults must be evolution after cutover flip: sender=%q conn=%q", cfg.Sender, cfg.Conn)
 	}
 	if cfg.EvolutionCapPerNode != 800 || cfg.EvoLimiterMax != 1 || cfg.EvoRetryAttempts != 4 {
 		t.Fatalf("knob defaults wrong: %+v", cfg)

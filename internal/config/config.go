@@ -217,8 +217,8 @@ func Load() (*Config, error) {
 	cfg.BackoffMax = intEnv("WADIST_BACKOFF_MAX", 8)
 	cfg.BackoffTTL = msEnv("WADIST_BACKOFF_TTL_MS", 300000)
 
-	cfg.Sender = getenv("WADIST_SENDER", "whatsmeow")
-	cfg.Conn = getenv("WADIST_CONN", "whatsmeow")
+	cfg.Sender = getenv("WADIST_SENDER", "evolution")
+	cfg.Conn = getenv("WADIST_CONN", "evolution")
 	cfg.EvolutionNodes = parseNodes(getenv("WADIST_EVOLUTION_NODES", ""), cfg.EvolutionBaseURL)
 	cfg.EvolutionCapPerNode = intEnv("WADIST_EVOLUTION_CAP_PER_NODE", 800)
 	cfg.EvolutionWebhookURL = getenv("WADIST_EVOLUTION_WEBHOOK_URL", "")
