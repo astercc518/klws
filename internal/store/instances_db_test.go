@@ -103,6 +103,21 @@ func TestNodeCounts(t *testing.T) {
 	}
 }
 
+func TestNodeForInstance(t *testing.T) {
+	ctx := context.Background()
+	m := newTestManager(t)
+	if err := m.UpsertInstance(ctx, InstanceRow{InstanceName: "i1", TenantID: 1, EvoNode: "nodeX", State: "created"}); err != nil {
+		t.Fatal(err)
+	}
+	node, ok, err := m.NodeForInstance(ctx, "i1")
+	if err != nil || !ok || node != "nodeX" {
+		t.Fatalf("NodeForInstance = %q ok=%v err=%v", node, ok, err)
+	}
+	if _, ok, _ := m.NodeForInstance(ctx, "ghost"); ok {
+		t.Fatal("unknown instance must be ok=false")
+	}
+}
+
 func TestNodeCounts_EmptyIsNonNil(t *testing.T) {
 	if testing.Short() {
 		t.Skip("integration")

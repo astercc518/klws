@@ -46,6 +46,13 @@ func (placeholderUploader) Upload(_ context.Context, _ string, _ []byte, _, _ st
 	return nil, errors.New("uploader: not wired (pre-M-send)")
 }
 
+// evoSendFn adapts a func to dispatch's evoSendAPI (SendText method).
+type evoSendFn func(ctx context.Context, instance, phone, body string) (string, error)
+
+func (f evoSendFn) SendText(ctx context.Context, instance, phone, body string) (string, error) {
+	return f(ctx, instance, phone, body)
+}
+
 // priceFor returns a basic per-country price in minor units.
 // Real pricing table is introduced in a later milestone.
 var priceTable = map[string]int64{
@@ -173,9 +180,55 @@ func run(ctx context.Context, cfg *config.Config) (*metrics.Server, func(), erro
 	routing := cluster.NewRoutingSenderWithPolicy(reg, cfg.FenceOnSend,
 		cluster.TypingPolicy{Min: cfg.TypingMin, Max: cfg.TypingMax})
 	priceRepo := pricing.NewRepo(pool)
+
+	// Evolution send chain (E6). Selected only when WADIST_SENDER=evolution;
+	// default whatsmeow keeps `routing` live (zero behavior change).
+	evoCluster := cluster.NewEvoCluster(cfg.EvolutionNodes, cfg.EvolutionAPIKey)
+	// adapter: jid's instance -> node -> per-node EvoClient.SendText -> key.id
+	evoSendAdapter := evoSendFn(func(ctx context.Context, instance, phone, body string) (string, error) {
+		node, ok, err := mgr.NodeForInstance(ctx, instance)
+		if err != nil {
+			return "", err
+		}
+		if !ok {
+			return "", fmt.Errorf("evo send: no node for instance %s", instance)
+		}
+		client, ok := evoCluster.For(node)
+		if !ok {
+			return "", fmt.Errorf("evo send: no client for node %s", node)
+		}
+		res, err := client.SendText(ctx, instance, phone, body)
+		if err != nil {
+			// TODO(E6-governor): on cluster.IsThrottle(err), nudge the risk
+			// governor's rate down. Governor exposes only a periodic AIMD loop
+			// (pump.SetRate) today; a synchronous decrease hook is a follow-up.
+			return "", err
+		}
+		return res.RemoteID, nil
+	})
+	evoRoute := dispatch.InstanceRoute(func(ctx context.Context, jid string) (string, bool, error) {
+		return mgr.InstanceForJID(ctx, jid)
+	})
+	evoChain := dispatch.NewCircuitBreakerSender(
+		dispatch.NewPerInstanceLimiter(
+			dispatch.NewRetrySender(
+				dispatch.NewEvoSender(evoSendAdapter, evoRoute),
+				cfg.EvoRetryAttempts, 200*time.Millisecond, 5*time.Second,
+			).WithPermanent(cluster.IsPermanent),
+			cfg.EvoLimiterMax,
+		),
+		cfg.EvoBreakerThreshold, time.Duration(cfg.EvoBreakerCooloffSec)*time.Second,
+	)
+
+	var sendSender dispatch.Sender = routing
+	if cfg.Sender == "evolution" {
+		sendSender = evoChain
+		log.Printf("send path: EVOLUTION (WADIST_SENDER=evolution)")
+	}
+
 	// priceFor falls back to the existing per-country default table when a tenant
 	// has no explicit price configured.
-	worker := dispatch.NewSendWorker(pool, gate, billingRepo, routing, placeholderUploader{}).
+	worker := dispatch.NewSendWorker(pool, gate, billingRepo, sendSender, placeholderUploader{}).
 		WithMetrics(m).
 		WithCanary(cfg.CanaryPercent).
 		WithPricing(func(ctx context.Context, tenantID int64, country string) int64 {
