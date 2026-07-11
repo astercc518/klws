@@ -27,6 +27,7 @@ import (
 	walog "github.com/acme/wadist/internal/log"
 	"github.com/acme/wadist/internal/metrics"
 	"github.com/acme/wadist/internal/node"
+	"github.com/acme/wadist/internal/nodering"
 	"github.com/acme/wadist/internal/pricing"
 	"github.com/acme/wadist/internal/receipt"
 	"github.com/acme/wadist/internal/riskbreaker"
@@ -184,6 +185,7 @@ func run(ctx context.Context, cfg *config.Config) (*metrics.Server, func(), erro
 	// Evolution send chain (E6). Selected only when WADIST_SENDER=evolution;
 	// default whatsmeow keeps `routing` live (zero behavior change).
 	evoCluster := cluster.NewEvoCluster(cfg.EvolutionNodes, cfg.EvolutionAPIKey)
+	evoRing := nodering.New(200, evoCluster.Nodes()...)
 	// adapter: jid's instance -> node -> per-node EvoClient.SendText -> key.id
 	evoSendAdapter := evoSendFn(func(ctx context.Context, instance, phone, body string) (string, error) {
 		node, ok, err := mgr.NodeForInstance(ctx, instance)
@@ -265,6 +267,9 @@ func run(ctx context.Context, cfg *config.Config) (*metrics.Server, func(), erro
 
 	// Build a real SessionFactory: acquire device store + optional proxy + whatsmeow conn.
 	factory := node.SessionFactory(func(fctx context.Context, jid string, lock cluster.DeviceLockHandle) (*cluster.Session, error) {
+		if cfg.Conn == "evolution" {
+			return buildEvoSession(fctx, jid, lock, mgr, evoCluster, evoRing, cfg)
+		}
 		device, err := mgr.GetDeviceStore(fctx, jid)
 		if err != nil {
 			return nil, err
@@ -596,16 +601,83 @@ func run(ctx context.Context, cfg *config.Config) (*metrics.Server, func(), erro
 	//   4. metrics HTTP server last (so scrapes still work during drain)
 	preStopDelay := cfg.PreStopDelay
 	stop := func() {
-		srv.SetReady(false)          // /readyz → 503: k8s stops routing new work
-		time.Sleep(preStopDelay)     // give k8s time to remove the endpoint
-		sup.Shutdown()               // intake → loops → sessions → store → flush
+		srv.SetReady(false)      // /readyz → 503: k8s stops routing new work
+		time.Sleep(preStopDelay) // give k8s time to remove the endpoint
+		sup.Shutdown()           // intake → loops → sessions → store → flush
 		sctx, c := context.WithTimeout(context.Background(), 5*time.Second)
 		defer c()
-		_ = srv.Shutdown(sctx)       // metrics http (last, so scrapes still work during shutdown)
+		_ = srv.Shutdown(sctx) // metrics http (last, so scrapes still work during shutdown)
 		_ = asynqClient.Close()
 		_ = rdb.Close()
 	}
 	return srv, stop, nil
+}
+
+// buildEvoSession builds a *cluster.Session backed by an Evolution-managed
+// evoInstance (E6, WADIST_CONN=evolution) instead of a whatsmeow waConn.
+// Sticky: an already-bound jid reuses its existing instance+node; only a
+// first-time bind assigns a fresh node via the capacity-aware ring.
+func buildEvoSession(ctx context.Context, jid string, lock cluster.DeviceLockHandle,
+	mgr *store.Manager, evoCluster *cluster.EvoCluster, ring *nodering.Ring, cfg *config.Config) (*cluster.Session, error) {
+
+	// Proxy still applies (Evolution dials through it). May be nil.
+	var proxyBinding *store.ProxyBinding
+	if pb, err := mgr.GetBoundProxy(ctx, jid); err == nil {
+		proxyBinding = pb
+	} else if !errors.Is(err, store.ErrProxyNotBound) {
+		return nil, err
+	}
+
+	// Sticky: reuse the existing instance+node if this jid is already bound;
+	// only assign a fresh node on first bind (respects spill stickiness).
+	instance, ok, err := mgr.InstanceForJID(ctx, jid)
+	if err != nil {
+		return nil, err
+	}
+	var node string
+	if ok {
+		node, _, err = mgr.NodeForInstance(ctx, instance)
+		if err != nil {
+			return nil, err
+		}
+	} else {
+		counts, err := mgr.NodeCounts(ctx)
+		if err != nil {
+			return nil, err
+		}
+		var assigned bool
+		node, assigned = nodering.AssignNode(ring, counts, jid, cfg.EvolutionCapPerNode)
+		if !assigned {
+			return nil, fmt.Errorf("evolution: no node capacity for %s (all full or no nodes)", jid)
+		}
+		tid, err := mgr.TenantForJID(ctx, jid)
+		if err != nil {
+			return nil, err
+		}
+		instance = instanceNameFor(tid, node, jid)
+		if err := mgr.UpsertInstance(ctx, store.InstanceRow{
+			InstanceName: instance, JID: jid, TenantID: tid, EvoNode: node, State: "created",
+		}); err != nil {
+			return nil, err
+		}
+	}
+
+	client, ok := evoCluster.For(node)
+	if !ok {
+		return nil, fmt.Errorf("evolution: no client configured for node %s", node)
+	}
+	ei := cluster.NewEvoInstance(client, instance, cfg.EvolutionWebhookURL, proxyBinding)
+	if err := ei.Connect(ctx); err != nil {
+		return nil, err
+	}
+	_ = ei.SetPresence(ctx, true)
+	// No per-session sender: Evolution sends go through the SendWorker's evo
+	// chain (T2), not the registry session. Receipts arrive via webhook (E3),
+	// so no onReceipt callback here.
+	// TODO(E6-liveness): route webhook connection.update state into ei.UpdateState
+	// for the ghost reaper's Liveness; today ei defaults to StateCreated and the
+	// reaper treats an unprobed conn as assume-healthy (DB state is set by E3).
+	return cluster.NewSession(jid, ei, lock), nil
 }
 
 // loadForTest is a helper used by main_smoke_test.go to build a *config.Config

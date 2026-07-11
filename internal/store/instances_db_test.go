@@ -130,3 +130,13 @@ func TestNodeCounts_EmptyIsNonNil(t *testing.T) {
 		t.Fatal("empty table must return non-nil empty map")
 	}
 }
+
+func TestTenantForJID(t *testing.T) {
+	ctx := context.Background()
+	m := newTestManager(t)
+	seedAccountDevice(t, ctx, m, "123@s.whatsapp.net")
+	tid, err := m.TenantForJID(ctx, "123@s.whatsapp.net")
+	if err != nil || tid != 1 {
+		t.Fatalf("TenantForJID = %d err=%v want 1", tid, err)
+	}
+}
