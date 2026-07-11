@@ -29,7 +29,6 @@ import (
 	"github.com/acme/wadist/internal/node"
 	"github.com/acme/wadist/internal/nodering"
 	"github.com/acme/wadist/internal/pricing"
-	"github.com/acme/wadist/internal/receipt"
 	"github.com/acme/wadist/internal/riskbreaker"
 	"github.com/acme/wadist/internal/sendgate"
 	"github.com/acme/wadist/internal/store"
@@ -175,15 +174,10 @@ func run(ctx context.Context, cfg *config.Config) (*metrics.Server, func(), erro
 	pe := dispatch.NewPumpEnqueuer(cfg.PumpBuffer)
 	dispatcher := dispatch.NewDispatcher(pool, billingRepo, pe, priceFor, 3*time.Second).WithMetrics(m)
 
-	// cluster.NewRoutingSender routes sends to live sessions; returns a clear
-	// error when no active session exists rather than silently succeeding.
-	// Always upgraded to the policy-based sender with typing pacing + fence.
-	routing := cluster.NewRoutingSenderWithPolicy(reg, cfg.FenceOnSend,
-		cluster.TypingPolicy{Min: cfg.TypingMin, Max: cfg.TypingMax})
 	priceRepo := pricing.NewRepo(pool)
 
-	// Evolution send chain (E6). Selected only when WADIST_SENDER=evolution;
-	// default whatsmeow keeps `routing` live (zero behavior change).
+	// Evolution send chain (E6) is now the sole data plane; whatsmeow/wabadger
+	// have been removed. The SendWorker always drives this chain.
 	evoCluster := cluster.NewEvoCluster(cfg.EvolutionNodes, cfg.EvolutionAPIKey)
 	evoRing := nodering.New(200, evoCluster.Nodes()...)
 	// adapter: jid's instance -> node -> per-node EvoClient.SendText -> key.id
@@ -222,11 +216,8 @@ func run(ctx context.Context, cfg *config.Config) (*metrics.Server, func(), erro
 		cfg.EvoBreakerThreshold, time.Duration(cfg.EvoBreakerCooloffSec)*time.Second,
 	)
 
-	var sendSender dispatch.Sender = routing
-	if cfg.Sender == "evolution" {
-		sendSender = evoChain
-		log.Printf("send path: EVOLUTION (WADIST_SENDER=evolution)")
-	}
+	var sendSender dispatch.Sender = evoChain
+	log.Printf("send path: EVOLUTION (sole data plane)")
 
 	// priceFor falls back to the existing per-country default table when a tenant
 	// has no explicit price configured.
@@ -260,48 +251,11 @@ func run(ctx context.Context, cfg *config.Config) (*metrics.Server, func(), erro
 
 	pump := dispatch.NewPump(pe, worker, sendResolver, cfg.SendRate, cfg.SendWorkers)
 
-	// Delivery/read receipt recorder. Wired into each WA connection unless
-	// WADIST_RECEIPTS=off (rollback knob; the send path is unaffected either way).
-	receiptRec := receipt.New(mgr.SystemPool())
-	receiptsOn := os.Getenv("WADIST_RECEIPTS") != "off"
-
-	// Build a real SessionFactory: acquire device store + optional proxy + whatsmeow conn.
+	// SessionFactory: Evolution is the sole data plane. Sessions are backed by an
+	// Evolution-managed instance; sends flow through the SendWorker's evo chain
+	// and delivery/read receipts arrive via the console webhook (not here).
 	factory := node.SessionFactory(func(fctx context.Context, jid string, lock cluster.DeviceLockHandle) (*cluster.Session, error) {
-		if cfg.Conn == "evolution" {
-			return buildEvoSession(fctx, jid, lock, mgr, evoCluster, evoRing, cfg)
-		}
-		device, err := mgr.GetDeviceStore(fctx, jid)
-		if err != nil {
-			return nil, err
-		}
-		proxy, err := mgr.GetBoundProxy(fctx, jid)
-		var proxyBinding *store.ProxyBinding
-		if err == nil {
-			proxyBinding = proxy
-		} else if !errors.Is(err, store.ErrProxyNotBound) {
-			return nil, err
-		}
-		// Receipt callback for THIS account; jid is the assigned_jid we match on.
-		// Receipts arrive asynchronously, so use a background context.
-		var onReceipt cluster.ReceiptFunc
-		if receiptsOn {
-			onReceipt = func(ids []string, kind string, at time.Time) {
-				if err := receiptRec.Record(context.Background(), receipt.Event{
-					MessageIDs: ids, SenderJID: jid, Kind: receipt.Kind(kind), At: at,
-				}); err != nil {
-					log.Printf("receipt record (%s): %v", jid, err)
-				}
-			}
-		}
-		// proxy may be nil if no proxy is bound — that's acceptable
-		conn := cluster.NewWAConn(device, logger, proxyBinding, onReceipt)
-		if err := conn.Connect(fctx); err != nil {
-			return nil, err
-		}
-		if pc, ok := any(conn).(cluster.PresenceConn); ok {
-			_ = pc.SetPresence(fctx, true)
-		}
-		return cluster.NewSessionWithSender(jid, conn, lock, conn), nil
+		return buildEvoSession(fctx, jid, lock, mgr, evoCluster, evoRing, cfg)
 	})
 
 	sup := cluster.NewSupervisor(reg, cluster.SupervisorOpts{
@@ -359,15 +313,6 @@ func run(ctx context.Context, cfg *config.Config) (*metrics.Server, func(), erro
 		Linger:          cfg.Linger,
 		BootRamp:        cfg.BootRamp,
 	}, deps)
-
-	// Wire RoutingSender warm-request hook: on a send miss, push jid|cc to warm:req.
-	routing = routing.WithWarmRequest(func(jid string) {
-		cc := ""
-		if pb, err := mgr.GetBoundProxy(context.Background(), jid); err == nil {
-			cc = pb.Country
-		}
-		rdb.RPush(context.Background(), "warm:req", jid+"|"+cc)
-	})
 
 	// Kick off initial account startup with bounded concurrency.
 	jids, err := mgr.ListActiveAccounts(ctx)

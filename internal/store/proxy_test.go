@@ -9,7 +9,7 @@ import (
 	"testing"
 
 	"github.com/jackc/pgx/v5/pgxpool"
-	waLog "go.mau.fi/whatsmeow/util/log"
+	wlog "github.com/acme/wadist/internal/log"
 )
 
 // newManagerWithSchema builds a schema-applied Manager wired to a real Redis
@@ -29,7 +29,7 @@ func newManagerWithSchema(t *testing.T) (*Manager, context.Context) {
 	migPool.Close()
 
 	rdb := newTestRedis(t)
-	m, err := newManager(ctx, Config{DSN: dsn, Redis: rdb, BadgerDir: t.TempDir()}, waLog.Noop)
+	m, err := newManager(ctx, Config{DSN: dsn, Redis: rdb, BadgerDir: t.TempDir()}, wlog.Noop)
 	if err != nil {
 		t.Fatalf("manager: %v", err)
 	}

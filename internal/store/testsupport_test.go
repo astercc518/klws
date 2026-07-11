@@ -11,7 +11,7 @@ import (
 	"github.com/testcontainers/testcontainers-go"
 	"github.com/testcontainers/testcontainers-go/modules/postgres"
 	"github.com/testcontainers/testcontainers-go/wait"
-	waLog "go.mau.fi/whatsmeow/util/log"
+	wlog "github.com/acme/wadist/internal/log"
 )
 
 // testDSN 起一次性 Postgres,返回 DSN;测试结束自动销毁。
@@ -67,7 +67,7 @@ func newTestManager(t *testing.T) *Manager {
 	migPool.Close()
 
 	rdb := newTestRedis(t)
-	m, err := newManager(ctx, Config{DSN: dsn, Redis: rdb, BadgerDir: t.TempDir()}, waLog.Noop)
+	m, err := newManager(ctx, Config{DSN: dsn, Redis: rdb, BadgerDir: t.TempDir()}, wlog.Noop)
 	if err != nil {
 		t.Fatalf("newTestManager: %v", err)
 	}

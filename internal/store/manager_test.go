@@ -6,10 +6,14 @@ import (
 	"testing"
 
 	"github.com/jackc/pgx/v5/pgxpool"
-	waLog "go.mau.fi/whatsmeow/util/log"
+
+	wlog "github.com/acme/wadist/internal/log"
 )
 
-func TestManager_Init_BadgerOnly(t *testing.T) {
+// TestManager_Init verifies the singleton Manager boots against a real
+// Postgres+Redis. The former whatsmeow/badger session store has been removed
+// (Evolution owns the WhatsApp data plane), so no device container is opened.
+func TestManager_Init(t *testing.T) {
 	if testing.Short() {
 		t.Skip("integration")
 	}
@@ -23,14 +27,14 @@ func TestManager_Init_BadgerOnly(t *testing.T) {
 	applyMigrations(t, ctx, migPool)
 	migPool.Close()
 
-	m, err := Init(ctx, Config{DSN: dsn, Redis: newTestRedis(t), BadgerDir: t.TempDir()}, waLog.Noop)
+	m, err := Init(ctx, Config{DSN: dsn, Redis: newTestRedis(t)}, wlog.Noop)
 	if err != nil {
 		t.Fatalf("init: %v", err)
 	}
 	defer m.Close()
 
-	// badger-only: sqlstore.Upgrade no longer runs, so the whatsmeow_device PG
-	// table must NOT be created.
+	// The whatsmeow_device PG table must NOT exist: it was only ever created by
+	// the removed session store's migrations.
 	var n int
 	if err := m.BizPool().QueryRow(ctx,
 		`SELECT count(*) FROM information_schema.tables WHERE table_name='whatsmeow_device'`).
@@ -38,25 +42,21 @@ func TestManager_Init_BadgerOnly(t *testing.T) {
 		t.Fatalf("query: %v", err)
 	}
 	if n != 0 {
-		t.Fatalf("whatsmeow_device table count = %d, want 0 (badger-only backend)", n)
+		t.Fatalf("whatsmeow_device table count = %d, want 0 (no session store)", n)
 	}
 
-	// container must be a working badger-backed device container.
-	if dev := m.container.NewDevice(); dev == nil {
-		t.Fatal("NewDevice returned nil")
+	// Business pool is live and usable.
+	if err := m.BizPool().Ping(ctx); err != nil {
+		t.Fatalf("biz pool ping: %v", err)
 	}
 }
 
-// TestManager_DistinctBadgerDir_NoCollision verifies that two Managers
-// pointed at the SAME Postgres+Redis but DIFFERENT BadgerDir paths can both
-// be opened successfully. This is the exact scenario cmd/console/main.go's
-// redis-injection + distinct-BadgerDir fix defends against: the console's
-// Manager (its Badger session store is unused — the console never sends
-// WhatsApp messages) must not dir-lock-collide with a co-located
-// cmd/wadist send node's Manager, and store.Init's hard "redis is required"
-// check must be satisfied once Redis is injected (mirrors cmd/console's
-// run() building store.Config with .Redis set before calling store.Init).
-func TestManager_DistinctBadgerDir_NoCollision(t *testing.T) {
+// TestManager_MultiInstance_NoCollision verifies that two Managers pointed at
+// the SAME Postgres+Redis can both be opened successfully. This is the scenario
+// cmd/console/main.go's redis-injection fix defends against: the console's
+// Manager must not collide with a co-located cmd/wadist send node's Manager,
+// and store.Init's hard "redis is required" check must be satisfied.
+func TestManager_MultiInstance_NoCollision(t *testing.T) {
 	if testing.Short() {
 		t.Skip("integration")
 	}
@@ -72,27 +72,22 @@ func TestManager_DistinctBadgerDir_NoCollision(t *testing.T) {
 
 	rdb := newTestRedis(t)
 
-	// "send node"-like Manager.
-	m1, err := newManager(ctx, Config{DSN: dsn, Redis: rdb, BadgerDir: t.TempDir()}, waLog.Noop)
+	m1, err := newManager(ctx, Config{DSN: dsn, Redis: rdb}, wlog.Noop)
 	if err != nil {
 		t.Fatalf("manager 1 (send-node-like): %v", err)
 	}
 	defer m1.Close()
 
-	// "console"-like Manager — distinct BadgerDir, same Postgres+Redis,
-	// same shape as cmd/console/main.go's run() after the fix.
-	m2, err := newManager(ctx, Config{DSN: dsn, Redis: rdb, BadgerDir: t.TempDir()}, waLog.Noop)
+	m2, err := newManager(ctx, Config{DSN: dsn, Redis: rdb}, wlog.Noop)
 	if err != nil {
 		t.Fatalf("manager 2 (console-like): %v", err)
 	}
 	defer m2.Close()
 
-	// Sanity: both are independently usable badger-backed containers — no
-	// dir-lock error was swallowed.
-	if dev := m1.container.NewDevice(); dev == nil {
-		t.Fatal("manager 1 NewDevice returned nil")
+	if err := m1.BizPool().Ping(ctx); err != nil {
+		t.Fatalf("manager 1 ping: %v", err)
 	}
-	if dev := m2.container.NewDevice(); dev == nil {
-		t.Fatal("manager 2 NewDevice returned nil")
+	if err := m2.BizPool().Ping(ctx); err != nil {
+		t.Fatalf("manager 2 ping: %v", err)
 	}
 }

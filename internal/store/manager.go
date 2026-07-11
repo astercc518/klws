@@ -11,29 +11,16 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 	_ "github.com/jackc/pgx/v5/stdlib" // 注册 "pgx" database/sql 驱动
 
-	"go.mau.fi/whatsmeow/store"
-	"go.mau.fi/whatsmeow/types"
-	waLog "go.mau.fi/whatsmeow/util/log"
-
-	"github.com/acme/wadist/internal/store/wabadger"
+	wlog "github.com/acme/wadist/internal/log"
 )
-
-// deviceContainer is the subset of container behaviour Manager needs
-// (wabadger.Container satisfies it via store.DeviceContainer).
-type deviceContainer interface {
-	GetDevice(ctx context.Context, jid types.JID) (*store.Device, error)
-	NewDevice() *store.Device
-}
 
 type Manager struct {
 	cfg        Config
-	container  deviceContainer
-	badgerDB   *wabadger.DB // the whatsmeow session store; closed by Manager.Close
 	bizPool    *pgxpool.Pool
 	tenantPool *pgxpool.Pool // RLS-constrained role app_tenant (or bizPool fallback)
 	systemPool *pgxpool.Pool // BYPASSRLS role app_system (or bizPool fallback)
 	sqlDB      *sql.DB
-	log        waLog.Logger
+	log        wlog.Logger
 	ownership  Ownership            // account ownership backend: redis lease w/ fence tokens
 	proxyAlloc *redisProxyAllocator // redis ZSET cooldown allocator; the sole proxy allocation backend
 }
@@ -45,7 +32,7 @@ var (
 )
 
 // Init 幂等初始化全局单例。
-func Init(ctx context.Context, cfg Config, logger waLog.Logger) (*Manager, error) {
+func Init(ctx context.Context, cfg Config, logger wlog.Logger) (*Manager, error) {
 	mgrOnce.Do(func() {
 		mgr, mgrErr = newManager(ctx, cfg, logger)
 	})
@@ -55,12 +42,12 @@ func Init(ctx context.Context, cfg Config, logger waLog.Logger) (*Manager, error
 // NewManager constructs a non-singleton Manager (its own pools). It exists for
 // tests and multi-instance scenarios; production entrypoints MUST use Init (the
 // singleton) to avoid opening duplicate connection pools.
-func NewManager(ctx context.Context, cfg Config, logger waLog.Logger) (*Manager, error) {
+func NewManager(ctx context.Context, cfg Config, logger wlog.Logger) (*Manager, error) {
 	return newManager(ctx, cfg, logger)
 }
 
 // newManager 构造一个独立 Manager(不走单例),供测试与多实例场景。
-func newManager(ctx context.Context, cfg Config, logger waLog.Logger) (*Manager, error) {
+func newManager(ctx context.Context, cfg Config, logger wlog.Logger) (*Manager, error) {
 	cfg.withDefaults()
 	if err := cfg.validate(); err != nil {
 		return nil, err
@@ -82,30 +69,11 @@ func newManager(ctx context.Context, cfg Config, logger waLog.Logger) (*Manager,
 		return nil, fmt.Errorf("ping whatsmeow db: %w", err)
 	}
 
-	var container deviceContainer
-	var badgerDB *wabadger.DB
-	// closeBadger releases the Badger DB (and its exclusive on-disk dir lock) on
-	// error-return paths.
-	// Every post-open error path below must call this alongside sqlDB.Close(),
-	// or a transient pool-config failure would leak the dir lock and block any
-	// later NewManager/Init on the same BadgerDir until process restart.
-	closeBadger := func() {
-		if badgerDB != nil {
-			_ = badgerDB.Close()
-		}
-	}
-	bdb, err := wabadger.Open(cfg.BadgerDir)
-	if err != nil {
-		_ = sqlDB.Close()
-		return nil, fmt.Errorf("open badger: %w", err)
-	}
-	badgerDB = bdb
-	container = wabadger.NewContainer(bdb, logger)
-	// NOTE: sqlDB 仍为业务表打开；whatsmeow session 表不再使用。
+	// sqlDB is opened for business tables only; the former whatsmeow/badger
+	// session store has been removed (Evolution owns the WhatsApp data plane).
 
 	poolCfg, err := pgxpool.ParseConfig(cfg.DSN)
 	if err != nil {
-		closeBadger()
 		_ = sqlDB.Close()
 		return nil, fmt.Errorf("parse biz pool config: %w", err)
 	}
@@ -117,7 +85,6 @@ func newManager(ctx context.Context, cfg Config, logger waLog.Logger) (*Manager,
 
 	bizPool, err := pgxpool.NewWithConfig(ctx, poolCfg)
 	if err != nil {
-		closeBadger()
 		_ = sqlDB.Close()
 		return nil, fmt.Errorf("create biz pool: %w", err)
 	}
@@ -128,7 +95,6 @@ func newManager(ctx context.Context, cfg Config, logger waLog.Logger) (*Manager,
 		tCfg, err := pgxpool.ParseConfig(cfg.AppTenantDSN)
 		if err != nil {
 			bizPool.Close()
-			closeBadger()
 			_ = sqlDB.Close()
 			return nil, fmt.Errorf("parse tenant pool config: %w", err)
 		}
@@ -136,7 +102,6 @@ func newManager(ctx context.Context, cfg Config, logger waLog.Logger) (*Manager,
 		tenantPool, err = pgxpool.NewWithConfig(ctx, tCfg)
 		if err != nil {
 			bizPool.Close()
-			closeBadger()
 			_ = sqlDB.Close()
 			return nil, fmt.Errorf("create tenant pool: %w", err)
 		}
@@ -150,7 +115,6 @@ func newManager(ctx context.Context, cfg Config, logger waLog.Logger) (*Manager,
 				tenantPool.Close()
 			}
 			bizPool.Close()
-			closeBadger()
 			_ = sqlDB.Close()
 			return nil, fmt.Errorf("parse system pool config: %w", err)
 		}
@@ -161,7 +125,6 @@ func newManager(ctx context.Context, cfg Config, logger waLog.Logger) (*Manager,
 				tenantPool.Close()
 			}
 			bizPool.Close()
-			closeBadger()
 			_ = sqlDB.Close()
 			return nil, fmt.Errorf("create system pool: %w", err)
 		}
@@ -169,8 +132,6 @@ func newManager(ctx context.Context, cfg Config, logger waLog.Logger) (*Manager,
 
 	m := &Manager{
 		cfg:        cfg,
-		container:  container,
-		badgerDB:   badgerDB,
 		bizPool:    bizPool,
 		tenantPool: tenantPool,
 		systemPool: systemPool,
@@ -212,8 +173,5 @@ func (m *Manager) Close() {
 	}
 	if m.sqlDB != nil {
 		_ = m.sqlDB.Close()
-	}
-	if m.badgerDB != nil {
-		_ = m.badgerDB.Close()
 	}
 }

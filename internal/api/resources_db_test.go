@@ -10,7 +10,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/jackc/pgx/v5/pgxpool"
-	waLog "go.mau.fi/whatsmeow/util/log"
+	wlog "github.com/acme/wadist/internal/log"
 
 	"github.com/acme/wadist/internal/store"
 )
@@ -46,7 +46,7 @@ func newAdminDeviceServer(t *testing.T) (*Server, *store.Manager) {
 	applyAllMigrations(t, ctx, pool)
 
 	rdb := newTestRedis(t)
-	mgr, err := store.NewManager(ctx, store.Config{DSN: dsn, Redis: rdb, NodeID: "admin-test-node", BadgerDir: t.TempDir()}, waLog.Noop)
+	mgr, err := store.NewManager(ctx, store.Config{DSN: dsn, Redis: rdb, NodeID: "admin-test-node", BadgerDir: t.TempDir()}, wlog.Noop)
 	if err != nil {
 		t.Fatalf("store.NewManager: %v", err)
 	}

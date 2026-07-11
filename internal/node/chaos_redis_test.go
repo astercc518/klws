@@ -18,7 +18,7 @@ import (
 	"github.com/testcontainers/testcontainers-go"
 	"github.com/testcontainers/testcontainers-go/modules/postgres"
 	"github.com/testcontainers/testcontainers-go/wait"
-	waLog "go.mau.fi/whatsmeow/util/log"
+	wlog "github.com/acme/wadist/internal/log"
 )
 
 func TestTakeoverChaos_Redis(t *testing.T) {
@@ -104,7 +104,7 @@ func newTestManagerRedisAs(t *testing.T, redisAddr, nodeID string) *store.Manage
 	t.Cleanup(func() { _ = rdb.Close() })
 	m, err := store.NewManager(ctx, store.Config{
 		DSN: dsn, Redis: rdb, NodeID: nodeID, BadgerDir: t.TempDir(),
-	}, waLog.Noop)
+	}, wlog.Noop)
 	if err != nil { t.Fatalf("newManager: %v", err) }
 	t.Cleanup(m.Close)
 	return m

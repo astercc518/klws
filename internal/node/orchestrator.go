@@ -11,8 +11,8 @@ import (
 	"time"
 
 	"github.com/acme/wadist/internal/cluster"
+	wlog "github.com/acme/wadist/internal/log"
 	"github.com/acme/wadist/internal/store"
-	waLog "go.mau.fi/whatsmeow/util/log"
 )
 
 // SessionFactory builds and connects a Session for an account using a held lock.
@@ -29,18 +29,18 @@ type Orchestrator struct {
 	nodeID        string
 	factory       SessionFactory
 	guardInterval time.Duration
-	logger        waLog.Logger
+	logger        wlog.Logger
 }
 
 // NewOrchestrator creates an Orchestrator. guardInterval <= 0 defaults to 10s.
-// logger may be nil; a nil logger defaults to waLog.Noop() so callers and tests
+// logger may be nil; a nil logger defaults to log.Noop so callers and tests
 // can omit it safely.
-func NewOrchestrator(mgr *store.Manager, reg *cluster.Registry, sup *cluster.Supervisor, nodeID string, factory SessionFactory, guardInterval time.Duration, logger waLog.Logger) *Orchestrator {
+func NewOrchestrator(mgr *store.Manager, reg *cluster.Registry, sup *cluster.Supervisor, nodeID string, factory SessionFactory, guardInterval time.Duration, logger wlog.Logger) *Orchestrator {
 	if guardInterval <= 0 {
 		guardInterval = 10 * time.Second
 	}
 	if logger == nil {
-		logger = waLog.Noop
+		logger = wlog.Noop
 	}
 	return &Orchestrator{
 		mgr:           mgr,

@@ -17,7 +17,7 @@ import (
 	"github.com/testcontainers/testcontainers-go"
 	"github.com/testcontainers/testcontainers-go/modules/postgres"
 	"github.com/testcontainers/testcontainers-go/wait"
-	waLog "go.mau.fi/whatsmeow/util/log"
+	wlog "github.com/acme/wadist/internal/log"
 )
 
 // testManagerNodeID is the fixed cfg.NodeID used by newTestManager. Ownership
@@ -119,7 +119,7 @@ func newTestManager(t *testing.T) *store.Manager {
 	rdb := goredis.NewClient(&goredis.Options{Addr: redisAddr})
 	t.Cleanup(func() { _ = rdb.Close() })
 
-	m, err := store.NewManager(ctx, store.Config{DSN: dsn, Redis: rdb, NodeID: testManagerNodeID, BadgerDir: t.TempDir()}, waLog.Noop)
+	m, err := store.NewManager(ctx, store.Config{DSN: dsn, Redis: rdb, NodeID: testManagerNodeID, BadgerDir: t.TempDir()}, wlog.Noop)
 	if err != nil {
 		t.Fatalf("newManager: %v", err)
 	}
