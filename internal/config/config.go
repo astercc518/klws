@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/acme/wadist/internal/store"
@@ -97,6 +98,16 @@ type Config struct {
 	EvolutionAPIKey        string
 	EvolutionWebhookSecret string
 	EvolutionNode          string
+	// Evolution cutover (E6)
+	Sender               string            // WADIST_SENDER: whatsmeow|evolution
+	Conn                 string            // WADIST_CONN: whatsmeow|evolution
+	EvolutionNodes       map[string]string // node name -> base URL
+	EvolutionCapPerNode  int
+	EvolutionWebhookURL  string
+	EvoLimiterMax        int
+	EvoBreakerThreshold  int
+	EvoBreakerCooloffSec int
+	EvoRetryAttempts     int
 }
 
 // Load reads configuration from the environment. PostgresDSN is required;
@@ -206,6 +217,16 @@ func Load() (*Config, error) {
 	cfg.BackoffMax = intEnv("WADIST_BACKOFF_MAX", 8)
 	cfg.BackoffTTL = msEnv("WADIST_BACKOFF_TTL_MS", 300000)
 
+	cfg.Sender = getenv("WADIST_SENDER", "whatsmeow")
+	cfg.Conn = getenv("WADIST_CONN", "whatsmeow")
+	cfg.EvolutionNodes = parseNodes(getenv("WADIST_EVOLUTION_NODES", ""), cfg.EvolutionBaseURL)
+	cfg.EvolutionCapPerNode = intEnv("WADIST_EVOLUTION_CAP_PER_NODE", 800)
+	cfg.EvolutionWebhookURL = getenv("WADIST_EVOLUTION_WEBHOOK_URL", "")
+	cfg.EvoLimiterMax = intEnv("WADIST_EVO_LIMITER_MAX", 1)
+	cfg.EvoBreakerThreshold = intEnv("WADIST_EVO_BREAKER_THRESHOLD", 5)
+	cfg.EvoBreakerCooloffSec = intEnv("WADIST_EVO_BREAKER_COOLOFF_SEC", 30)
+	cfg.EvoRetryAttempts = intEnv("WADIST_EVO_RETRY_ATTEMPTS", 4)
+
 	mk, err := decodeKey32("WADIST_MASTER_KEY")
 	if err != nil {
 		return nil, err
@@ -289,6 +310,27 @@ func getenvInt32(key string, def int32) int32 {
 		return def
 	}
 	return int32(n)
+}
+
+// parseNodes parses "n1=url1,n2=url2" into a node->URL map. Empty/malformed
+// entries are skipped. An empty result falls back to {"default": fallbackURL}.
+func parseNodes(s, fallbackURL string) map[string]string {
+	out := map[string]string{}
+	for _, pair := range strings.Split(s, ",") {
+		pair = strings.TrimSpace(pair)
+		if pair == "" {
+			continue
+		}
+		i := strings.IndexByte(pair, '=')
+		if i <= 0 || i == len(pair)-1 {
+			continue // no '=', empty name, or empty url
+		}
+		out[strings.TrimSpace(pair[:i])] = strings.TrimSpace(pair[i+1:])
+	}
+	if len(out) == 0 {
+		return map[string]string{"default": fallbackURL}
+	}
+	return out
 }
 
 func hostnameOr(def string) string {

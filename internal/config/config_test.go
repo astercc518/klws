@@ -331,3 +331,38 @@ func TestLoad_EvolutionDefaults(t *testing.T) {
 		t.Fatalf("node default = %q", cfg.EvolutionNode)
 	}
 }
+
+func TestLoad_EvolutionCutoverDefaults(t *testing.T) {
+	t.Setenv("WADIST_POSTGRES_DSN", "postgres://x")
+	t.Setenv("WADIST_SENDER", "")
+	t.Setenv("WADIST_CONN", "")
+	t.Setenv("WADIST_EVOLUTION_NODES", "")
+	t.Setenv("WADIST_EVOLUTION_BASE_URL", "http://evo:8080")
+	cfg, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Sender != "whatsmeow" || cfg.Conn != "whatsmeow" {
+		t.Fatalf("defaults must stay whatsmeow: sender=%q conn=%q", cfg.Sender, cfg.Conn)
+	}
+	if cfg.EvolutionCapPerNode != 800 || cfg.EvoLimiterMax != 1 || cfg.EvoRetryAttempts != 4 {
+		t.Fatalf("knob defaults wrong: %+v", cfg)
+	}
+	// empty nodes -> single fallback node from base url
+	if len(cfg.EvolutionNodes) != 1 || cfg.EvolutionNodes["default"] != "http://evo:8080" {
+		t.Fatalf("nodes fallback wrong: %v", cfg.EvolutionNodes)
+	}
+}
+
+func TestParseNodes(t *testing.T) {
+	m := parseNodes("n1=http://a:8080, n2=http://b:8080", "http://fb")
+	if len(m) != 2 || m["n1"] != "http://a:8080" || m["n2"] != "http://b:8080" {
+		t.Fatalf("parse multi wrong: %v", m)
+	}
+	if fb := parseNodes("", "http://fb"); len(fb) != 1 || fb["default"] != "http://fb" {
+		t.Fatalf("empty fallback wrong: %v", fb)
+	}
+	if bad := parseNodes("garbage,=nourl,name=", "http://fb"); bad["default"] != "http://fb" {
+		t.Fatalf("all-malformed should fall back: %v", bad)
+	}
+}
