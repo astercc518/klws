@@ -75,3 +75,43 @@ func TestBindInstanceJID_EmptyIsNull(t *testing.T) {
 		t.Fatalf("JIDForInstance after empty bind = %q ok=%v err=%v; want ok=false", jid, ok, err)
 	}
 }
+
+func TestNodeCounts(t *testing.T) {
+	if testing.Short() {
+		t.Skip("integration")
+	}
+	ctx := context.Background()
+	m := newTestManager(t)
+	// seed: 2 on nodeA, 1 on nodeB
+	mustUpsert := func(name, node string) {
+		if err := m.UpsertInstance(ctx, InstanceRow{
+			InstanceName: name, TenantID: 1, EvoNode: node, State: "created",
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	mustUpsert("i1", "nodeA")
+	mustUpsert("i2", "nodeA")
+	mustUpsert("i3", "nodeB")
+
+	counts, err := m.NodeCounts(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if counts["nodeA"] != 2 || counts["nodeB"] != 1 {
+		t.Fatalf("counts=%v want nodeA:2 nodeB:1", counts)
+	}
+}
+
+func TestNodeCounts_EmptyIsNonNil(t *testing.T) {
+	if testing.Short() {
+		t.Skip("integration")
+	}
+	counts, err := newTestManager(t).NodeCounts(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if counts == nil {
+		t.Fatal("empty table must return non-nil empty map")
+	}
+}
