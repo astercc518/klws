@@ -2,6 +2,8 @@ package cluster
 
 import (
 	"context"
+	"errors"
+	"strings"
 	"testing"
 
 	"github.com/acme/wadist/internal/store"
@@ -13,16 +15,25 @@ type fakeEvoAPI struct {
 	typingCalls        int
 	proxySeen          *store.ProxyBinding
 	webhookSeen        string
+	setProxyErr        error
+	// order records the call sequence so tests can assert create->proxy->connect.
+	order []string
 }
 
-func (f *fakeEvoAPI) CreateInstance(_ context.Context, _ string, p *store.ProxyBinding, w string) error {
+func (f *fakeEvoAPI) CreateInstance(_ context.Context, _ string, w string) error {
 	f.created = true
-	f.proxySeen = p
 	f.webhookSeen = w
+	f.order = append(f.order, "create")
 	return nil
+}
+func (f *fakeEvoAPI) SetProxy(_ context.Context, _ string, p *store.ProxyBinding) error {
+	f.proxySeen = p
+	f.order = append(f.order, "setproxy")
+	return f.setProxyErr
 }
 func (f *fakeEvoAPI) ConnectInstance(_ context.Context, _ string) (string, error) {
 	f.connected = true
+	f.order = append(f.order, "connect")
 	return "QR", nil
 }
 func (f *fakeEvoAPI) SetPresence(_ context.Context, _ string, a bool) error {
@@ -34,18 +45,44 @@ func (f *fakeEvoAPI) SendTyping(_ context.Context, _, _ string, _ bool) error {
 	return nil
 }
 
-func TestEvoInstance_ConnectCreatesThenConnects(t *testing.T) {
+func TestEvoInstance_ConnectSequencesCreateProxyConnect(t *testing.T) {
 	f := &fakeEvoAPI{}
 	b := &store.ProxyBinding{ProxyURL: "socks5://u:p@1.2.3.4:1080"}
 	e := NewEvoInstance(f, "wa_1", "https://cp/wh", b)
 	if err := e.Connect(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	if !f.created || !f.connected {
-		t.Fatalf("created=%v connected=%v", f.created, f.connected)
-	}
 	if f.proxySeen != b || f.webhookSeen != "https://cp/wh" {
-		t.Fatal("proxy/webhook not threaded to CreateInstance")
+		t.Fatal("proxy/webhook not threaded")
+	}
+	// Proxy MUST be applied before the socket dials (create -> setproxy -> connect).
+	if got := strings.Join(f.order, ","); got != "create,setproxy,connect" {
+		t.Fatalf("call order = %q, want create,setproxy,connect", got)
+	}
+}
+
+func TestEvoInstance_ConnectNoProxySkipsSetProxy(t *testing.T) {
+	f := &fakeEvoAPI{}
+	e := NewEvoInstance(f, "wa_1", "", nil)
+	if err := e.Connect(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if got := strings.Join(f.order, ","); got != "create,connect" {
+		t.Fatalf("call order = %q, want create,connect", got)
+	}
+}
+
+// Fail-closed: if the proxy cannot be applied, the instance must NOT connect
+// proxyless — Connect errors and ConnectInstance is never called.
+func TestEvoInstance_ConnectFailsClosedOnProxyError(t *testing.T) {
+	f := &fakeEvoAPI{setProxyErr: errors.New("invalid proxy")}
+	b := &store.ProxyBinding{ProxyURL: "socks5://u:p@1.2.3.4:1080"}
+	e := NewEvoInstance(f, "wa_1", "", b)
+	if err := e.Connect(context.Background()); err == nil {
+		t.Fatal("expected error when proxy set fails")
+	}
+	if f.connected {
+		t.Fatal("must NOT connect a proxyless instance when SetProxy failed")
 	}
 }
 

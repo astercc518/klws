@@ -47,7 +47,7 @@ type Deps struct {
 	BlindKey   []byte // HMAC blind-index key (campaign recipient dedup/suppression)
 	CORSOrigin string // allowed browser origin (default http://localhost:3000)
 
-	EvolutionWebhookSecret string // HMAC secret for the Evolution webhook (WADIST_EVOLUTION_WEBHOOK_SECRET); empty = dev, accept unsigned
+	EvolutionWebhookSecret string // Authorization token Evolution echoes on webhook callbacks (WADIST_EVOLUTION_WEBHOOK_SECRET); empty = dev, accept unauthenticated
 }
 
 // Server holds the injected deps plus a readiness flag (mirrors console.Server

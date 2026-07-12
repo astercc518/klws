@@ -3,9 +3,6 @@ package api
 import (
 	"bytes"
 	"context"
-	"crypto/hmac"
-	"crypto/sha256"
-	"encoding/hex"
 	"errors"
 	"net/http"
 	"net/http/httptest"
@@ -17,32 +14,29 @@ import (
 	"github.com/acme/wadist/internal/receipt"
 )
 
-func sign(secret string, body []byte) string {
-	mac := hmac.New(sha256.New, []byte(secret))
-	mac.Write(body)
-	return hex.EncodeToString(mac.Sum(nil))
-}
-
-func TestEvolutionWebhook_HMAC(t *testing.T) {
+// TestEvolutionWebhook_Authorization pins the v2 auth model: Evolution echoes the
+// configured webhook.headers.authorization back as an Authorization header (it
+// does NOT sign the body). Matching token -> 200; wrong/missing -> 401.
+func TestEvolutionWebhook_Authorization(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	r := gin.New()
 	NewEvolutionWebhook("s3cr3t", &fakeReceipt{}, newFakeInst(), nil).Register(r)
 	body := []byte(`{"event":"connection.update","instance":"wa_1","data":{"state":"open"}}`)
 
 	req := httptest.NewRequest(http.MethodPost, "/webhook/evolution", bytes.NewReader(body))
-	req.Header.Set("X-Evolution-Signature", sign("s3cr3t", body))
+	req.Header.Set("Authorization", "s3cr3t")
 	w := httptest.NewRecorder()
 	r.ServeHTTP(w, req)
 	if w.Code != http.StatusOK {
-		t.Fatalf("valid sig -> %d", w.Code)
+		t.Fatalf("valid token -> %d", w.Code)
 	}
 
 	req2 := httptest.NewRequest(http.MethodPost, "/webhook/evolution", bytes.NewReader(body))
-	req2.Header.Set("X-Evolution-Signature", "deadbeef")
+	req2.Header.Set("Authorization", "wrong")
 	w2 := httptest.NewRecorder()
 	r.ServeHTTP(w2, req2)
 	if w2.Code != http.StatusUnauthorized {
-		t.Fatalf("bad sig -> %d", w2.Code)
+		t.Fatalf("bad token -> %d", w2.Code)
 	}
 }
 
@@ -100,15 +94,16 @@ func postWebhook(t *testing.T, h *EvolutionWebhook, body []byte) int {
 	return w.Code
 }
 
+// Evolution v2 connection.update carries the account's own JID in `wuid`.
 func TestWebhook_ConnectionUpdate_BindsJIDAndState(t *testing.T) {
 	inst := newFakeInst()
 	h := NewEvolutionWebhook("", &fakeReceipt{}, inst, nil)
-	body := []byte(`{"event":"connection.update","instance":"wa_1","data":{"state":"open","remoteJid":"123@s.whatsapp.net"}}`)
+	body := []byte(`{"event":"connection.update","instance":"wa_1","data":{"state":"open","wuid":"123@s.whatsapp.net"}}`)
 	if code := postWebhook(t, h, body); code != http.StatusOK {
 		t.Fatalf("code=%d", code)
 	}
 	if inst.bound["wa_1"] != "123@s.whatsapp.net" {
-		t.Fatalf("jid not bound: %+v", inst.bound)
+		t.Fatalf("jid not bound from wuid: %+v", inst.bound)
 	}
 	if inst.states["wa_1"] != "open" {
 		t.Fatalf("state=%q", inst.states["wa_1"])
@@ -127,12 +122,14 @@ func TestWebhook_ConnectionClose_FiresHealthSignal(t *testing.T) {
 	}
 }
 
+// Evolution v2 messages.update is FLAT: data.keyId / data.fromMe / data.status
+// (no nested key, no numeric ack). This is the receipt-matching command point.
 func TestWebhook_MessagesUpdate_RecordsReadReceipt(t *testing.T) {
 	inst := newFakeInst()
 	inst.jidByInst["wa_1"] = "123@s.whatsapp.net"
 	rec := &fakeReceipt{}
 	h := NewEvolutionWebhook("", rec, inst, nil)
-	body := []byte(`{"event":"messages.update","instance":"wa_1","data":{"ack":4,"key":{"id":"WAMID7","fromMe":true}}}`)
+	body := []byte(`{"event":"messages.update","instance":"wa_1","data":{"keyId":"WAMID7","fromMe":true,"status":"READ"}}`)
 	postWebhook(t, h, body)
 	if len(rec.evs) != 1 {
 		t.Fatalf("recorded %d events", len(rec.evs))
@@ -144,10 +141,37 @@ func TestWebhook_MessagesUpdate_RecordsReadReceipt(t *testing.T) {
 	}
 }
 
+// DELIVERY_ACK status maps to a delivered receipt.
+func TestWebhook_MessagesUpdate_DeliveryAck(t *testing.T) {
+	inst := newFakeInst()
+	inst.jidByInst["wa_1"] = "123@s.whatsapp.net"
+	rec := &fakeReceipt{}
+	h := NewEvolutionWebhook("", rec, inst, nil)
+	body := []byte(`{"event":"messages.update","instance":"wa_1","data":{"keyId":"M8","fromMe":true,"status":"DELIVERY_ACK"}}`)
+	postWebhook(t, h, body)
+	if len(rec.evs) != 1 || rec.evs[0].Kind != receipt.Delivered {
+		t.Fatalf("want one delivered receipt, got %+v", rec.evs)
+	}
+}
+
+// SERVER_ACK (message reached the WA server = "sent") is recorded at send time,
+// so the webhook must skip it — no duplicate receipt.
+func TestWebhook_MessagesUpdate_ServerAckSkipped(t *testing.T) {
+	inst := newFakeInst()
+	inst.jidByInst["wa_1"] = "123@s.whatsapp.net"
+	rec := &fakeReceipt{}
+	h := NewEvolutionWebhook("", rec, inst, nil)
+	body := []byte(`{"event":"messages.update","instance":"wa_1","data":{"keyId":"M9","fromMe":true,"status":"SERVER_ACK"}}`)
+	postWebhook(t, h, body)
+	if len(rec.evs) != 0 {
+		t.Fatalf("SERVER_ACK must be skipped: %+v", rec.evs)
+	}
+}
+
 func TestWebhook_MessagesUpdate_UnknownInstanceNoRecord(t *testing.T) {
 	rec := &fakeReceipt{}
 	h := NewEvolutionWebhook("", rec, newFakeInst(), nil)
-	body := []byte(`{"event":"messages.update","instance":"ghost","data":{"ack":4,"key":{"id":"X","fromMe":true}}}`)
+	body := []byte(`{"event":"messages.update","instance":"ghost","data":{"keyId":"X","fromMe":true,"status":"READ"}}`)
 	postWebhook(t, h, body)
 	if len(rec.evs) != 0 {
 		t.Fatalf("must not record for unknown instance: %+v", rec.evs)
@@ -159,7 +183,7 @@ func TestWebhook_MessagesUpdate_NotFromMeSkipped(t *testing.T) {
 	inst.jidByInst["wa_1"] = "j"
 	rec := &fakeReceipt{}
 	h := NewEvolutionWebhook("", rec, inst, nil)
-	body := []byte(`{"event":"messages.update","instance":"wa_1","data":{"ack":4,"key":{"id":"X","fromMe":false}}}`)
+	body := []byte(`{"event":"messages.update","instance":"wa_1","data":{"keyId":"X","fromMe":false,"status":"READ"}}`)
 	postWebhook(t, h, body)
 	if len(rec.evs) != 0 {
 		t.Fatalf("inbound (not fromMe) must be skipped: %+v", rec.evs)
@@ -171,7 +195,7 @@ func TestWebhook_MessagesUpdate_DBErrorReturns500(t *testing.T) {
 	inst.jidByInst["wa_1"] = "123@s.whatsapp.net"
 	rec := &errReceipt{} // Record returns an error
 	h := NewEvolutionWebhook("", rec, inst, nil)
-	body := []byte(`{"event":"messages.update","instance":"wa_1","data":{"ack":4,"key":{"id":"X","fromMe":true}}}`)
+	body := []byte(`{"event":"messages.update","instance":"wa_1","data":{"keyId":"X","fromMe":true,"status":"READ"}}`)
 	code := postWebhook(t, h, body)
 	if code != http.StatusInternalServerError {
 		t.Fatalf("db error must yield 500, got %d", code)

@@ -178,7 +178,7 @@ func run(ctx context.Context, cfg *config.Config) (*metrics.Server, func(), erro
 
 	// Evolution send chain (E6) is now the sole data plane; whatsmeow/wabadger
 	// have been removed. The SendWorker always drives this chain.
-	evoCluster := cluster.NewEvoCluster(cfg.EvolutionNodes, cfg.EvolutionAPIKey)
+	evoCluster := cluster.NewEvoCluster(cfg.EvolutionNodes, cfg.EvolutionAPIKey, cfg.EvolutionWebhookSecret)
 	evoRing := nodering.New(200, evoCluster.Nodes()...)
 	// adapter: jid's instance -> node -> per-node EvoClient.SendText -> key.id
 	evoSendAdapter := evoSendFn(func(ctx context.Context, instance, phone, body string) (string, error) {

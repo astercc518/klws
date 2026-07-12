@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
@@ -55,19 +56,24 @@ func IsPermanent(err error) bool {
 type EvoClient struct {
 	baseURL string
 	apiKey  string
-	http    *http.Client
+	// webhookAuth is the token Evolution will echo back on every webhook callback
+	// (configured as webhook.headers.authorization at create time). The receiver
+	// compares it against WADIST_EVOLUTION_WEBHOOK_SECRET. Empty = no auth header.
+	webhookAuth string
+	http        *http.Client
 }
 
-func NewEvoClient(baseURL, apiKey string) *EvoClient {
+func NewEvoClient(baseURL, apiKey, webhookAuth string) *EvoClient {
 	tr := &http.Transport{
 		MaxConnsPerHost:     64,
 		MaxIdleConnsPerHost: 32,
 		IdleConnTimeout:     90 * time.Second,
 	}
 	return &EvoClient{
-		baseURL: strings.TrimRight(baseURL, "/"),
-		apiKey:  apiKey,
-		http:    &http.Client{Transport: tr, Timeout: 30 * time.Second},
+		baseURL:     strings.TrimRight(baseURL, "/"),
+		apiKey:      apiKey,
+		webhookAuth: webhookAuth,
+		http:        &http.Client{Transport: tr, Timeout: 30 * time.Second},
 	}
 }
 
@@ -118,36 +124,53 @@ func (c *EvoClient) FetchState(ctx context.Context, instanceName string) (string
 	return out.Instance.State, nil
 }
 
-// CreateInstance provisions an Evolution instance bound to a proxy in one call.
-// Proxy stickiness: callers invoke this only on first bind or after proxy death
-// — never per-send. When webhookURL is non-empty the instance is configured to
-// POST callbacks (connection/messages) back to the control plane.
-// TODO(evo-verify): confirm path/fields against real Evolution v2.
-func (c *EvoClient) CreateInstance(ctx context.Context, instanceName string, proxy *store.ProxyBinding, webhookURL string) error {
+// CreateInstance provisions an Evolution instance. The proxy is NOT set here:
+// Evolution v2 configures proxy via a separate POST /proxy/set/{name} AFTER the
+// instance exists (the create body's flat proxy fields are ignored in v2), so
+// callers sequence Create -> SetProxy -> Connect (see evoInstance.Connect).
+// When webhookURL is non-empty the instance is configured to POST callbacks
+// (connection/messages) back to the control plane, echoing webhookAuth in the
+// Authorization header so the receiver can authenticate them.
+func (c *EvoClient) CreateInstance(ctx context.Context, instanceName, webhookURL string) error {
 	body := map[string]any{
 		"instanceName": instanceName,
 		"integration":  "WHATSAPP-BAILEYS",
-	}
-	if proxy != nil {
-		p, ok := proxyFromBinding(proxy)
-		if !ok {
-			return fmt.Errorf("evolution create %s: proxy binding present but unparseable: %q", instanceName, proxy.ProxyURL)
-		}
-		body["proxyHost"] = p.Host
-		body["proxyPort"] = p.Port
-		body["proxyProtocol"] = p.Protocol
-		if p.Username != "" {
-			body["proxyUsername"] = p.Username
-			body["proxyPassword"] = p.Password
-		}
+		"qrcode":       false,
 	}
 	if webhookURL != "" {
-		body["webhook"] = map[string]any{
+		wh := map[string]any{
 			"url":    webhookURL,
 			"events": []string{"CONNECTION_UPDATE", "MESSAGES_UPDATE", "QRCODE_UPDATED"},
 		}
+		if c.webhookAuth != "" {
+			wh["headers"] = map[string]any{"authorization": c.webhookAuth}
+		}
+		body["webhook"] = wh
 	}
 	return c.doJSON(ctx, http.MethodPost, "/instance/create", body, nil)
+}
+
+// SetProxy binds a sticky proxy to an existing instance via Evolution v2's
+// dedicated endpoint. Returns an error when the binding is present but
+// unparseable (fail-closed: the caller must NOT connect a proxyless instance).
+// Evolution validates the proxy on its side (test connection) and 400s a dead
+// one, which surfaces here as an *EvoHTTPError.
+func (c *EvoClient) SetProxy(ctx context.Context, instanceName string, proxy *store.ProxyBinding) error {
+	p, ok := proxyFromBinding(proxy)
+	if !ok {
+		return fmt.Errorf("evolution setProxy %s: proxy binding present but unparseable: %q", instanceName, bindingURL(proxy))
+	}
+	body := map[string]any{
+		"enabled":  true,
+		"host":     p.Host,
+		"port":     strconv.Itoa(p.Port),
+		"protocol": p.Protocol,
+	}
+	if p.Username != "" {
+		body["username"] = p.Username
+		body["password"] = p.Password
+	}
+	return c.doJSON(ctx, http.MethodPost, "/proxy/set/"+instanceName, body, nil)
 }
 
 // ConnectInstance triggers pairing and returns a QR (base64 data URI) when the

@@ -9,7 +9,7 @@ func TestEvoCluster_ForAndNodes(t *testing.T) {
 	c := NewEvoCluster(map[string]string{
 		"nodeA": "http://a:8080",
 		"nodeB": "http://b:8080",
-	}, "key")
+	}, "key", "")
 
 	if got := c.Nodes(); !reflect.DeepEqual(got, []string{"nodeA", "nodeB"}) {
 		t.Fatalf("Nodes()=%v want sorted [nodeA nodeB]", got)
@@ -24,7 +24,7 @@ func TestEvoCluster_ForAndNodes(t *testing.T) {
 }
 
 func TestEvoCluster_Empty(t *testing.T) {
-	c := NewEvoCluster(nil, "k")
+	c := NewEvoCluster(nil, "k", "")
 	if len(c.Nodes()) != 0 {
 		t.Fatal("empty cluster has no nodes")
 	}

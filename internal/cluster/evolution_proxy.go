@@ -18,6 +18,14 @@ type evoProxy struct {
 	Password string
 }
 
+// bindingURL returns the binding's URL for error messages, nil-safe.
+func bindingURL(b *store.ProxyBinding) string {
+	if b == nil {
+		return "<nil>"
+	}
+	return b.ProxyURL
+}
+
 // proxyFromBinding splits a ProxyBinding.ProxyURL into Evolution's proxy parts.
 // Returns ok=false for a nil/empty binding or an unparseable URL (host/port
 // missing) — the caller then creates the instance without a proxy rather than

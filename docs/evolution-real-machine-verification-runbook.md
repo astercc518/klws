@@ -1,6 +1,30 @@
 # Evolution API 真机验证 Runbook（E6 cutover 前置）
 
-**日期**: 2026-07-10
+**日期**: 2026-07-10（2026-07-12 更新：文档/源码核对结论已回填并修码）
+
+---
+
+## ⚠️ 2026-07-12 更新：源码核对结论 + 已落地的修正
+
+在起真机之前，先对 **Evolution API v2 官方文档 + `EvolutionAPI/evolution-api` 源码**（`whatsapp.baileys.service.ts`、`proxy.dto.ts`、`proxy.router.ts`、`openapi-v2.json`）逐条核对了 11 处假设。**其中 4 处被源码坐实为真 bug 并已就地修复**（TDD，`internal/api` + `internal/cluster` 单测全绿）：
+
+| 命门 | 我们原来的错误假设 | 源码确认的真实值 | 已改 |
+|---|---|---|---|
+| **V0 webhook 鉴权** | header `X-Evolution-Signature` = HMAC-SHA256(body) | Evolution v2 **不签名 body**；它把 create 时配置的 `webhook.headers.authorization` 原样回发为 `Authorization` 头 | `webhook_evolution.go:verify` 改比对 `Authorization`（常量时间）；`CreateInstance` 配 `webhook.headers.authorization`；`EvoClient`/`EvoCluster` 加 `webhookAuth` 线 |
+| **V1 本账号 jid** | `connection.update` 的 `data.remoteJid` | 本号 jid 在 **`data.wuid`**（`remoteJid` 是对端） | `webhook_evolution_types.go` 加 `wuid` + `ownJID()`；handler 用之绑定 |
+| **V2 回执形状** | `messages.update` 嵌套 `data.key.id` + 数字 `data.ack` | **扁平** `data.keyId` / `data.fromMe` / `data.status`（无嵌套 key、无数字 ack） | 加扁平字段 + `msgID()/fromMe()` 双形状容错；`status` 串 `DELIVERY_ACK/READ/PLAYED/SERVER_ACK` 语义已对 |
+| **C2 代理绑定** | `/instance/create` body 平铺 `proxyHost/proxyPort/...` | v2 **无视 create 里的 proxy**；须独立 `POST /proxy/set/{name}` body `{enabled,host,port:字符串,protocol,username,password}`，且要**先 create 后 setProxy 再 connect** | 新 `EvoClient.SetProxy`；`evoInstance.Connect` 改 create→setProxy→connect，**fail-closed**（proxy 设失败绝不 connect 直连） |
+
+**仍需真机确认（文档不足以定，代码保持容错/保守默认，不再是"必错"阻塞项）**：
+- **V3 状态码**：`IsThrottle=429/503`、`IsPermanent=400/401/403/404/422`。403 当 permanent 仍需真机验登出/未连接的真实码（3.5）。
+- **QR 字段**：`ConnectInstance` 读 `base64`（3.1 C4），需真机确认字段名。
+- **presence 端点** P1/P2（3.4）。
+- **`Authorization` 头大小写/前缀**：Evolution 回发 `webhook.headers.authorization` 时的确切头名（我们读 `Authorization`，直接比对 token 无 `Bearer ` 前缀）。
+
+下面原始 runbook 保留，真机跑时重点验剩余项即可；已修的 4 处对真实 payload 起沙盒对拍一遍确认无回归。**真机沙盒见 `docs/four-phase-demo/evo-verify/`**。
+
+---
+
 **状态**: 待执行——**这是 E6 cutover 的硬前置**。E0–E5 已把整套 Evolution 客户端/webhook/发送/分片造好并合并 main（32 提交本地未推送），但**所有 REST 路径、JSON 字段名、webhook 事件形状、ack 数值、错误状态码至今 0 真机验证**（代码里 11 处 `TODO(evo-verify)`）。本 runbook 起一个真实 Evolution 实例，逐条对拍这些假设，把每个偏差就地修掉，然后才能上 E6。
 
 **为什么必须先做**：E6 会一次性把这 11 个假设接到 live 生产 + 删 whatsmeow + 账号全量重扫码——**不可逆**。字段名错一个 = 回执全断 / 状态不更新 / 误判封号，且回滚成本灾难级。

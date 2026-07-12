@@ -2,6 +2,7 @@ package cluster
 
 import (
 	"context"
+	"fmt"
 	"sync"
 
 	"github.com/acme/wadist/internal/store"
@@ -21,7 +22,8 @@ const (
 
 // evoAPI is the slice of EvoClient that evoInstance needs (fake-testable).
 type evoAPI interface {
-	CreateInstance(ctx context.Context, instanceName string, proxy *store.ProxyBinding, webhookURL string) error
+	CreateInstance(ctx context.Context, instanceName, webhookURL string) error
+	SetProxy(ctx context.Context, instanceName string, proxy *store.ProxyBinding) error
 	ConnectInstance(ctx context.Context, instanceName string) (string, error)
 	SetPresence(ctx context.Context, instanceName string, available bool) error
 	SendTyping(ctx context.Context, instanceName, toPhone string, composing bool) error
@@ -56,12 +58,21 @@ var (
 // assert it now so any EvoClient signature drift fails the build here.
 var _ evoAPI = (*EvoClient)(nil)
 
-// Connect provisions the instance (idempotent, sticky proxy + webhook) then
-// triggers pairing. The QR (if unpaired) arrives via the QRCODE_UPDATED
-// webhook; Connect propagates only errors.
+// Connect provisions the instance, applies its sticky proxy, then triggers
+// pairing — in that order, because Evolution v2 sets proxy on an already-created
+// instance and the WA socket must dial through the proxy, never direct. It is
+// FAIL-CLOSED: if a proxy is bound but cannot be applied, Connect returns the
+// error WITHOUT calling ConnectInstance, so no proxyless (de-anonymized, ban-
+// prone) session is ever established. The QR (if unpaired) arrives via the
+// QRCODE_UPDATED webhook; Connect propagates only errors.
 func (e *evoInstance) Connect(ctx context.Context) error {
-	if err := e.api.CreateInstance(ctx, e.instanceName, e.proxy, e.webhookURL); err != nil {
+	if err := e.api.CreateInstance(ctx, e.instanceName, e.webhookURL); err != nil {
 		return err
+	}
+	if e.proxy != nil {
+		if err := e.api.SetProxy(ctx, e.instanceName, e.proxy); err != nil {
+			return fmt.Errorf("evolution %s: proxy set failed, refusing to connect proxyless: %w", e.instanceName, err)
+		}
 	}
 	_, err := e.api.ConnectInstance(ctx, e.instanceName)
 	return err

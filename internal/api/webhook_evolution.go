@@ -2,9 +2,7 @@ package api
 
 import (
 	"context"
-	"crypto/hmac"
-	"crypto/sha256"
-	"encoding/hex"
+	"crypto/subtle"
 	"encoding/json"
 	"net/http"
 	"time"
@@ -33,9 +31,10 @@ type healthSink interface {
 	ApplyHealthSignal(ctx context.Context, jid, signal string, cooloff time.Duration) error
 }
 
-// EvolutionWebhook receives Evolution API callbacks: HMAC-verifies, then feeds
-// receipts (messages.update) and instance state (connection.update). It never
-// mutates the whatsmeow path.
+// EvolutionWebhook receives Evolution API callbacks: authenticates via the
+// Authorization header Evolution echoes back (configured as webhook.headers.
+// authorization at instance-create time — Evolution v2 does NOT sign payloads),
+// then feeds receipts (messages.update) and instance state (connection.update).
 type EvolutionWebhook struct {
 	secret string
 	rec    receiptSink
@@ -53,7 +52,7 @@ func (h *EvolutionWebhook) Register(r gin.IRouter) {
 
 func (h *EvolutionWebhook) handle(c *gin.Context) {
 	body, _ := c.GetRawData()
-	if !h.verify(c.GetHeader("X-Evolution-Signature"), body) {
+	if !h.verify(c.GetHeader("Authorization")) {
 		c.AbortWithStatus(http.StatusUnauthorized)
 		return
 	}
@@ -65,20 +64,21 @@ func (h *EvolutionWebhook) handle(c *gin.Context) {
 	ctx := c.Request.Context()
 	switch normalizeEvent(w.Event) {
 	case "connection.update":
-		if w.Data.RemoteJID != "" {
-			_ = h.inst.BindInstanceJIDIfUnset(ctx, w.Instance, w.Data.RemoteJID)
+		if jid := w.Data.ownJID(); jid != "" {
+			_ = h.inst.BindInstanceJIDIfUnset(ctx, w.Instance, jid)
 		}
 		if w.Data.State != "" {
 			_ = h.inst.SetInstanceState(ctx, w.Instance, w.Data.State)
 		}
-		if w.Data.State == "close" && h.health != nil {
+		if isDownState(w.Data.State) && h.health != nil {
 			if jid := h.resolveJID(ctx, w); jid != "" {
 				_ = h.health.ApplyHealthSignal(ctx, jid, "conn_churn", 5*time.Minute)
 			}
 		}
 	case "messages.update":
 		kind, ok := translateAck(w.Data.Status, w.Data.Ack)
-		if !ok || w.Data.Key == nil || !w.Data.Key.FromMe {
+		id := w.Data.msgID()
+		if !ok || id == "" || !w.Data.fromMe() {
 			break
 		}
 		jid, ok, err := h.inst.JIDForInstance(ctx, w.Instance)
@@ -86,7 +86,7 @@ func (h *EvolutionWebhook) handle(c *gin.Context) {
 			break
 		}
 		if err := h.rec.Record(ctx, receipt.Event{
-			MessageIDs: []string{w.Data.Key.ID},
+			MessageIDs: []string{id},
 			SenderJID:  jid,
 			Kind:       kind,
 			At:         time.Now(),
@@ -98,10 +98,16 @@ func (h *EvolutionWebhook) handle(c *gin.Context) {
 	c.Status(http.StatusOK)
 }
 
-// resolveJID prefers the payload's remoteJid, else looks it up by instance.
+// isDownState reports whether a connection.update state means the socket dropped
+// (Evolution v2 emits both "close" and "refused" on a lost/rejected session).
+func isDownState(state string) bool {
+	return state == "close" || state == "refused"
+}
+
+// resolveJID prefers the payload's own JID, else looks it up by instance.
 func (h *EvolutionWebhook) resolveJID(ctx context.Context, w evoWebhook) string {
-	if w.Data.RemoteJID != "" {
-		return w.Data.RemoteJID
+	if jid := w.Data.ownJID(); jid != "" {
+		return jid
 	}
 	if jid, ok, err := h.inst.JIDForInstance(ctx, w.Instance); err == nil && ok {
 		return jid
@@ -109,11 +115,13 @@ func (h *EvolutionWebhook) resolveJID(ctx context.Context, w evoWebhook) string 
 	return ""
 }
 
-func (h *EvolutionWebhook) verify(sig string, body []byte) bool {
-	if h.secret == "" { // dev only; prod must set WADIST_EVOLUTION_WEBHOOK_SECRET
+// verify checks the Authorization header Evolution echoes from the webhook's
+// configured headers.authorization. Empty secret = dev (accept unauthenticated);
+// prod must set WADIST_EVOLUTION_WEBHOOK_SECRET on BOTH the receiver and the
+// instance-creating worker so the values match.
+func (h *EvolutionWebhook) verify(auth string) bool {
+	if h.secret == "" {
 		return true
 	}
-	mac := hmac.New(sha256.New, []byte(h.secret))
-	mac.Write(body)
-	return hmac.Equal([]byte(sig), []byte(hex.EncodeToString(mac.Sum(nil))))
+	return subtle.ConstantTimeCompare([]byte(auth), []byte(h.secret)) == 1
 }

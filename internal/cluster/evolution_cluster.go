@@ -10,11 +10,12 @@ type EvoCluster struct {
 }
 
 // NewEvoCluster builds one EvoClient per node from a node→baseURL map. All nodes
-// share the same apiKey (Evolution's global key).
-func NewEvoCluster(baseURLs map[string]string, apiKey string) *EvoCluster {
+// share the same apiKey (Evolution's global key) and webhookAuth (the token
+// Evolution echoes on webhook callbacks, = WADIST_EVOLUTION_WEBHOOK_SECRET).
+func NewEvoCluster(baseURLs map[string]string, apiKey, webhookAuth string) *EvoCluster {
 	c := &EvoCluster{clients: map[string]*EvoClient{}}
 	for node, url := range baseURLs {
-		c.clients[node] = NewEvoClient(url, apiKey)
+		c.clients[node] = NewEvoClient(url, apiKey, webhookAuth)
 	}
 	return c
 }

@@ -1,0 +1,25 @@
+# Evolution API v2 一次性验证沙盒（配 docs/evolution-real-machine-verification-runbook.md）
+# 用法：
+#   docker compose -f docs/four-phase-demo/evo-verify/docker-compose.yml up -d
+#   export EVO=http://localhost:8080 KEY=verify-key-123
+#   curl -s $EVO/ -H "apikey: $KEY" | head    # 冒烟
+services:
+  evolution:
+    image: atendai/evolution-api:v2.1.1   # 与生产对齐的版本；改这里前先确认线上 tag
+    ports: ["8080:8080"]
+    environment:
+      - AUTHENTICATION_API_KEY=verify-key-123      # = EvoClient 的 apikey
+      - DATABASE_ENABLED=false
+      - CACHE_REDIS_ENABLED=true
+      - CACHE_REDIS_URI=redis://redis:6379/0
+      - CACHE_REDIS_PREFIX_KEY=evo
+      # 我们用 webhook.headers.authorization 做鉴权（v2 不签名 body）——沙盒里
+      # 由 create 请求带进去，不用全局配置。
+    depends_on: [redis]
+  redis:
+    image: redis:7-alpine
+
+  # 抓 Evolution 回调原始 body + 头（对拍 payload 形状与 Authorization 头的关键）。
+  webhook-capture:
+    build: .
+    ports: ["9999:9999"]
