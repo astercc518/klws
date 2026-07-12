@@ -564,3 +564,54 @@ func TestCreateCampaignFromSegment_EmptyResolvesTo400(t *testing.T) {
 		t.Fatalf("expected no campaign row created for empty segment, got %d", n)
 	}
 }
+
+// seedAdminContact inserts one contacts row directly via systemPool (bypassing
+// RLS/WithTenant, like a real cross-tenant seed would need to).
+func seedAdminContact(t *testing.T, ctx context.Context, s *Server, tid int64, phone, cc string) {
+	t.Helper()
+	if _, err := s.systemPool().Exec(ctx,
+		`INSERT INTO contacts (tenant_id, phone, phone_bidx, country_code, source)
+		 VALUES ($1,$2,$3,$4,'manual')`,
+		tid, phone, []byte(phone), cc); err != nil {
+		t.Fatalf("seed contact: %v", err)
+	}
+}
+
+// TestHandleAdminListContacts covers the two shapes the god-view list must
+// support: filtered to one tenant via ?tenant_id=, and unfiltered (all
+// tenants) — proving the handler uses s.systemPool() (BYPASSRLS) rather than
+// WithTenant, since the caller here never scopes a session to any tenant.
+func TestHandleAdminListContacts(t *testing.T) {
+	s, ctx := newFinanceServer(t)
+	tid1, _ := seedTenantUser(t, ctx, s, "adminc1@acme.test")
+	tid2, _ := seedTenantUser(t, ctx, s, "adminc2@acme.test")
+	seedAdminContact(t, ctx, s, tid1, "+15550001", "US")
+	seedAdminContact(t, ctx, s, tid1, "+15550002", "US")
+	seedAdminContact(t, ctx, s, tid2, "+8613800138000", "CN")
+
+	// scoped to tid1 -> 2 rows, both tenant_id=tid1
+	w := doGET(t, s, s.handleAdminListContacts, "/admin/contacts?tenant_id="+itoa(tid1))
+	if w.Code != http.StatusOK {
+		t.Fatalf("status %d body %s", w.Code, w.Body.String())
+	}
+	body := w.Body.String()
+	if !contains(body, `"total":2`) {
+		t.Errorf("want total 2 for tid1, got %s", body)
+	}
+	if contains(body, `"tenant_id":`+itoa(tid2)) {
+		t.Errorf("tid1-scoped list leaked tid2 row: %s", body)
+	}
+
+	// unscoped -> all tenants, 3 rows
+	wAll := doGET(t, s, s.handleAdminListContacts, "/admin/contacts")
+	if wAll.Code != http.StatusOK {
+		t.Fatalf("status %d body %s", wAll.Code, wAll.Body.String())
+	}
+	bodyAll := wAll.Body.String()
+	if !contains(bodyAll, `"total":3`) {
+		t.Errorf("want total 3 unscoped, got %s", bodyAll)
+	}
+	if !contains(bodyAll, `"tenant_id":`+itoa(tid1)) || !contains(bodyAll, `"tenant_id":`+itoa(tid2)) {
+		t.Errorf("unscoped list missing rows from one of the tenants: %s", bodyAll)
+	}
+}

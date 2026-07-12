@@ -9,6 +9,7 @@ import {
   Send,
   ListChecks,
   PieChart,
+  BookUser,
   type LucideIcon,
 } from "lucide-react";
 
@@ -55,6 +56,7 @@ export const NAV_GROUPS: NavGroup[] = [
     items: [
       { href: "/admin/campaigns", label: "发送任务", en: "Campaigns", icon: Send },
       { href: "/admin/send-records", label: "发送记录", en: "Send Records", icon: ListChecks },
+      { href: "/admin/contacts", label: "联系人", en: "Contacts", icon: BookUser },
     ],
   },
   {

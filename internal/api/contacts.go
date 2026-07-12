@@ -1092,6 +1092,85 @@ func (s *Server) handleImportSuppression(c *gin.Context) {
 // UPDATE/DELETE from both roles ("tenants must not be able to un-suppress
 // opt-outs").
 
+// ---------------------------------------------------------------------------
+// Admin (cross-tenant, read-only god view)
+// ---------------------------------------------------------------------------
+
+type adminContactRow struct {
+	ID          int64  `json:"id"`
+	TenantID    int64  `json:"tenant_id"`
+	Phone       string `json:"phone"`
+	CountryCode string `json:"country_code"`
+	Status      string `json:"status"`
+	CreatedAt   string `json:"created_at"`
+}
+
+// handleAdminListContacts: GET /api/v1/admin/contacts?q=&country=&status=&tag_id=&tenant_id=&limit=&offset=.
+// Cross-tenant contact list for the admin console — uses s.systemPool()
+// (BYPASSRLS) rather than s.deps.Mgr.WithTenant, so it intentionally sees
+// every tenant's contacts, same as handleAdminListRecipients /
+// handleAdminListCampaigns. tenant_id is an optional filter, NOT a session
+// scope (there is no WithTenant here). Read-only: no writes, no audit —
+// admins cannot edit customer contacts via this endpoint (governance
+// boundary), they can only view them.
+func (s *Server) handleAdminListContacts(c *gin.Context) {
+	ctx := c.Request.Context()
+	pool := s.systemPool()
+	f := contactFilter{
+		Q:       c.Query("q"),
+		Country: c.Query("country"),
+		Status:  c.Query("status"),
+		Limit:   clampPage(atoiDefault(c.Query("limit"), 50), 50, 500),
+		Offset:  atoiDefault(c.Query("offset"), 0),
+	}
+	if t := c.Query("tag_id"); t != "" {
+		f.TagID = int64(atoiDefault(t, 0))
+	}
+	where, args := buildContactWhere(f)
+	if tidStr := c.Query("tenant_id"); tidStr != "" {
+		if tid, err := strconv.ParseInt(tidStr, 10, 64); err == nil && tid > 0 {
+			args = append(args, tid)
+			if where == "" {
+				where = fmt.Sprintf(" WHERE c.tenant_id = $%d", len(args))
+			} else {
+				where += fmt.Sprintf(" AND c.tenant_id = $%d", len(args))
+			}
+		}
+	}
+
+	listArgs := append(append([]any{}, args...), f.Limit, f.Offset)
+	list := `SELECT DISTINCT c.id, c.tenant_id, c.phone, COALESCE(c.country_code,''), c.status::text, c.created_at::text
+	           FROM contacts c LEFT JOIN contact_tag_map m ON m.contact_id=c.id` + where +
+		fmt.Sprintf(" ORDER BY c.id DESC LIMIT $%d OFFSET $%d", len(args)+1, len(args)+2)
+	rows, err := pool.Query(ctx, list, listArgs...)
+	if err != nil {
+		fail(c, http.StatusInternalServerError, "query")
+		return
+	}
+	defer rows.Close()
+	out := []adminContactRow{}
+	for rows.Next() {
+		var r adminContactRow
+		if err := rows.Scan(&r.ID, &r.TenantID, &r.Phone, &r.CountryCode, &r.Status, &r.CreatedAt); err != nil {
+			fail(c, http.StatusInternalServerError, "scan")
+			return
+		}
+		out = append(out, r)
+	}
+	if err := rows.Err(); err != nil {
+		fail(c, http.StatusInternalServerError, "rows")
+		return
+	}
+
+	var total int
+	if err := pool.QueryRow(ctx,
+		`SELECT count(DISTINCT c.id) FROM contacts c LEFT JOIN contact_tag_map m ON m.contact_id=c.id`+where, args...).Scan(&total); err != nil {
+		fail(c, http.StatusInternalServerError, "count")
+		return
+	}
+	ok(c, gin.H{"rows": out, "total": total})
+}
+
 // handleSegmentPreview: GET /api/v1/contacts/segments/:id/preview -> {count}.
 // Resolves the saved filter (segmentToWhere, shared with the eventual send
 // pipeline) and returns a live count — no rows are materialized/returned.
