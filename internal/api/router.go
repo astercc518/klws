@@ -127,6 +127,17 @@ func (s *Server) Router() *gin.Engine {
 		campaigns.GET("/:id/recipients", s.handleListCampaignRecipients)
 	}
 
+	// --- Contact controller (customer: contact library CRUD + import/export) ---
+	contacts := v1.Group("/contacts", s.requireAuth(), s.requireRole(console.RoleCustomer))
+	{
+		contacts.GET("", s.handleListContacts)
+		contacts.POST("", s.handleCreateContact)
+		contacts.PUT("/:id", s.handleUpdateContact)
+		contacts.DELETE("/:id", s.handleDeleteContact)
+		contacts.POST("/import", s.handleImportContacts)
+		contacts.GET("/export", s.handleExportContacts)
+	}
+
 	// --- Sales controller (a sales user's own customers) ---
 	sales := v1.Group("/sales", s.requireAuth(), s.requireRole(console.RoleSales))
 	{
