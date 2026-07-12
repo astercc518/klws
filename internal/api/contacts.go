@@ -6,6 +6,7 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -849,6 +850,240 @@ func (s *Server) handleDeleteSegment(c *gin.Context) {
 	}
 	ok(c, gin.H{"id": id})
 }
+
+// ---------------------------------------------------------------------------
+// Suppression (manual blacklist / opt-out)
+// ---------------------------------------------------------------------------
+//
+// suppression_list (migration 0008) stores ONLY (tenant_id, phone_bidx,
+// reason, added_at) — the phone itself is never persisted, so nothing here
+// can ever display it back. Matching against it (both here and in the
+// dispatcher) is by blind index: crypto.BlindIndex(BlindKey, e164).
+//
+// The table is also intentionally append-only at the DB grant level:
+// migration 0008 grants app_tenant/app_system only SELECT+INSERT on it and
+// explicitly REVOKEs UPDATE/DELETE from both roles ("compliance: tenants
+// must not be able to un-suppress opt-outs"). handleDeleteSuppression below
+// respects that by construction — see its doc comment.
+
+type suppressionRow struct {
+	ID      int64  `json:"id"`
+	Reason  string `json:"reason"`
+	AddedAt string `json:"added_at"`
+}
+
+type suppressionReport struct {
+	Total      int `json:"total"`
+	Inserted   int `json:"inserted"`
+	Duplicates int `json:"duplicates"`
+	Invalid    int `json:"invalid"`
+}
+
+// normalizeSuppressionPhones normalizes each raw phone via phonenorm, dedups
+// in-batch by normalized e164, and blind-indexes the survivors. Un-normalizable
+// entries count as Invalid; in-batch repeats count as Duplicates (cross-batch
+// repeats are counted separately by the caller via ON CONFLICT). Shared by
+// handleAddSuppression (explicit phones[]) and handleImportSuppression
+// (pasted text) — mirrors handleImportContacts' normalize/dedup pattern.
+func (s *Server) normalizeSuppressionPhones(country string, raws []string) (suppressionReport, [][]byte) {
+	rep := suppressionReport{Total: len(raws)}
+	seen := map[string]bool{}
+	var bidxs [][]byte
+	for _, raw := range raws {
+		e164, _, valid := phonenorm.Normalize(raw, country)
+		if !valid {
+			rep.Invalid++
+			continue
+		}
+		if seen[e164] {
+			rep.Duplicates++
+			continue
+		}
+		seen[e164] = true
+		bidxs = append(bidxs, crypto.BlindIndex(s.deps.BlindKey, e164))
+	}
+	return rep, bidxs
+}
+
+// insertSuppressionRows inserts each bidx via ON CONFLICT (tenant_id,
+// phone_bidx) DO NOTHING, folding cross-batch conflicts into rep.Duplicates.
+func insertSuppressionRows(ctx context.Context, tx pgx.Tx, tid int64, bidxs [][]byte, reason string, rep *suppressionReport) error {
+	for _, bidx := range bidxs {
+		ct, err := tx.Exec(ctx,
+			`INSERT INTO suppression_list (tenant_id, phone_bidx, reason)
+			 VALUES ($1,$2,$3)
+			 ON CONFLICT (tenant_id, phone_bidx) DO NOTHING`,
+			tid, bidx, reason)
+		if err != nil {
+			return err
+		}
+		if ct.RowsAffected() == 1 {
+			rep.Inserted++
+		} else {
+			rep.Duplicates++
+		}
+	}
+	return nil
+}
+
+// handleListSuppression: GET /api/v1/suppression?limit=&offset=.
+// Returns only id/reason/added_at — suppression_list has no phone column to
+// show (it stores the blind index only, which is one-way).
+func (s *Server) handleListSuppression(c *gin.Context) {
+	tid, hasTenant := tenantID(c)
+	if !hasTenant {
+		fail(c, http.StatusForbidden, "no tenant in session")
+		return
+	}
+	limit := clampPage(atoiDefault(c.Query("limit"), 50), 50, 500)
+	offset := atoiDefault(c.Query("offset"), 0)
+
+	ctx := c.Request.Context()
+	tx, err := s.deps.Mgr.WithTenant(ctx, tid)
+	if err != nil {
+		fail(c, http.StatusInternalServerError, "tx")
+		return
+	}
+	defer tx.Rollback(ctx) //nolint:errcheck
+
+	var total int
+	if err := tx.QueryRow(ctx, `SELECT count(*) FROM suppression_list`).Scan(&total); err != nil {
+		fail(c, http.StatusInternalServerError, "count")
+		return
+	}
+	rows, err := tx.Query(ctx,
+		`SELECT id, COALESCE(reason,''), added_at::text FROM suppression_list
+		 ORDER BY id DESC LIMIT $1 OFFSET $2`, limit, offset)
+	if err != nil {
+		fail(c, http.StatusInternalServerError, "query")
+		return
+	}
+	defer rows.Close()
+	out := []suppressionRow{}
+	for rows.Next() {
+		var r suppressionRow
+		if err := rows.Scan(&r.ID, &r.Reason, &r.AddedAt); err != nil {
+			fail(c, http.StatusInternalServerError, "scan")
+			return
+		}
+		out = append(out, r)
+	}
+	if err := rows.Err(); err != nil {
+		fail(c, http.StatusInternalServerError, "rows")
+		return
+	}
+	ok(c, gin.H{"rows": out, "total": total})
+}
+
+type addSuppressionRequest struct {
+	Country string   `json:"country" binding:"required,len=2"`
+	Phones  []string `json:"phones" binding:"required"`
+	Reason  string   `json:"reason"`
+}
+
+// handleAddSuppression: POST /api/v1/suppression {country, phones[], reason?}.
+func (s *Server) handleAddSuppression(c *gin.Context) {
+	tid, hasTenant := tenantID(c)
+	if !hasTenant {
+		fail(c, http.StatusForbidden, "no tenant in session")
+		return
+	}
+	if len(s.deps.BlindKey) != 32 {
+		fail(c, http.StatusServiceUnavailable, "contacts not configured")
+		return
+	}
+	var req addSuppressionRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		fail(c, http.StatusBadRequest, "invalid body")
+		return
+	}
+	rep, bidxs := s.normalizeSuppressionPhones(req.Country, req.Phones)
+
+	ctx := c.Request.Context()
+	tx, err := s.deps.Mgr.WithTenant(ctx, tid)
+	if err != nil {
+		fail(c, http.StatusInternalServerError, "tx")
+		return
+	}
+	defer tx.Rollback(ctx) //nolint:errcheck
+
+	if err := insertSuppressionRows(ctx, tx, tid, bidxs, req.Reason, &rep); err != nil {
+		fail(c, http.StatusInternalServerError, "insert suppression")
+		return
+	}
+	if err := s.recordAuditTx(ctx, tx, auditEvent{
+		TenantID: tid, ActorID: actorID(c), Action: "suppression.add",
+		ResourceType: "suppression_list",
+		Details:      map[string]any{"total": rep.Total, "inserted": rep.Inserted, "duplicates": rep.Duplicates, "invalid": rep.Invalid},
+	}); err != nil {
+		fail(c, http.StatusInternalServerError, "audit")
+		return
+	}
+	if err := tx.Commit(ctx); err != nil {
+		fail(c, http.StatusInternalServerError, "commit")
+		return
+	}
+	ok(c, rep)
+}
+
+type importSuppressionRequest struct {
+	Country string `json:"country" binding:"required,len=2"`
+	Text    string `json:"text"` // pasted numbers, one per line (comma also accepted)
+	Reason  string `json:"reason"`
+}
+
+// handleImportSuppression: POST /api/v1/suppression/import {country, text, reason?}.
+// Same normalize/dedup/report shape as handleImportContacts.
+func (s *Server) handleImportSuppression(c *gin.Context) {
+	tid, hasTenant := tenantID(c)
+	if !hasTenant {
+		fail(c, http.StatusForbidden, "no tenant in session")
+		return
+	}
+	if len(s.deps.BlindKey) != 32 {
+		fail(c, http.StatusServiceUnavailable, "contacts not configured")
+		return
+	}
+	var req importSuppressionRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		fail(c, http.StatusBadRequest, "invalid body")
+		return
+	}
+	lines := strings.FieldsFunc(req.Text, func(r rune) bool { return r == '\n' || r == '\r' || r == ',' })
+	rep, bidxs := s.normalizeSuppressionPhones(req.Country, lines)
+
+	ctx := c.Request.Context()
+	tx, err := s.deps.Mgr.WithTenant(ctx, tid)
+	if err != nil {
+		fail(c, http.StatusInternalServerError, "tx")
+		return
+	}
+	defer tx.Rollback(ctx) //nolint:errcheck
+
+	if err := insertSuppressionRows(ctx, tx, tid, bidxs, req.Reason, &rep); err != nil {
+		fail(c, http.StatusInternalServerError, "insert suppression")
+		return
+	}
+	if err := s.recordAuditTx(ctx, tx, auditEvent{
+		TenantID: tid, ActorID: actorID(c), Action: "suppression.import",
+		ResourceType: "suppression_list",
+		Details:      map[string]any{"total": rep.Total, "inserted": rep.Inserted, "duplicates": rep.Duplicates, "invalid": rep.Invalid},
+	}); err != nil {
+		fail(c, http.StatusInternalServerError, "audit")
+		return
+	}
+	if err := tx.Commit(ctx); err != nil {
+		fail(c, http.StatusInternalServerError, "commit")
+		return
+	}
+	ok(c, rep)
+}
+
+// Note: there is deliberately NO handleDeleteSuppression / un-suppress
+// endpoint. suppression_list is append-only by compliance design — migration
+// 0008 grants app_tenant/app_system only SELECT+INSERT and explicitly REVOKEs
+// UPDATE/DELETE from both roles ("tenants must not be able to un-suppress
+// opt-outs").
 
 // handleSegmentPreview: GET /api/v1/contacts/segments/:id/preview -> {count}.
 // Resolves the saved filter (segmentToWhere, shared with the eventual send

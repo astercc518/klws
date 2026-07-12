@@ -148,6 +148,17 @@ func (s *Server) Router() *gin.Engine {
 		contacts.GET("/segments/:id/preview", s.handleSegmentPreview)
 	}
 
+	// --- Suppression controller (customer: manual blacklist/opt-out mgmt) ---
+	// Append-only by compliance design: migration 0008 REVOKEs UPDATE/DELETE on
+	// suppression_list from both app roles ("tenants must not be able to
+	// un-suppress opt-outs"), so there is deliberately NO un-suppress endpoint.
+	suppression := v1.Group("/suppression", s.requireAuth(), s.requireRole(console.RoleCustomer))
+	{
+		suppression.GET("", s.handleListSuppression)
+		suppression.POST("", s.handleAddSuppression)
+		suppression.POST("/import", s.handleImportSuppression)
+	}
+
 	// --- Sales controller (a sales user's own customers) ---
 	sales := v1.Group("/sales", s.requireAuth(), s.requireRole(console.RoleSales))
 	{

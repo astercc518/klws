@@ -302,3 +302,72 @@ func TestContactTagMapCrossTenantFKRejected(t *testing.T) {
 		t.Fatalf("expected FK violation inserting cross-tenant tag_map row")
 	}
 }
+
+// ---------------------------------------------------------------------------
+// Suppression (manual blacklist / opt-out) management
+// ---------------------------------------------------------------------------
+
+func TestSuppressionAddAndList(t *testing.T) {
+	s, _, tid := newContactServer(t)
+	body := `{"country":"CN","phones":["13800138000"],"reason":"opt-out"}`
+	w := doJSONTenant(t, s, s.handleAddSuppression, http.MethodPost, "/suppression", tid, body)
+	if w.Code != http.StatusOK {
+		t.Fatalf("add %d: %s", w.Code, w.Body.String())
+	}
+	w2 := doJSONTenant(t, s, s.handleListSuppression, http.MethodGet, "/suppression", tid, "")
+	if !strings.Contains(w2.Body.String(), `"total":1`) {
+		t.Fatalf("list=%s", w2.Body.String())
+	}
+	// the list must never leak the phone number — suppression_list only stores
+	// the blind index, so the row can only expose id/reason/added_at.
+	if strings.Contains(w2.Body.String(), "13800138000") {
+		t.Fatalf("list leaked phone number: %s", w2.Body.String())
+	}
+	if !strings.Contains(w2.Body.String(), `"reason":"opt-out"`) {
+		t.Fatalf("list missing reason: %s", w2.Body.String())
+	}
+}
+
+func TestSuppressionAdd_DedupAndInvalid(t *testing.T) {
+	s, _, tid := newContactServer(t)
+	// two phones normalize to the same e164, one is invalid
+	body := `{"country":"CN","phones":["13800138000","13800138000","5"],"reason":"spam"}`
+	w := doJSONTenant(t, s, s.handleAddSuppression, http.MethodPost, "/suppression", tid, body)
+	if w.Code != http.StatusOK {
+		t.Fatalf("add %d: %s", w.Code, w.Body.String())
+	}
+	if !strings.Contains(w.Body.String(), `"inserted":1`) ||
+		!strings.Contains(w.Body.String(), `"duplicates":1`) ||
+		!strings.Contains(w.Body.String(), `"invalid":1`) {
+		t.Fatalf("report=%s", w.Body.String())
+	}
+	// re-adding the same phone in a second request must be a cross-batch
+	// duplicate (ON CONFLICT DO NOTHING), not a second row.
+	w2 := doJSONTenant(t, s, s.handleAddSuppression, http.MethodPost, "/suppression", tid,
+		`{"country":"CN","phones":["13800138000"],"reason":"again"}`)
+	if !strings.Contains(w2.Body.String(), `"inserted":0`) || !strings.Contains(w2.Body.String(), `"duplicates":1`) {
+		t.Fatalf("second add should be all duplicates: %s", w2.Body.String())
+	}
+	wList := doJSONTenant(t, s, s.handleListSuppression, http.MethodGet, "/suppression", tid, "")
+	if !strings.Contains(wList.Body.String(), `"total":1`) {
+		t.Fatalf("list=%s", wList.Body.String())
+	}
+}
+
+func TestSuppressionImport(t *testing.T) {
+	s, _, tid := newContactServer(t)
+	body := `{"country":"CN","text":"13800138000\n13800138000\n5","reason":"bulk import"}`
+	w := doJSONTenant(t, s, s.handleImportSuppression, http.MethodPost, "/suppression/import", tid, body)
+	if w.Code != http.StatusOK {
+		t.Fatalf("import %d: %s", w.Code, w.Body.String())
+	}
+	if !strings.Contains(w.Body.String(), `"inserted":1`) ||
+		!strings.Contains(w.Body.String(), `"duplicates":1`) ||
+		!strings.Contains(w.Body.String(), `"invalid":1`) {
+		t.Fatalf("report=%s", w.Body.String())
+	}
+	wList := doJSONTenant(t, s, s.handleListSuppression, http.MethodGet, "/suppression", tid, "")
+	if !strings.Contains(wList.Body.String(), `"total":1`) {
+		t.Fatalf("list=%s", wList.Body.String())
+	}
+}
