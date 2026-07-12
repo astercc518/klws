@@ -486,3 +486,405 @@ func (s *Server) handleExportContacts(c *gin.Context) {
 		ResourceType: "contact", Details: map[string]any{"rows": len(out)}})
 	writeCSV(c, "contacts.csv", []string{"phone", "country_code", "display_name", "status", "created_at"}, out)
 }
+
+// ---------------------------------------------------------------------------
+// Tags
+// ---------------------------------------------------------------------------
+
+type tagRow struct {
+	ID        int64  `json:"id"`
+	Name      string `json:"name"`
+	CreatedAt string `json:"created_at"`
+}
+
+// handleListTags: GET /api/v1/contacts/tags.
+func (s *Server) handleListTags(c *gin.Context) {
+	tid, ok2 := tenantID(c)
+	if !ok2 {
+		fail(c, http.StatusForbidden, "no tenant in session")
+		return
+	}
+	ctx := c.Request.Context()
+	tx, err := s.deps.Mgr.WithTenant(ctx, tid)
+	if err != nil {
+		fail(c, http.StatusInternalServerError, "tx")
+		return
+	}
+	defer tx.Rollback(ctx) //nolint:errcheck
+
+	rows, err := tx.Query(ctx, `SELECT id, name, created_at::text FROM contact_tags ORDER BY name`)
+	if err != nil {
+		fail(c, http.StatusInternalServerError, "query")
+		return
+	}
+	defer rows.Close()
+	out := []tagRow{}
+	for rows.Next() {
+		var r tagRow
+		if err := rows.Scan(&r.ID, &r.Name, &r.CreatedAt); err != nil {
+			fail(c, http.StatusInternalServerError, "scan")
+			return
+		}
+		out = append(out, r)
+	}
+	if err := rows.Err(); err != nil {
+		fail(c, http.StatusInternalServerError, "rows")
+		return
+	}
+	ok(c, out)
+}
+
+type createTagRequest struct {
+	Name string `json:"name" binding:"required"`
+}
+
+// handleCreateTag: POST /api/v1/contacts/tags {name}. 409s on a duplicate
+// (tenant_id, name).
+func (s *Server) handleCreateTag(c *gin.Context) {
+	tid, ok2 := tenantID(c)
+	if !ok2 {
+		fail(c, http.StatusForbidden, "no tenant in session")
+		return
+	}
+	var req createTagRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		fail(c, http.StatusBadRequest, "invalid body")
+		return
+	}
+	ctx := c.Request.Context()
+	tx, err := s.deps.Mgr.WithTenant(ctx, tid)
+	if err != nil {
+		fail(c, http.StatusInternalServerError, "tx")
+		return
+	}
+	defer tx.Rollback(ctx) //nolint:errcheck
+
+	var r tagRow
+	err = tx.QueryRow(ctx,
+		`INSERT INTO contact_tags (tenant_id, name) VALUES ($1,$2)
+		 ON CONFLICT (tenant_id, name) DO NOTHING
+		 RETURNING id, name, created_at::text`,
+		tid, req.Name).Scan(&r.ID, &r.Name, &r.CreatedAt)
+	if errors.Is(err, pgx.ErrNoRows) {
+		fail(c, http.StatusConflict, "tag already exists")
+		return
+	}
+	if err != nil {
+		fail(c, http.StatusInternalServerError, "insert tag")
+		return
+	}
+	if err := s.recordAuditTx(ctx, tx, auditEvent{
+		TenantID: tid, ActorID: actorID(c), Action: "contacts.tag_create",
+		ResourceType: "contact_tag", ResourceID: r.ID, Details: map[string]any{"name": r.Name},
+	}); err != nil {
+		fail(c, http.StatusInternalServerError, "audit")
+		return
+	}
+	if err := tx.Commit(ctx); err != nil {
+		fail(c, http.StatusInternalServerError, "commit")
+		return
+	}
+	ok(c, r)
+}
+
+// handleDeleteTag: DELETE /api/v1/contacts/tags/:id. contact_tag_map rows for
+// this tag cascade via the FK (ON DELETE CASCADE, migration 0021).
+func (s *Server) handleDeleteTag(c *gin.Context) {
+	tid, ok2 := tenantID(c)
+	if !ok2 {
+		fail(c, http.StatusForbidden, "no tenant in session")
+		return
+	}
+	id, err := strconv.ParseInt(c.Param("id"), 10, 64)
+	if err != nil || id <= 0 {
+		fail(c, http.StatusBadRequest, "invalid tag id")
+		return
+	}
+	ctx := c.Request.Context()
+	tx, err := s.deps.Mgr.WithTenant(ctx, tid)
+	if err != nil {
+		fail(c, http.StatusInternalServerError, "tx")
+		return
+	}
+	defer tx.Rollback(ctx) //nolint:errcheck
+
+	tag, err := tx.Exec(ctx, `DELETE FROM contact_tags WHERE id=$1`, id)
+	if err != nil {
+		fail(c, http.StatusInternalServerError, "delete tag")
+		return
+	}
+	if tag.RowsAffected() == 0 {
+		fail(c, http.StatusNotFound, "tag not found")
+		return
+	}
+	if err := s.recordAuditTx(ctx, tx, auditEvent{
+		TenantID: tid, ActorID: actorID(c), Action: "contacts.tag_delete",
+		ResourceType: "contact_tag", ResourceID: id,
+	}); err != nil {
+		fail(c, http.StatusInternalServerError, "audit")
+		return
+	}
+	if err := tx.Commit(ctx); err != nil {
+		fail(c, http.StatusInternalServerError, "commit")
+		return
+	}
+	ok(c, gin.H{"id": id})
+}
+
+type applyTagRequest struct {
+	ContactIDs []int64 `json:"contact_ids" binding:"required"`
+	Remove     bool    `json:"remove"`
+}
+
+// handleApplyTag: POST /api/v1/contacts/tags/:id/apply {contact_ids, remove?}.
+// Bulk-tags (or, with remove:true, un-tags) the given contacts with tag :id.
+func (s *Server) handleApplyTag(c *gin.Context) {
+	tid, ok2 := tenantID(c)
+	if !ok2 {
+		fail(c, http.StatusForbidden, "no tenant in session")
+		return
+	}
+	tagID, err := strconv.ParseInt(c.Param("id"), 10, 64)
+	if err != nil {
+		fail(c, http.StatusBadRequest, "bad tag id")
+		return
+	}
+	var req applyTagRequest
+	if err := c.ShouldBindJSON(&req); err != nil || len(req.ContactIDs) == 0 {
+		fail(c, http.StatusBadRequest, "no contacts")
+		return
+	}
+	ctx := c.Request.Context()
+	tx, err := s.deps.Mgr.WithTenant(ctx, tid)
+	if err != nil {
+		fail(c, http.StatusInternalServerError, "tx")
+		return
+	}
+	defer tx.Rollback(ctx) //nolint:errcheck
+
+	if req.Remove {
+		if _, err := tx.Exec(ctx, `DELETE FROM contact_tag_map WHERE tag_id=$1 AND contact_id = ANY($2)`, tagID, req.ContactIDs); err != nil {
+			fail(c, http.StatusInternalServerError, "untag")
+			return
+		}
+	} else {
+		if _, err := tx.Exec(ctx,
+			`INSERT INTO contact_tag_map (tenant_id, contact_id, tag_id)
+			 SELECT $1, unnest($2::bigint[]), $3 ON CONFLICT DO NOTHING`,
+			tid, req.ContactIDs, tagID); err != nil {
+			fail(c, http.StatusInternalServerError, "tag")
+			return
+		}
+	}
+	if err := s.recordAuditTx(ctx, tx, auditEvent{
+		TenantID: tid, ActorID: actorID(c), Action: "contacts.tag_apply",
+		ResourceType: "contact_tag", ResourceID: tagID,
+		Details: map[string]any{"n": len(req.ContactIDs), "remove": req.Remove},
+	}); err != nil {
+		fail(c, http.StatusInternalServerError, "audit")
+		return
+	}
+	if err := tx.Commit(ctx); err != nil {
+		fail(c, http.StatusInternalServerError, "commit")
+		return
+	}
+	ok(c, gin.H{"ok": true})
+}
+
+// ---------------------------------------------------------------------------
+// Segments
+// ---------------------------------------------------------------------------
+
+type segmentRow struct {
+	ID        int64           `json:"id"`
+	Name      string          `json:"name"`
+	Filter    json.RawMessage `json:"filter"`
+	CreatedAt string          `json:"created_at"`
+}
+
+// handleListSegments: GET /api/v1/contacts/segments.
+func (s *Server) handleListSegments(c *gin.Context) {
+	tid, ok2 := tenantID(c)
+	if !ok2 {
+		fail(c, http.StatusForbidden, "no tenant in session")
+		return
+	}
+	ctx := c.Request.Context()
+	tx, err := s.deps.Mgr.WithTenant(ctx, tid)
+	if err != nil {
+		fail(c, http.StatusInternalServerError, "tx")
+		return
+	}
+	defer tx.Rollback(ctx) //nolint:errcheck
+
+	rows, err := tx.Query(ctx, `SELECT id, name, filter, created_at::text FROM contact_segments ORDER BY name`)
+	if err != nil {
+		fail(c, http.StatusInternalServerError, "query")
+		return
+	}
+	defer rows.Close()
+	out := []segmentRow{}
+	for rows.Next() {
+		var r segmentRow
+		var raw []byte
+		if err := rows.Scan(&r.ID, &r.Name, &raw, &r.CreatedAt); err != nil {
+			fail(c, http.StatusInternalServerError, "scan")
+			return
+		}
+		r.Filter = raw
+		out = append(out, r)
+	}
+	if err := rows.Err(); err != nil {
+		fail(c, http.StatusInternalServerError, "rows")
+		return
+	}
+	ok(c, out)
+}
+
+type createSegmentRequest struct {
+	Name   string          `json:"name" binding:"required"`
+	Filter json.RawMessage `json:"filter"`
+}
+
+// handleCreateSegment: POST /api/v1/contacts/segments {name, filter?}. 409s on
+// a duplicate (tenant_id, name); filter defaults to {} (matches the column
+// default) and must unmarshal into segmentFilter.
+func (s *Server) handleCreateSegment(c *gin.Context) {
+	tid, ok2 := tenantID(c)
+	if !ok2 {
+		fail(c, http.StatusForbidden, "no tenant in session")
+		return
+	}
+	var req createSegmentRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		fail(c, http.StatusBadRequest, "invalid body")
+		return
+	}
+	filter := []byte(req.Filter)
+	if len(filter) == 0 {
+		filter = []byte(`{}`)
+	}
+	var f segmentFilter
+	if err := json.Unmarshal(filter, &f); err != nil {
+		fail(c, http.StatusBadRequest, "invalid filter")
+		return
+	}
+	ctx := c.Request.Context()
+	tx, err := s.deps.Mgr.WithTenant(ctx, tid)
+	if err != nil {
+		fail(c, http.StatusInternalServerError, "tx")
+		return
+	}
+	defer tx.Rollback(ctx) //nolint:errcheck
+
+	var r segmentRow
+	var raw []byte
+	err = tx.QueryRow(ctx,
+		`INSERT INTO contact_segments (tenant_id, name, filter) VALUES ($1,$2,$3)
+		 ON CONFLICT (tenant_id, name) DO NOTHING
+		 RETURNING id, name, filter, created_at::text`,
+		tid, req.Name, filter).Scan(&r.ID, &r.Name, &raw, &r.CreatedAt)
+	if errors.Is(err, pgx.ErrNoRows) {
+		fail(c, http.StatusConflict, "segment already exists")
+		return
+	}
+	if err != nil {
+		fail(c, http.StatusInternalServerError, "insert segment")
+		return
+	}
+	r.Filter = raw
+	if err := s.recordAuditTx(ctx, tx, auditEvent{
+		TenantID: tid, ActorID: actorID(c), Action: "contacts.segment_create",
+		ResourceType: "contact_segment", ResourceID: r.ID, Details: map[string]any{"name": r.Name},
+	}); err != nil {
+		fail(c, http.StatusInternalServerError, "audit")
+		return
+	}
+	if err := tx.Commit(ctx); err != nil {
+		fail(c, http.StatusInternalServerError, "commit")
+		return
+	}
+	ok(c, r)
+}
+
+// handleDeleteSegment: DELETE /api/v1/contacts/segments/:id.
+func (s *Server) handleDeleteSegment(c *gin.Context) {
+	tid, ok2 := tenantID(c)
+	if !ok2 {
+		fail(c, http.StatusForbidden, "no tenant in session")
+		return
+	}
+	id, err := strconv.ParseInt(c.Param("id"), 10, 64)
+	if err != nil || id <= 0 {
+		fail(c, http.StatusBadRequest, "invalid segment id")
+		return
+	}
+	ctx := c.Request.Context()
+	tx, err := s.deps.Mgr.WithTenant(ctx, tid)
+	if err != nil {
+		fail(c, http.StatusInternalServerError, "tx")
+		return
+	}
+	defer tx.Rollback(ctx) //nolint:errcheck
+
+	tag, err := tx.Exec(ctx, `DELETE FROM contact_segments WHERE id=$1`, id)
+	if err != nil {
+		fail(c, http.StatusInternalServerError, "delete segment")
+		return
+	}
+	if tag.RowsAffected() == 0 {
+		fail(c, http.StatusNotFound, "segment not found")
+		return
+	}
+	if err := s.recordAuditTx(ctx, tx, auditEvent{
+		TenantID: tid, ActorID: actorID(c), Action: "contacts.segment_delete",
+		ResourceType: "contact_segment", ResourceID: id,
+	}); err != nil {
+		fail(c, http.StatusInternalServerError, "audit")
+		return
+	}
+	if err := tx.Commit(ctx); err != nil {
+		fail(c, http.StatusInternalServerError, "commit")
+		return
+	}
+	ok(c, gin.H{"id": id})
+}
+
+// handleSegmentPreview: GET /api/v1/contacts/segments/:id/preview -> {count}.
+// Resolves the saved filter (segmentToWhere, shared with the eventual send
+// pipeline) and returns a live count — no rows are materialized/returned.
+func (s *Server) handleSegmentPreview(c *gin.Context) {
+	tid, ok2 := tenantID(c)
+	if !ok2 {
+		fail(c, http.StatusForbidden, "no tenant in session")
+		return
+	}
+	segID, err := strconv.ParseInt(c.Param("id"), 10, 64)
+	if err != nil {
+		fail(c, http.StatusBadRequest, "bad segment id")
+		return
+	}
+	ctx := c.Request.Context()
+	tx, err := s.deps.Mgr.WithTenant(ctx, tid)
+	if err != nil {
+		fail(c, http.StatusInternalServerError, "tx")
+		return
+	}
+	defer tx.Rollback(ctx) //nolint:errcheck
+
+	var raw []byte
+	if err := tx.QueryRow(ctx, `SELECT filter FROM contact_segments WHERE id=$1`, segID).Scan(&raw); err != nil {
+		fail(c, http.StatusNotFound, "segment not found")
+		return
+	}
+	var f segmentFilter
+	_ = json.Unmarshal(raw, &f)
+	where, args := segmentToWhere(f)
+	var count int
+	if err := tx.QueryRow(ctx,
+		`SELECT count(DISTINCT c.id) FROM contacts c LEFT JOIN contact_tag_map m ON m.contact_id=c.id`+where, args...).Scan(&count); err != nil {
+		fail(c, http.StatusInternalServerError, "count")
+		return
+	}
+	ok(c, gin.H{"count": count})
+}

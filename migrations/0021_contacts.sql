@@ -14,7 +14,8 @@ CREATE TABLE IF NOT EXISTS contacts (
     vars         JSONB NOT NULL DEFAULT '{}',
     created_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
     updated_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
-    UNIQUE (tenant_id, phone_bidx)
+    UNIQUE (tenant_id, phone_bidx),
+    UNIQUE (tenant_id, id)
 );
 CREATE INDEX IF NOT EXISTS idx_contacts_tenant_status ON contacts (tenant_id, status);
 
@@ -23,14 +24,23 @@ CREATE TABLE IF NOT EXISTS contact_tags (
     tenant_id BIGINT NOT NULL,
     name TEXT NOT NULL,
     created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-    UNIQUE (tenant_id, name)
+    UNIQUE (tenant_id, name),
+    UNIQUE (tenant_id, id)
 );
 
+-- contact_id/tag_id FKs are composite + tenant-scoped (tenant_id, id) rather
+-- than plain (id): a single-column FK only checks the referenced row exists
+-- ANYWHERE, not that it belongs to the same tenant — since FK checks run as
+-- the table owner and bypass RLS, that gap would let a tag_map row splice
+-- together a contact and a tag from two different tenants. The composite FK
+-- closes it at the constraint level, no RLS involved.
 CREATE TABLE IF NOT EXISTS contact_tag_map (
     tenant_id  BIGINT NOT NULL,
-    contact_id BIGINT NOT NULL REFERENCES contacts(id) ON DELETE CASCADE,
-    tag_id     BIGINT NOT NULL REFERENCES contact_tags(id) ON DELETE CASCADE,
-    PRIMARY KEY (contact_id, tag_id)
+    contact_id BIGINT NOT NULL,
+    tag_id     BIGINT NOT NULL,
+    PRIMARY KEY (contact_id, tag_id),
+    FOREIGN KEY (tenant_id, contact_id) REFERENCES contacts(tenant_id, id) ON DELETE CASCADE,
+    FOREIGN KEY (tenant_id, tag_id) REFERENCES contact_tags(tenant_id, id) ON DELETE CASCADE
 );
 
 CREATE TABLE IF NOT EXISTS contact_segments (

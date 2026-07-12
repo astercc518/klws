@@ -249,3 +249,56 @@ func TestContactsExport(t *testing.T) {
 		t.Fatalf("export missing row: %s", body)
 	}
 }
+
+func TestApplyTagAndSegmentPreview(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	s, _, tid := newContactServer(t)
+	// seed 2 contacts + 1 tag directly (systemPool bypasses RLS in tests)
+	ctx := context.Background()
+	var c1, c2, tag int64
+	s.systemPool().QueryRow(ctx, `INSERT INTO contacts (tenant_id,phone,phone_bidx,country_code) VALUES ($1,'+8613800138000','\x01','CN') RETURNING id`, tid).Scan(&c1)
+	s.systemPool().QueryRow(ctx, `INSERT INTO contacts (tenant_id,phone,phone_bidx,country_code) VALUES ($1,'+8613800138001','\x02','CN') RETURNING id`, tid).Scan(&c2)
+	s.systemPool().QueryRow(ctx, `INSERT INTO contact_tags (tenant_id,name) VALUES ($1,'vip') RETURNING id`, tid).Scan(&tag)
+
+	// apply tag to c1 only
+	body := `{"contact_ids":[` + itoa(c1) + `]}`
+	w := doJSONTenantID(t, s, s.handleApplyTag, http.MethodPost, "/contacts/tags/x/apply", tid, itoa(tag), body)
+	if w.Code != http.StatusOK {
+		t.Fatalf("apply %d: %s", w.Code, w.Body.String())
+	}
+
+	// preview a segment {tags:[tag]} -> expect count 1
+	var segID int64
+	s.systemPool().QueryRow(ctx, `INSERT INTO contact_segments (tenant_id,name,filter) VALUES ($1,'seg',$2) RETURNING id`,
+		tid, `{"tags":[`+itoa(tag)+`]}`).Scan(&segID)
+	w2 := doJSONTenantID(t, s, s.handleSegmentPreview, http.MethodGet, "/contacts/segments/x/preview", tid, itoa(segID), "")
+	if w2.Code != http.StatusOK || !strings.Contains(w2.Body.String(), `"count":1`) {
+		t.Fatalf("preview=%d %s", w2.Code, w2.Body.String())
+	}
+	_ = c2
+}
+
+func TestContactTagMapCrossTenantFKRejected(t *testing.T) {
+	s, _, tid := newContactServer(t)
+	ctx := context.Background()
+	var otherTid int64
+	if err := s.systemPool().QueryRow(ctx, `INSERT INTO tenants (name) VALUES ('other') RETURNING id`).Scan(&otherTid); err != nil {
+		t.Fatalf("seed other tenant: %v", err)
+	}
+	var cid, tagID int64
+	if err := s.systemPool().QueryRow(ctx,
+		`INSERT INTO contacts (tenant_id,phone,phone_bidx,country_code) VALUES ($1,'+8613800138002','\x03','CN') RETURNING id`,
+		tid).Scan(&cid); err != nil {
+		t.Fatalf("seed contact: %v", err)
+	}
+	if err := s.systemPool().QueryRow(ctx,
+		`INSERT INTO contact_tags (tenant_id,name) VALUES ($1,'x') RETURNING id`, tid).Scan(&tagID); err != nil {
+		t.Fatalf("seed tag: %v", err)
+	}
+	// tenant_id doesn't match the contact/tag's actual tenant -> composite FK must reject
+	if _, err := s.systemPool().Exec(ctx,
+		`INSERT INTO contact_tag_map (tenant_id, contact_id, tag_id) VALUES ($1,$2,$3)`,
+		otherTid, cid, tagID); err == nil {
+		t.Fatalf("expected FK violation inserting cross-tenant tag_map row")
+	}
+}

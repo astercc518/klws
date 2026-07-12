@@ -136,6 +136,16 @@ func (s *Server) Router() *gin.Engine {
 		contacts.DELETE("/:id", s.handleDeleteContact)
 		contacts.POST("/import", s.handleImportContacts)
 		contacts.GET("/export", s.handleExportContacts)
+
+		contacts.GET("/tags", s.handleListTags)
+		contacts.POST("/tags", s.handleCreateTag)
+		contacts.DELETE("/tags/:id", s.handleDeleteTag)
+		contacts.POST("/tags/:id/apply", s.handleApplyTag)
+
+		contacts.GET("/segments", s.handleListSegments)
+		contacts.POST("/segments", s.handleCreateSegment)
+		contacts.DELETE("/segments/:id", s.handleDeleteSegment)
+		contacts.GET("/segments/:id/preview", s.handleSegmentPreview)
 	}
 
 	// --- Sales controller (a sales user's own customers) ---
