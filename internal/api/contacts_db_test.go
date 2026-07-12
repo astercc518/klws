@@ -299,6 +299,88 @@ func TestApplyTagAndSegmentPreview(t *testing.T) {
 	_ = c2
 }
 
+// TestSegmentPreview_MatchesActualSendSet guards the preview/send skew fixed
+// alongside the offset clamp: handleSegmentPreview must count with the SAME
+// rules resolveSegmentPhones (campaign_from_segment.go) applies when a
+// campaign is actually built from the segment — status defaults to "active"
+// when the filter leaves it unset, and suppressed contacts are excluded. Tags
+// all three contacts (two active, one unsubscribed) and suppresses one of the
+// active ones; only the untouched active, non-suppressed contact should
+// count, matching TestCreateCampaignFromSegment_ExcludesSuppressed's send-side
+// assertion.
+func TestSegmentPreview_MatchesActualSendSet(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	s, _, tid := newContactServer(t)
+	ctx := context.Background()
+
+	var tag int64
+	if err := s.systemPool().QueryRow(ctx,
+		`INSERT INTO contact_tags (tenant_id,name) VALUES ($1,'seg') RETURNING id`, tid).Scan(&tag); err != nil {
+		t.Fatalf("seed tag: %v", err)
+	}
+
+	bidxKeep := blind(s, "+8613800138000")
+	bidxSuppressed := blind(s, "+8613800138001")
+	bidxInactive := blind(s, "+8613800138002")
+	var keep, suppressed, inactive int64
+	if err := s.systemPool().QueryRow(ctx,
+		`INSERT INTO contacts (tenant_id,phone,phone_bidx,country_code,status) VALUES ($1,'+8613800138000',$2,'CN','active') RETURNING id`,
+		tid, bidxKeep).Scan(&keep); err != nil {
+		t.Fatalf("seed keep contact: %v", err)
+	}
+	if err := s.systemPool().QueryRow(ctx,
+		`INSERT INTO contacts (tenant_id,phone,phone_bidx,country_code,status) VALUES ($1,'+8613800138001',$2,'CN','active') RETURNING id`,
+		tid, bidxSuppressed).Scan(&suppressed); err != nil {
+		t.Fatalf("seed suppressed contact: %v", err)
+	}
+	if err := s.systemPool().QueryRow(ctx,
+		`INSERT INTO contacts (tenant_id,phone,phone_bidx,country_code,status) VALUES ($1,'+8613800138002',$2,'CN','unsubscribed') RETURNING id`,
+		tid, bidxInactive).Scan(&inactive); err != nil {
+		t.Fatalf("seed inactive contact: %v", err)
+	}
+	if _, err := s.systemPool().Exec(ctx,
+		`INSERT INTO contact_tag_map (tenant_id,contact_id,tag_id) VALUES ($1,$2,$3),($1,$4,$3),($1,$5,$3)`,
+		tid, keep, tag, suppressed, inactive); err != nil {
+		t.Fatalf("seed tag map: %v", err)
+	}
+	if _, err := s.systemPool().Exec(ctx,
+		`INSERT INTO suppression_list (tenant_id, phone_bidx, reason) VALUES ($1,$2,'x')`, tid, bidxSuppressed); err != nil {
+		t.Fatalf("seed suppression: %v", err)
+	}
+
+	// filter deliberately omits status, exactly like resolveSegmentPhones'
+	// input segment would in a real "send to everyone tagged" segment.
+	var segID int64
+	if err := s.systemPool().QueryRow(ctx,
+		`INSERT INTO contact_segments (tenant_id,name,filter) VALUES ($1,'seg2',$2) RETURNING id`,
+		tid, `{"tags":[`+itoa(tag)+`]}`).Scan(&segID); err != nil {
+		t.Fatalf("seed segment: %v", err)
+	}
+
+	w := doJSONTenantID(t, s, s.handleSegmentPreview, http.MethodGet, "/contacts/segments/x/preview", tid, itoa(segID), "")
+	if w.Code != http.StatusOK {
+		t.Fatalf("preview status=%d body=%s", w.Code, w.Body.String())
+	}
+	if !strings.Contains(w.Body.String(), `"count":1`) {
+		t.Fatalf("want count 1 (suppressed + unsubscribed excluded), got %s", w.Body.String())
+	}
+}
+
+// TestSegmentPreview_NotFoundVsDBError guards the review's error-handling
+// finding: a missing segment must 404, but the review flagged that the old
+// code collapsed ANY query error (e.g. a real DB failure) into 404 too. We
+// can't easily force a non-ErrNoRows failure from the happy-path pool here,
+// so this just pins the still-correct 404 case; the errors.Is(pgx.ErrNoRows)
+// branch is what stops a genuine 500 from being misreported as "not found".
+func TestSegmentPreview_NotFoundVsDBError(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	s, _, tid := newContactServer(t)
+	w := doJSONTenantID(t, s, s.handleSegmentPreview, http.MethodGet, "/contacts/segments/x/preview", tid, "999999", "")
+	if w.Code != http.StatusNotFound {
+		t.Fatalf("status=%d body=%s", w.Code, w.Body.String())
+	}
+}
+
 func TestContactTagMapCrossTenantFKRejected(t *testing.T) {
 	s, _, tid := newContactServer(t)
 	ctx := context.Background()

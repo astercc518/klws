@@ -165,6 +165,9 @@ func (s *Server) handleListContacts(c *gin.Context) {
 		Limit:   clampPage(atoiDefault(c.Query("limit"), 50), 50, 500),
 		Offset:  atoiDefault(c.Query("offset"), 0),
 	}
+	if f.Offset < 0 {
+		f.Offset = 0 // ?offset=-5 would otherwise hit Postgres' OFFSET must not be negative -> 500
+	}
 	if t := c.Query("tag_id"); t != "" {
 		f.TagID = int64(atoiDefault(t, 0))
 	}
@@ -944,6 +947,9 @@ func (s *Server) handleListSuppression(c *gin.Context) {
 	}
 	limit := clampPage(atoiDefault(c.Query("limit"), 50), 50, 500)
 	offset := atoiDefault(c.Query("offset"), 0)
+	if offset < 0 {
+		offset = 0 // ?offset=-5 would otherwise hit Postgres' OFFSET must not be negative -> 500
+	}
 
 	ctx := c.Request.Context()
 	tx, err := s.deps.Mgr.WithTenant(ctx, tid)
@@ -1123,6 +1129,9 @@ func (s *Server) handleAdminListContacts(c *gin.Context) {
 		Limit:   clampPage(atoiDefault(c.Query("limit"), 50), 50, 500),
 		Offset:  atoiDefault(c.Query("offset"), 0),
 	}
+	if f.Offset < 0 {
+		f.Offset = 0 // ?offset=-5 would otherwise hit Postgres' OFFSET must not be negative -> 500
+	}
 	if t := c.Query("tag_id"); t != "" {
 		f.TagID = int64(atoiDefault(t, 0))
 	}
@@ -1171,9 +1180,37 @@ func (s *Server) handleAdminListContacts(c *gin.Context) {
 	ok(c, gin.H{"rows": out, "total": total})
 }
 
+// segmentSendWhere builds the WHERE clause (and matching args) for the set of
+// contacts a segment would ACTUALLY send to: status defaults to "active" when
+// the filter leaves it unset, and anyone on the suppression list is excluded.
+// This mirrors resolveSegmentPhones (campaign_from_segment.go) rule-for-rule —
+// that function is the source of truth for what a campaign actually sends to.
+// It isn't called from here directly (resolveSegmentPhones lives in a file
+// this change doesn't touch), so keep the two in sync by hand if either
+// changes.
+func segmentSendWhere(f segmentFilter) (string, []any) {
+	if f.Status == "" {
+		f.Status = "active" // a campaign only ever sends to active contacts
+	}
+	where, args := segmentToWhere(f)
+	const suppressionGuard = `NOT EXISTS (
+		SELECT 1 FROM suppression_list sl
+		 WHERE sl.tenant_id = c.tenant_id AND sl.phone_bidx = c.phone_bidx
+	)`
+	if where == "" {
+		where = " WHERE " + suppressionGuard
+	} else {
+		where += " AND " + suppressionGuard
+	}
+	return where, args
+}
+
 // handleSegmentPreview: GET /api/v1/contacts/segments/:id/preview -> {count}.
-// Resolves the saved filter (segmentToWhere, shared with the eventual send
-// pipeline) and returns a live count — no rows are materialized/returned.
+// Resolves the saved filter with the SAME rules resolveSegmentPhones applies
+// when a campaign is actually built from this segment (status defaults to
+// "active", suppressed contacts excluded) via segmentSendWhere, so the
+// preview count matches what a subsequent campaign-from-segment would send —
+// no rows are materialized/returned, just a live count.
 func (s *Server) handleSegmentPreview(c *gin.Context) {
 	tid, ok2 := tenantID(c)
 	if !ok2 {
@@ -1195,12 +1232,16 @@ func (s *Server) handleSegmentPreview(c *gin.Context) {
 
 	var raw []byte
 	if err := tx.QueryRow(ctx, `SELECT filter FROM contact_segments WHERE id=$1`, segID).Scan(&raw); err != nil {
-		fail(c, http.StatusNotFound, "segment not found")
+		if errors.Is(err, pgx.ErrNoRows) {
+			fail(c, http.StatusNotFound, "segment not found")
+		} else {
+			fail(c, http.StatusInternalServerError, "segment lookup")
+		}
 		return
 	}
 	var f segmentFilter
 	_ = json.Unmarshal(raw, &f)
-	where, args := segmentToWhere(f)
+	where, args := segmentSendWhere(f)
 	var count int
 	if err := tx.QueryRow(ctx,
 		`SELECT count(DISTINCT c.id) FROM contacts c LEFT JOIN contact_tag_map m ON m.contact_id=c.id`+where, args...).Scan(&count); err != nil {
