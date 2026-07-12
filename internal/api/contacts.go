@@ -929,6 +929,13 @@ func insertSuppressionRows(ctx context.Context, tx pgx.Tx, tid int64, bidxs [][]
 // handleListSuppression: GET /api/v1/suppression?limit=&offset=.
 // Returns only id/reason/added_at — suppression_list has no phone column to
 // show (it stores the blind index only, which is one-way).
+//
+// IMPORTANT: suppression_list is NOT RLS-protected — migration 0008 only
+// GRANT/REVOKEs it and never runs it through an ENABLE/FORCE ROW LEVEL
+// SECURITY loop (0008's loop covers other tables; 0021's covers the contact
+// tables). So WithTenant's app.current_tenant_id has no effect here and both
+// queries MUST filter tenant_id explicitly, or one tenant sees every tenant's
+// rows. The add/import path is safe because it sets tenant_id on INSERT.
 func (s *Server) handleListSuppression(c *gin.Context) {
 	tid, hasTenant := tenantID(c)
 	if !hasTenant {
@@ -947,13 +954,13 @@ func (s *Server) handleListSuppression(c *gin.Context) {
 	defer tx.Rollback(ctx) //nolint:errcheck
 
 	var total int
-	if err := tx.QueryRow(ctx, `SELECT count(*) FROM suppression_list`).Scan(&total); err != nil {
+	if err := tx.QueryRow(ctx, `SELECT count(*) FROM suppression_list WHERE tenant_id = $1`, tid).Scan(&total); err != nil {
 		fail(c, http.StatusInternalServerError, "count")
 		return
 	}
 	rows, err := tx.Query(ctx,
 		`SELECT id, COALESCE(reason,''), added_at::text FROM suppression_list
-		 ORDER BY id DESC LIMIT $1 OFFSET $2`, limit, offset)
+		 WHERE tenant_id = $1 ORDER BY id DESC LIMIT $2 OFFSET $3`, tid, limit, offset)
 	if err != nil {
 		fail(c, http.StatusInternalServerError, "query")
 		return

@@ -354,6 +354,45 @@ func TestSuppressionAdd_DedupAndInvalid(t *testing.T) {
 	}
 }
 
+// TestListSuppression_TenantIsolation guards a live-reproduced bug: because
+// suppression_list is NOT RLS-protected (0008 only GRANT/REVOKEs it, never
+// runs it through an ENABLE/FORCE ROW LEVEL SECURITY loop), the list handler
+// MUST filter tenant_id explicitly or one tenant sees every tenant's rows.
+// Meaningful even under the superuser harness precisely because the fix is an
+// explicit WHERE, not RLS.
+func TestListSuppression_TenantIsolation(t *testing.T) {
+	s, _, tid := newContactServer(t)
+	ctx := context.Background()
+	// second tenant with its own suppression rows
+	var otherTid int64
+	if err := s.systemPool().QueryRow(ctx, `INSERT INTO tenants (name) VALUES ('other') RETURNING id`).Scan(&otherTid); err != nil {
+		t.Fatalf("seed other tenant: %v", err)
+	}
+	// tenant 1: one row; tenant 2: two rows — all inserted with explicit tenant_id.
+	if _, err := s.systemPool().Exec(ctx,
+		`INSERT INTO suppression_list (tenant_id, phone_bidx, reason) VALUES ($1,'\x01','mine')`, tid); err != nil {
+		t.Fatalf("seed t1 row: %v", err)
+	}
+	if _, err := s.systemPool().Exec(ctx,
+		`INSERT INTO suppression_list (tenant_id, phone_bidx, reason) VALUES ($1,'\x02','theirs-a'),($1,'\x03','theirs-b')`, otherTid); err != nil {
+		t.Fatalf("seed t2 rows: %v", err)
+	}
+	w := doJSONTenant(t, s, s.handleListSuppression, http.MethodGet, "/suppression", tid, "")
+	if w.Code != http.StatusOK {
+		t.Fatalf("list %d: %s", w.Code, w.Body.String())
+	}
+	body := w.Body.String()
+	if !strings.Contains(body, `"total":1`) {
+		t.Fatalf("want total:1 (only tenant 1's row), got %s", body)
+	}
+	if !strings.Contains(body, `"reason":"mine"`) {
+		t.Fatalf("missing tenant 1's row: %s", body)
+	}
+	if strings.Contains(body, "theirs-a") || strings.Contains(body, "theirs-b") {
+		t.Fatalf("leaked another tenant's suppression rows: %s", body)
+	}
+}
+
 func TestSuppressionImport(t *testing.T) {
 	s, _, tid := newContactServer(t)
 	body := `{"country":"CN","text":"13800138000\n13800138000\n5","reason":"bulk import"}`
