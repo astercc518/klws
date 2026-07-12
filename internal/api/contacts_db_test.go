@@ -12,7 +12,9 @@ import (
 
 	"github.com/acme/wadist/internal/audit"
 	"github.com/acme/wadist/internal/console"
+	"github.com/acme/wadist/internal/crypto"
 	wlog "github.com/acme/wadist/internal/log"
+	"github.com/acme/wadist/internal/pricing"
 	"github.com/acme/wadist/internal/store"
 )
 
@@ -53,8 +55,27 @@ func newContactServer(t *testing.T) (*Server, *store.Manager, int64) {
 		t.Fatalf("seed tenant: %v", err)
 	}
 	key := make([]byte, 32)
-	s := &Server{sysPool: pool, deps: Deps{Mgr: mgr, BlindKey: key, Audit: audit.NewAuditWriter(pool)}}
+	s := &Server{sysPool: pool, deps: Deps{Mgr: mgr, BlindKey: key, Audit: audit.NewAuditWriter(pool), Pricing: pricing.NewRepo(pool)}}
 	return s, mgr, tid
+}
+
+// blind returns the blind index a test would need to seed for a phone to
+// match what the handler computes via crypto.BlindIndex(s.deps.BlindKey, ...).
+func blind(s *Server, phone string) []byte {
+	return crypto.BlindIndex(s.deps.BlindKey, phone)
+}
+
+// seedPriceAndWallet sets a per-country unit price and tops up the tenant's
+// wallet so handleCreateCampaign's pre-flight balance guard passes.
+func seedPriceAndWallet(t *testing.T, ctx context.Context, s *Server, tid int64, country string) {
+	t.Helper()
+	if err := s.deps.Pricing.SetPrice(ctx, tid, country, 100); err != nil {
+		t.Fatalf("set price: %v", err)
+	}
+	if _, err := s.systemPool().Exec(ctx,
+		`INSERT INTO tenant_wallets (tenant_id, balance, frozen) VALUES ($1, $2, 0)`, tid, 100000); err != nil {
+		t.Fatalf("seed wallet: %v", err)
+	}
 }
 
 // doJSONTenant drives a handler with a session (tenantID(c) reads
@@ -408,5 +429,138 @@ func TestSuppressionImport(t *testing.T) {
 	wList := doJSONTenant(t, s, s.handleListSuppression, http.MethodGet, "/suppression", tid, "")
 	if !strings.Contains(wList.Body.String(), `"total":1`) {
 		t.Fatalf("list=%s", wList.Body.String())
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Build a campaign from a saved segment (Task 7).
+// ---------------------------------------------------------------------------
+
+// TestCreateCampaignFromSegment_ExcludesSuppressed: two active CN contacts
+// share a tag; one of them is on the suppression list. A campaign built from
+// a segment on that tag must resolve to exactly the non-suppressed contact.
+func TestCreateCampaignFromSegment_ExcludesSuppressed(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	s, _, tid := newContactServer(t)
+	ctx := context.Background()
+	// price so the balance guard passes; topup wallet
+	seedPriceAndWallet(t, ctx, s, tid, "CN")
+
+	var tag int64
+	if err := s.systemPool().QueryRow(ctx,
+		`INSERT INTO contact_tags (tenant_id,name) VALUES ($1,'seg') RETURNING id`, tid).Scan(&tag); err != nil {
+		t.Fatalf("seed tag: %v", err)
+	}
+	// two active CN contacts, one of them suppressed
+	bidxA := blind(s, "+8613800138000")
+	bidxB := blind(s, "+8613800138001")
+	var a, b int64
+	if err := s.systemPool().QueryRow(ctx,
+		`INSERT INTO contacts (tenant_id,phone,phone_bidx,country_code,status) VALUES ($1,'+8613800138000',$2,'CN','active') RETURNING id`,
+		tid, bidxA).Scan(&a); err != nil {
+		t.Fatalf("seed contact a: %v", err)
+	}
+	if err := s.systemPool().QueryRow(ctx,
+		`INSERT INTO contacts (tenant_id,phone,phone_bidx,country_code,status) VALUES ($1,'+8613800138001',$2,'CN','active') RETURNING id`,
+		tid, bidxB).Scan(&b); err != nil {
+		t.Fatalf("seed contact b: %v", err)
+	}
+	if _, err := s.systemPool().Exec(ctx,
+		`INSERT INTO contact_tag_map (tenant_id,contact_id,tag_id) VALUES ($1,$2,$3),($1,$4,$3)`,
+		tid, a, tag, b); err != nil {
+		t.Fatalf("seed tag map: %v", err)
+	}
+	if _, err := s.systemPool().Exec(ctx,
+		`INSERT INTO suppression_list (tenant_id, phone_bidx, reason) VALUES ($1,$2,'x')`, tid, bidxB); err != nil {
+		t.Fatalf("seed suppression: %v", err)
+	}
+	var segID int64
+	if err := s.systemPool().QueryRow(ctx,
+		`INSERT INTO contact_segments (tenant_id,name,filter) VALUES ($1,'s',$2) RETURNING id`,
+		tid, `{"tags":[`+itoa(tag)+`],"status":"active"}`).Scan(&segID); err != nil {
+		t.Fatalf("seed segment: %v", err)
+	}
+
+	body := `{"country":"CN","body":"hi {name}","segment_id":` + itoa(segID) + `}`
+	w := doJSONTenant(t, s, s.handleCreateCampaign, http.MethodPost, "/campaigns", tid, body)
+	if w.Code != http.StatusOK {
+		t.Fatalf("create %d: %s", w.Code, w.Body.String())
+	}
+	if !strings.Contains(w.Body.String(), `"total":1`) { // B excluded by suppression
+		t.Fatalf("want total 1 (suppressed excluded), got %s", w.Body.String())
+	}
+}
+
+// TestCreateCampaign_PhonesPathStillWorks guards the phones[] regression: the
+// segment branch must not have disturbed the original paste-numbers flow.
+func TestCreateCampaign_PhonesPathStillWorks(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	s, _, tid := newContactServer(t)
+	ctx := context.Background()
+	seedPriceAndWallet(t, ctx, s, tid, "CN")
+
+	body := `{"country":"CN","body":"hi {name}","phones":["+8613800138000","+8613800138001"]}`
+	w := doJSONTenant(t, s, s.handleCreateCampaign, http.MethodPost, "/campaigns", tid, body)
+	if w.Code != http.StatusOK {
+		t.Fatalf("create %d: %s", w.Code, w.Body.String())
+	}
+	if !strings.Contains(w.Body.String(), `"total":2`) {
+		t.Fatalf("want total 2, got %s", w.Body.String())
+	}
+}
+
+// TestCreateCampaign_RequiresExactlyOneOfPhonesOrSegment covers both the
+// neither-provided and both-provided cases -> 400.
+func TestCreateCampaign_RequiresExactlyOneOfPhonesOrSegment(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	s, _, tid := newContactServer(t)
+	ctx := context.Background()
+	seedPriceAndWallet(t, ctx, s, tid, "CN")
+
+	wNeither := doJSONTenant(t, s, s.handleCreateCampaign, http.MethodPost, "/campaigns", tid,
+		`{"country":"CN","body":"hi"}`)
+	if wNeither.Code != http.StatusBadRequest {
+		t.Fatalf("neither: status=%d body=%s", wNeither.Code, wNeither.Body.String())
+	}
+
+	var segID int64
+	if err := s.systemPool().QueryRow(ctx,
+		`INSERT INTO contact_segments (tenant_id,name,filter) VALUES ($1,'s2',$2) RETURNING id`,
+		tid, `{}`).Scan(&segID); err != nil {
+		t.Fatalf("seed segment: %v", err)
+	}
+	wBoth := doJSONTenant(t, s, s.handleCreateCampaign, http.MethodPost, "/campaigns", tid,
+		`{"country":"CN","body":"hi","phones":["+8613800138000"],"segment_id":`+itoa(segID)+`}`)
+	if wBoth.Code != http.StatusBadRequest {
+		t.Fatalf("both: status=%d body=%s", wBoth.Code, wBoth.Body.String())
+	}
+}
+
+// TestCreateCampaignFromSegment_EmptyResolvesTo400 guards against creating an
+// empty campaign: a segment that resolves to nobody must 400, not create a
+// zero-recipient campaign row.
+func TestCreateCampaignFromSegment_EmptyResolvesTo400(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	s, _, tid := newContactServer(t)
+	ctx := context.Background()
+	seedPriceAndWallet(t, ctx, s, tid, "CN")
+
+	var segID int64
+	if err := s.systemPool().QueryRow(ctx,
+		`INSERT INTO contact_segments (tenant_id,name,filter) VALUES ($1,'empty',$2) RETURNING id`,
+		tid, `{"status":"active"}`).Scan(&segID); err != nil {
+		t.Fatalf("seed segment: %v", err)
+	}
+	w := doJSONTenant(t, s, s.handleCreateCampaign, http.MethodPost, "/campaigns", tid,
+		`{"country":"CN","body":"hi","segment_id":`+itoa(segID)+`}`)
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("status=%d body=%s", w.Code, w.Body.String())
+	}
+	var n int
+	if err := s.systemPool().QueryRow(ctx, `SELECT count(*) FROM campaigns WHERE tenant_id=$1`, tid).Scan(&n); err != nil {
+		t.Fatalf("count campaigns: %v", err)
+	}
+	if n != 0 {
+		t.Fatalf("expected no campaign row created for empty segment, got %d", n)
 	}
 }

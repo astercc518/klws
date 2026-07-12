@@ -21,11 +21,15 @@ import (
 	"github.com/acme/wadist/internal/pricing"
 )
 
-// createCampaignRequest is the POST /api/v1/campaigns body.
+// createCampaignRequest is the POST /api/v1/campaigns body. Exactly one of
+// Phones / SegmentID must be provided: either the caller pastes already-
+// normalized recipients directly, or points at a saved segment to resolve
+// server-side (see resolveSegmentPhones in campaign_from_segment.go).
 type createCampaignRequest struct {
-	Country string   `json:"country" binding:"required,len=2"` // ISO-3166 alpha-2, for pricing
-	Body    string   `json:"body" binding:"required"`          // Spintax template
-	Phones  []string `json:"phones" binding:"required"`        // already-normalized recipients
+	Country   string   `json:"country" binding:"required,len=2"` // ISO-3166 alpha-2, for pricing
+	Body      string   `json:"body" binding:"required"`          // Spintax template
+	Phones    []string `json:"phones"`                           // already-normalized recipients
+	SegmentID int64    `json:"segment_id"`                       // saved segment to resolve instead of phones
 }
 
 // createCampaignResponse is returned on successful submission.
@@ -62,11 +66,42 @@ func (s *Server) handleCreateCampaign(c *gin.Context) {
 		fail(c, http.StatusServiceUnavailable, "send not configured")
 		return
 	}
+	// Exactly one of phones / segment_id: pasted numbers XOR a saved segment.
+	if (len(req.Phones) == 0) == (req.SegmentID == 0) {
+		fail(c, http.StatusBadRequest, "provide exactly one of phones or segment_id")
+		return
+	}
+	ctx := c.Request.Context()
+
+	tx, err := s.deps.Mgr.WithTenant(ctx, tid)
+	if err != nil {
+		fail(c, http.StatusInternalServerError, "could not open transaction")
+		return
+	}
+	defer tx.Rollback(ctx) //nolint:errcheck
+
+	// Segment branch: resolve into the same []string shape the phones[] path
+	// already uses, inside the same RLS tx, BEFORE the existing insert loop
+	// below runs. From here down the flow is identical to the phones[] path.
+	if req.SegmentID != 0 {
+		resolved, err := s.resolveSegmentPhones(ctx, tx, req.SegmentID)
+		if err != nil {
+			fail(c, http.StatusInternalServerError, fmt.Sprintf("resolve segment: %v", err))
+			return
+		}
+		if len(resolved) == 0 {
+			fail(c, http.StatusBadRequest, "分段无可发送联系人")
+			return
+		}
+		req.Phones = make([]string, len(resolved))
+		for i, p := range resolved {
+			req.Phones[i] = p.Phone
+		}
+	}
 	if len(req.Phones) == 0 {
 		fail(c, http.StatusBadRequest, "no recipients")
 		return
 	}
-	ctx := c.Request.Context()
 
 	unit, err := s.deps.Pricing.GetPrice(ctx, tid, req.Country)
 	if errors.Is(err, pricing.ErrNoPrice) {
@@ -78,13 +113,6 @@ func (s *Server) handleCreateCampaign(c *gin.Context) {
 		return
 	}
 	estimate := int64(len(req.Phones)) * unit
-
-	tx, err := s.deps.Mgr.WithTenant(ctx, tid)
-	if err != nil {
-		fail(c, http.StatusInternalServerError, "could not open transaction")
-		return
-	}
-	defer tx.Rollback(ctx) //nolint:errcheck
 
 	// Pre-flight balance guard (the real per-message freeze happens downstream
 	// in the dispatcher via billing.Hold — not here).
