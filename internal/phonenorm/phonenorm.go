@@ -29,8 +29,12 @@ var byCountry = map[string]ccInfo{
 	"PH": {"63", 10, 10},
 }
 
-// byPrefix lets us detect the country when the raw string already carries a
-// calling code (longest prefix wins).
+// preferredForCode resolves ambiguity when multiple countries share the same
+// calling code. For example, US and CA both use code "1"; US is preferred.
+var preferredForCode = map[string]string{
+	"1": "US",
+}
+
 func digitsOnly(s string) string {
 	var b strings.Builder
 	for _, r := range s {
@@ -56,7 +60,6 @@ func Normalize(raw, defaultCountry string) (string, string, bool) {
 	// 1) If it starts with a known calling code, trust it.
 	if hadPlus || len(d) > 11 {
 		// Sort countries for deterministic iteration when multiple share a code.
-		// For ambiguous codes like "1" (US/CA), prefer US (comes first in reverse sort).
 		var countries []string
 		for cc := range byCountry {
 			countries = append(countries, cc)
@@ -68,6 +71,15 @@ func Normalize(raw, defaultCountry string) (string, string, bool) {
 				nat := strings.TrimPrefix(d, info.code)
 				nat = strings.TrimPrefix(nat, "0") // national trunk 0
 				if len(nat) >= info.min && len(nat) <= info.max {
+					// If this code has a preferred country, use it if its length matches.
+					if pref, exists := preferredForCode[info.code]; exists {
+						prefInfo := byCountry[pref]
+						prefNat := strings.TrimPrefix(d, prefInfo.code)
+						prefNat = strings.TrimPrefix(prefNat, "0")
+						if len(prefNat) >= prefInfo.min && len(prefNat) <= prefInfo.max {
+							return "+" + prefInfo.code + prefNat, pref, true
+						}
+					}
 					return "+" + info.code + nat, cc, true
 				}
 			}
