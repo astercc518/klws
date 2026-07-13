@@ -49,13 +49,22 @@ func (s *Server) handleAdminListCostPricing(c *gin.Context) {
 func (s *Server) handleAdminSetCostPricing(c *gin.Context) {
 	var req struct {
 		CountryCode string `json:"country_code" binding:"required,len=2"`
-		UnitCost    int64  `json:"unit_cost"`
+		// UnitCost is a *pointer* so a MISSING field (nil) is distinguishable
+		// from an explicit 0. gin's `required` rejects nil (missing) with 400
+		// but accepts a pointer-to-zero (explicit 0) — critical because T5/T6
+		// join this table for money math, so a forgotten field must NOT
+		// silently write a free-tier (0) cost.
+		UnitCost *int64 `json:"unit_cost" binding:"required"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
-		fail(c, http.StatusBadRequest, "country_code(2) required")
+		fail(c, http.StatusBadRequest, "country_code(2), unit_cost required")
 		return
 	}
-	if req.UnitCost < 0 {
+	if req.UnitCost == nil {
+		fail(c, http.StatusBadRequest, "unit_cost required")
+		return
+	}
+	if *req.UnitCost < 0 {
 		fail(c, http.StatusBadRequest, "unit_cost must be >= 0")
 		return
 	}
@@ -63,12 +72,12 @@ func (s *Server) handleAdminSetCostPricing(c *gin.Context) {
 	if _, err := s.systemPool().Exec(ctx,
 		`INSERT INTO agent_cost_pricing (country_code, unit_cost) VALUES ($1,$2)
 		 ON CONFLICT (country_code) DO UPDATE SET unit_cost=$2, updated_at=now()`,
-		req.CountryCode, req.UnitCost); err != nil {
+		req.CountryCode, *req.UnitCost); err != nil {
 		fail(c, http.StatusInternalServerError, "set cost pricing failed")
 		return
 	}
 	s.recordAudit(ctx, auditEvent{TenantID: 0, ActorID: actorID(c),
 		Action: "agent.cost_pricing_set", ResourceType: "agent_cost_pricing", ResourceID: 0,
-		Details: map[string]any{"country": req.CountryCode, "unit_cost": req.UnitCost}})
-	ok(c, gin.H{"country_code": req.CountryCode, "unit_cost": req.UnitCost})
+		Details: map[string]any{"country_code": req.CountryCode, "unit_cost": *req.UnitCost}})
+	ok(c, gin.H{"country_code": req.CountryCode, "unit_cost": *req.UnitCost})
 }

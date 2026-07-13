@@ -283,6 +283,45 @@ func TestAdminSetCostPricing_Validation(t *testing.T) {
 	if w2.Code != http.StatusBadRequest {
 		t.Fatalf("negative unit cost: expected 400, got %d body=%s", w2.Code, w2.Body.String())
 	}
+
+	// A request that OMITS unit_cost entirely must be rejected (400), NOT
+	// silently written as a free-tier 0 cost — T5/T6 join this table for money
+	// math, so a forgotten field is a money footgun.
+	w3 := doJSON(t, s, s.handleAdminSetCostPricing, "POST", "/admin/agent/cost-pricing", "",
+		`{"country_code":"US"}`)
+	if w3.Code != http.StatusBadRequest {
+		t.Fatalf("omitted unit_cost: expected 400, got %d body=%s", w3.Code, w3.Body.String())
+	}
+	// And nothing must have been written for that country.
+	var n int
+	if err := s.systemPool().QueryRow(context.Background(),
+		`SELECT count(*) FROM agent_cost_pricing WHERE country_code='US'`).Scan(&n); err != nil {
+		t.Fatalf("count US rows: %v", err)
+	}
+	if n != 0 {
+		t.Fatalf("omitted unit_cost must not write a row, found %d", n)
+	}
+}
+
+func TestAdminSetCostPricing_ExplicitZeroAccepted(t *testing.T) {
+	s, _ := newCrudServer(t)
+
+	// An explicit unit_cost:0 is a legitimate free-tier price and must be
+	// accepted (200) and readable back as 0 — distinct from a missing field.
+	w := doJSON(t, s, s.handleAdminSetCostPricing, "POST", "/admin/agent/cost-pricing", "",
+		`{"country_code":"ZZ","unit_cost":0}`)
+	if w.Code != http.StatusOK {
+		t.Fatalf("explicit zero: expected 200, got %d body=%s", w.Code, w.Body.String())
+	}
+	var cost int64
+	cost = -1
+	if err := s.systemPool().QueryRow(context.Background(),
+		`SELECT unit_cost FROM agent_cost_pricing WHERE country_code='ZZ'`).Scan(&cost); err != nil {
+		t.Fatalf("read ZZ cost: %v", err)
+	}
+	if cost != 0 {
+		t.Fatalf("explicit zero must persist as 0, got %d", cost)
+	}
 }
 
 func TestAgentSchemaApplies(t *testing.T) {
