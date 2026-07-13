@@ -4,6 +4,7 @@ import (
 	"net/http"
 
 	"github.com/gin-gonic/gin"
+	"github.com/jackc/pgx/v5"
 )
 
 // agent_admin.go holds admin-side, cross-tenant handlers for module 9 (agent
@@ -80,4 +81,129 @@ func (s *Server) handleAdminSetCostPricing(c *gin.Context) {
 		Action: "agent.cost_pricing_set", ResourceType: "agent_cost_pricing", ResourceID: 0,
 		Details: map[string]any{"country_code": req.CountryCode, "unit_cost": *req.UnitCost}})
 	ok(c, gin.H{"country_code": req.CountryCode, "unit_cost": *req.UnitCost})
+}
+
+// --- Monthly settlement overview / close (T6) -------------------------------
+//
+// MONEY-CRITICAL. Both handlers enumerate every role='sales' console_user and
+// run agentSettlement (agent_api.go) per agent — there is no subtree scoping
+// here since this IS the platform "god view" (mirrors handleAdminCommissions'
+// shape, per-agent rows for ALL agents, not just roots).
+
+// handleAdminSettlementOverview: GET /api/v1/admin/agent/settlements?month=
+// — per-agent monthly settlement (debt/margin/rebate/net) for every sales
+// agent on the platform.
+func (s *Server) handleAdminSettlementOverview(c *gin.Context) {
+	ctx := c.Request.Context()
+	from, to, err := parseMonth(c.Query("month"))
+	if err != nil {
+		fail(c, http.StatusBadRequest, err.Error())
+		return
+	}
+	rows, err := s.systemPool().Query(ctx,
+		`SELECT id FROM console_users WHERE role='sales' ORDER BY id`)
+	if err != nil {
+		fail(c, http.StatusInternalServerError, "list agents failed")
+		return
+	}
+	var agentIDs []int64
+	for rows.Next() {
+		var id int64
+		if err := rows.Scan(&id); err != nil {
+			rows.Close()
+			fail(c, http.StatusInternalServerError, "scan agent failed")
+			return
+		}
+		agentIDs = append(agentIDs, id)
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		fail(c, http.StatusInternalServerError, "iterate agents failed")
+		return
+	}
+
+	period := from.Format("2006-01")
+	out := make([]gin.H, 0, len(agentIDs))
+	for _, id := range agentIDs {
+		in, err := s.agentSettlement(ctx, id, from, to)
+		if err != nil {
+			fail(c, http.StatusInternalServerError, "settlement computation failed")
+			return
+		}
+		out = append(out, settlementJSON(id, period, in))
+	}
+	ok(c, gin.H{"period": period, "agents": out})
+}
+
+// handleAdminCloseSettlement: POST /api/v1/admin/agent/settlements/close?month=
+// — computes every sales agent's settlement for the month and INSERTs one
+// agent_settlements row per agent, ON CONFLICT (agent_id, period) DO NOTHING
+// so re-closing an already-closed month is a no-op: it neither double-writes
+// nor changes the previously-recorded (possibly since-superseded) figures.
+// Each newly-inserted row is audited individually inside its own tx; a
+// no-op (already closed) skips the audit write — there is nothing new to log.
+func (s *Server) handleAdminCloseSettlement(c *gin.Context) {
+	ctx := c.Request.Context()
+	from, to, err := parseMonth(c.Query("month"))
+	if err != nil {
+		fail(c, http.StatusBadRequest, err.Error())
+		return
+	}
+	period := from.Format("2006-01")
+
+	rows, err := s.systemPool().Query(ctx,
+		`SELECT id FROM console_users WHERE role='sales' ORDER BY id`)
+	if err != nil {
+		fail(c, http.StatusInternalServerError, "list agents failed")
+		return
+	}
+	var agentIDs []int64
+	for rows.Next() {
+		var id int64
+		if err := rows.Scan(&id); err != nil {
+			rows.Close()
+			fail(c, http.StatusInternalServerError, "scan agent failed")
+			return
+		}
+		agentIDs = append(agentIDs, id)
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		fail(c, http.StatusInternalServerError, "iterate agents failed")
+		return
+	}
+
+	actor := actorID(c)
+	closed := make([]gin.H, 0, len(agentIDs))
+	for _, agentID := range agentIDs {
+		in, err := s.agentSettlement(ctx, agentID, from, to)
+		if err != nil {
+			fail(c, http.StatusInternalServerError, "settlement computation failed")
+			return
+		}
+		debt, margin, rebate, net := computeSettlement(in)
+		err = pgx.BeginTxFunc(ctx, s.systemPool(), pgx.TxOptions{}, func(tx pgx.Tx) error {
+			tag, e := tx.Exec(ctx,
+				`INSERT INTO agent_settlements (agent_id, period, debt, margin, rebate, net)
+				 VALUES ($1,$2,$3,$4,$5,$6)
+				 ON CONFLICT (agent_id, period) DO NOTHING`,
+				agentID, period, debt, margin, rebate, net)
+			if e != nil {
+				return e
+			}
+			if tag.RowsAffected() == 0 {
+				return nil // already closed this month: idempotent no-op
+			}
+			return s.recordAuditTx(ctx, tx, auditEvent{TenantID: 0, ActorID: actor,
+				Action: "agent.settlement_close", ResourceType: "agent_settlement", ResourceID: agentID,
+				Details: map[string]any{"period": period, "debt": debt, "margin": margin, "rebate": rebate, "net": net}})
+		})
+		if err != nil {
+			fail(c, http.StatusInternalServerError, "close settlement failed")
+			return
+		}
+		closed = append(closed, gin.H{"agent_id": agentID, "period": period,
+			"debt": debt, "margin": margin, "rebate": rebate, "net": net})
+	}
+	ok(c, gin.H{"period": period, "closed": closed})
 }

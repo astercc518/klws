@@ -167,6 +167,7 @@ func (s *Server) Router() *gin.Engine {
 		sales.POST("/customers/:id/pricing", s.handleSalesSetPricing)
 		sales.POST("/sub-agents", s.handleAgentCreateSubAgent)
 		sales.POST("/allocate", s.handleAgentAllocate)
+		sales.GET("/statement", s.handleAgentStatement)
 	}
 
 	// --- Admin controller (super-admin "god view") ---
@@ -223,6 +224,8 @@ func (s *Server) Router() *gin.Engine {
 
 		admin.GET("/agent/cost-pricing", s.handleAdminListCostPricing)
 		admin.POST("/agent/cost-pricing", s.handleAdminSetCostPricing)
+		admin.GET("/agent/settlements", s.handleAdminSettlementOverview)
+		admin.POST("/agent/settlements/close", s.handleAdminCloseSettlement)
 	}
 
 	return r

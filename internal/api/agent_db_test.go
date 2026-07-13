@@ -2,10 +2,12 @@ package api
 
 import (
 	"context"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/gin-gonic/gin"
 
@@ -501,6 +503,228 @@ func TestAgentAllocate_SettledConsumptionCreditsBackAvailable(t *testing.T) {
 		t.Fatalf("expected 200 after consumption credit-back, got %d", code)
 	}
 	assertWalletBalance(t, ctx, s, tn, 700+800)
+}
+
+// --- T6: consumption rollup / monthly settlement ---------------------------
+
+// seedSettledChargesCountry inserts `count` 'settled' billing_charges rows
+// for tenantID in `country`, each with `amount` and an explicit createdAt (so
+// tests can place charges deterministically inside a given month, avoiding
+// wall-clock month-boundary flakiness) — distinct from the pre-existing
+// seedSettledCharge (single-row, country fixed to 'US', created_at=now())
+// used by T5's credit-back tests.
+func seedSettledChargesCountry(t *testing.T, ctx context.Context, s *Server, tenantID int64, country string, amount int64, count int, createdAt time.Time) {
+	t.Helper()
+	nonce := time.Now().UnixNano() // keeps message_id unique across repeated calls for the same tenant/country/amount (e.g. re-seeding in an idempotency test)
+	for i := 0; i < count; i++ {
+		msgID := fmt.Sprintf("msg-%d-%s-%d-%d-%d", tenantID, country, amount, nonce, i)
+		if _, err := s.systemPool().Exec(ctx,
+			`INSERT INTO billing_charges (tenant_id, account_jid, message_id, country_code, amount, state, created_at)
+			 VALUES ($1, 'jid@x', $2, $3, $4, 'settled', $5)`,
+			tenantID, msgID, country, amount, createdAt); err != nil {
+			t.Fatalf("seed settled charge %d for tenant %d/%s: %v", i, tenantID, country, err)
+		}
+	}
+}
+
+// setCommissionRate sets an agent's console_users.commission_rate directly.
+func setCommissionRate(t *testing.T, ctx context.Context, s *Server, agentID int64, rate float64) {
+	t.Helper()
+	if _, err := s.systemPool().Exec(ctx,
+		`UPDATE console_users SET commission_rate=$2 WHERE id=$1`, agentID, rate); err != nil {
+		t.Fatalf("set commission rate for agent %d: %v", agentID, err)
+	}
+}
+
+// setCostPrice upserts agent_cost_pricing for a country (mirrors
+// handleAdminSetCostPricing's SQL, called directly to avoid HTTP plumbing in
+// settlement-math tests).
+func setCostPrice(t *testing.T, ctx context.Context, s *Server, country string, unitCost int64) {
+	t.Helper()
+	if _, err := s.systemPool().Exec(ctx,
+		`INSERT INTO agent_cost_pricing (country_code, unit_cost) VALUES ($1,$2)
+		 ON CONFLICT (country_code) DO UPDATE SET unit_cost=$2, updated_at=now()`,
+		country, unitCost); err != nil {
+		t.Fatalf("set cost price for %s: %v", country, err)
+	}
+}
+
+// TestAgentSettlement_MultiLevel is the money-critical trace from the task-6
+// brief: agent A -> sub-agent B; B's own direct customer tB has 10 settled
+// CN charges this month at retail amount=80 each (CN unit_cost=50).
+//
+//	tB retail=800, cost=500.
+//	B (no sub-agents, commission_rate left NULL -> 0):
+//	  RetailDirect=800, CostDirect=500, RetailSubtree=800 (B's own direct is
+//	  its whole subtree), RebateRate=0 -> margin=300, debt=500, rebate=0,
+//	  net=300+0-500=-200.
+//	A (no direct customers of its own, commission_rate=0.10):
+//	  RetailDirect=0, CostDirect=0, RetailSubtree=800 (tB is under B is under
+//	  A), RebateRate=0.10 -> margin=0, debt=0, rebate=round(800*0.10)=80,
+//	  net=0+80-0=80.
+//
+// This also confirms the intentional double-benefit: an agent that is both a
+// direct seller and an upline (not exercised by A/B here, but by the shape of
+// the subtree query) earns margin on its own direct customers AND rebate on
+// its whole subtree including those same customers.
+func TestAgentSettlement_MultiLevel(t *testing.T) {
+	s := newAgentServer(t)
+	ctx := context.Background()
+	a := seedAgent(t, ctx, s, "settle-a@x", nil)
+	b := seedAgent(t, ctx, s, "settle-b@x", &a)
+	tB := seedTenantUnderAgent(t, ctx, s, b)
+
+	from, to, err := parseMonth("")
+	if err != nil {
+		t.Fatalf("parseMonth: %v", err)
+	}
+	inMonth := from.Add(time.Hour)
+
+	setCostPrice(t, ctx, s, "CN", 50)
+	seedSettledChargesCountry(t, ctx, s, tB, "CN", 80, 10, inMonth)
+	setCommissionRate(t, ctx, s, a, 0.10)
+	// B's commission_rate is left NULL -> must read back as RebateRate=0.
+
+	inB, err := s.agentSettlement(ctx, b, from, to)
+	if err != nil {
+		t.Fatalf("agentSettlement(B): %v", err)
+	}
+	if inB.RetailDirect != 800 || inB.CostDirect != 500 || inB.RetailSubtree != 800 || inB.RebateRate != 0 {
+		t.Fatalf("B settlementInput: %+v, want RetailDirect=800 CostDirect=500 RetailSubtree=800 RebateRate=0", inB)
+	}
+	debtB, marginB, rebateB, netB := computeSettlement(inB)
+	if debtB != 500 || marginB != 300 || rebateB != 0 || netB != -200 {
+		t.Fatalf("B computeSettlement: debt=%d margin=%d rebate=%d net=%d, want 500/300/0/-200", debtB, marginB, rebateB, netB)
+	}
+
+	inA, err := s.agentSettlement(ctx, a, from, to)
+	if err != nil {
+		t.Fatalf("agentSettlement(A): %v", err)
+	}
+	if inA.RetailDirect != 0 || inA.CostDirect != 0 || inA.RetailSubtree != 800 || inA.RebateRate != 0.10 {
+		t.Fatalf("A settlementInput: %+v, want RetailDirect=0 CostDirect=0 RetailSubtree=800 RebateRate=0.10", inA)
+	}
+	debtA, marginA, rebateA, netA := computeSettlement(inA)
+	if debtA != 0 || marginA != 0 || rebateA != 80 || netA != 80 {
+		t.Fatalf("A computeSettlement: debt=%d margin=%d rebate=%d net=%d, want 0/0/80/80", debtA, marginA, rebateA, netA)
+	}
+}
+
+// TestHandleAgentStatement_OwnOnly proves the agent-facing endpoint returns
+// the calling agent's own computed settlement (no way to request another
+// agent's — there is no :id on this route, the session's own UserID is the
+// only agent id ever used).
+func TestHandleAgentStatement_OwnOnly(t *testing.T) {
+	s := newAgentServer(t)
+	ctx := context.Background()
+	a := seedAgent(t, ctx, s, "stmt-a@x", nil)
+	tA := seedTenantUnderAgent(t, ctx, s, a)
+
+	from, _, err := parseMonth("")
+	if err != nil {
+		t.Fatalf("parseMonth: %v", err)
+	}
+	inMonth := from.Add(time.Hour)
+	setCostPrice(t, ctx, s, "US", 10)
+	seedSettledChargesCountry(t, ctx, s, tA, "US", 20, 5, inMonth) // retail=100, cost=50
+
+	w := doJSONAgent(t, s, s.handleAgentStatement, "GET", "/sales/statement", a, "", "")
+	if w.Code != http.StatusOK {
+		t.Fatalf("statement: got %d body=%s", w.Code, w.Body.String())
+	}
+	body := w.Body.String()
+	if !strings.Contains(body, `"debt":50`) || !strings.Contains(body, `"margin":50`) {
+		t.Fatalf("expected debt=50 margin=50 in statement body, got %s", body)
+	}
+}
+
+// TestHandleAdminSettlementOverview_ListsAgent proves the admin "god view"
+// endpoint includes a seeded agent's computed settlement.
+func TestHandleAdminSettlementOverview_ListsAgent(t *testing.T) {
+	s := newAgentServer(t)
+	ctx := context.Background()
+	a := seedAgent(t, ctx, s, "ov-a@x", nil)
+	tA := seedTenantUnderAgent(t, ctx, s, a)
+
+	from, _, err := parseMonth("")
+	if err != nil {
+		t.Fatalf("parseMonth: %v", err)
+	}
+	inMonth := from.Add(time.Hour)
+	setCostPrice(t, ctx, s, "US", 10)
+	seedSettledChargesCountry(t, ctx, s, tA, "US", 20, 3, inMonth) // retail=60, cost=30
+
+	w := doJSON(t, s, s.handleAdminSettlementOverview, "GET", "/admin/agent/settlements", "", "")
+	if w.Code != http.StatusOK {
+		t.Fatalf("overview: got %d body=%s", w.Code, w.Body.String())
+	}
+	body := w.Body.String()
+	if !strings.Contains(body, `"agent_id":`+itoa(a)) {
+		t.Fatalf("expected agent %d in overview, got %s", a, body)
+	}
+	if !strings.Contains(body, `"debt":30`) || !strings.Contains(body, `"margin":30`) {
+		t.Fatalf("expected debt=30 margin=30 in overview, got %s", body)
+	}
+}
+
+// TestHandleAdminCloseSettlement_Idempotent proves closing a month writes one
+// agent_settlements row per agent, and re-closing the SAME month (even after
+// the underlying consumption has changed) is a no-op: still exactly one row,
+// with the ORIGINAL figures unchanged (ON CONFLICT DO NOTHING, not DO UPDATE
+// — a closed month's numbers are final and must not silently drift).
+func TestHandleAdminCloseSettlement_Idempotent(t *testing.T) {
+	s := newAgentServer(t)
+	ctx := context.Background()
+	a := seedAgent(t, ctx, s, "close-a@x", nil)
+	tA := seedTenantUnderAgent(t, ctx, s, a)
+
+	from, _, err := parseMonth("")
+	if err != nil {
+		t.Fatalf("parseMonth: %v", err)
+	}
+	inMonth := from.Add(time.Hour)
+	setCostPrice(t, ctx, s, "US", 10)
+	seedSettledChargesCountry(t, ctx, s, tA, "US", 20, 3, inMonth) // retail=60, cost=30
+	setCommissionRate(t, ctx, s, a, 0.05)                          // rebate = round(60*0.05) = 3
+
+	w := doJSON(t, s, s.handleAdminCloseSettlement, "POST", "/admin/agent/settlements/close", "", "")
+	if w.Code != http.StatusOK {
+		t.Fatalf("close: got %d body=%s", w.Code, w.Body.String())
+	}
+
+	period := from.Format("2006-01")
+	assertOneSettlement := func(wantDebt, wantMargin, wantRebate, wantNet int64) {
+		t.Helper()
+		var n int
+		if err := s.systemPool().QueryRow(ctx,
+			`SELECT count(*) FROM agent_settlements WHERE agent_id=$1 AND period=$2`, a, period).Scan(&n); err != nil {
+			t.Fatalf("count settlements: %v", err)
+		}
+		if n != 1 {
+			t.Fatalf("expected exactly 1 settlement row for agent %d period %s, got %d", a, period, n)
+		}
+		var debt, margin, rebate, net int64
+		if err := s.systemPool().QueryRow(ctx,
+			`SELECT debt, margin, rebate, net FROM agent_settlements WHERE agent_id=$1 AND period=$2`,
+			a, period).Scan(&debt, &margin, &rebate, &net); err != nil {
+			t.Fatalf("read settlement: %v", err)
+		}
+		if debt != wantDebt || margin != wantMargin || rebate != wantRebate || net != wantNet {
+			t.Fatalf("settlement row: debt=%d margin=%d rebate=%d net=%d, want %d/%d/%d/%d",
+				debt, margin, rebate, net, wantDebt, wantMargin, wantRebate, wantNet)
+		}
+	}
+	assertOneSettlement(30, 30, 3, 3) // debt=30, margin=30, rebate=3, net=30+3-30=3
+
+	// Mutate underlying consumption AFTER the first close, then re-close: the
+	// already-closed row must NOT change, and no second row must appear.
+	seedSettledChargesCountry(t, ctx, s, tA, "US", 20, 5, inMonth)
+
+	w2 := doJSON(t, s, s.handleAdminCloseSettlement, "POST", "/admin/agent/settlements/close", "", "")
+	if w2.Code != http.StatusOK {
+		t.Fatalf("re-close: got %d body=%s", w2.Code, w2.Body.String())
+	}
+	assertOneSettlement(30, 30, 3, 3) // unchanged despite the new charges
 }
 
 func TestAgentSchemaApplies(t *testing.T) {

@@ -14,6 +14,7 @@ import (
 	"log"
 	"net/http"
 	"strconv"
+	"time"
 
 	"github.com/gin-gonic/gin"
 	"github.com/jackc/pgx/v5"
@@ -409,6 +410,113 @@ func (s *Server) allocateOne(ctx context.Context, agentID, actor, tenantID, amou
 		return 0, http.StatusInternalServerError, "topup failed: " + err.Error()
 	}
 	return allocID, http.StatusOK, ""
+}
+
+// --- Consumption rollup / monthly settlement (T6) ---------------------------
+//
+// MONEY-CRITICAL. agentSettlement gathers the three inputs computeSettlement
+// (agent_query.go, T2) needs for one agent's monthly statement, all read
+// against the systemPool (BYPASSRLS — billing_charges/agent_cost_pricing/
+// console_users carry no tenant_id and are outside RLS):
+//
+//  1. RetailDirect/CostDirect: the agent's OWN direct customers only
+//     (tenants.sales_owner_id = agentID), NOT the whole subtree — an agent
+//     earns margin (retail-cost) only on business it personally closed.
+//  2. RetailSubtree: settled retail consumption across the ENTIRE subtree
+//     rooted at agentID (subtreeCTE), INCLUDING the agent's own direct
+//     customers — this is the rebate base. An agent that is both a direct
+//     seller and an upline therefore earns margin on its direct customers
+//     AND rebate on its whole subtree (including those same customers); this
+//     double-benefit is intentional (margin and rebate are different,
+//     platform-funded pockets) — see task-6 brief.
+//  3. RebateRate: the agent's own console_users.commission_rate (nullable →
+//     0, via COALESCE at scan time rather than in SQL, so a NULL rate reads
+//     as exactly 0.0 with no ambiguity).
+//
+// Cost of a settled charge = agent_cost_pricing.unit_cost for that charge's
+// country, LEFT JOINed (not INNER) so a charge whose country has no
+// cost-pricing row still counts toward RetailDirect/RetailSubtree — it just
+// contributes 0 to CostDirect (COALESCE) rather than silently vanishing from
+// the retail totals.
+func (s *Server) agentSettlement(ctx context.Context, agentID int64, from, to time.Time) (settlementInput, error) {
+	var in settlementInput
+	if err := s.systemPool().QueryRow(ctx, `
+SELECT COALESCE(SUM(bc.amount), 0)::bigint,
+       COALESCE(SUM(COALESCE(cost.unit_cost, 0)), 0)::bigint
+  FROM billing_charges bc
+  JOIN tenants t ON t.id = bc.tenant_id
+  LEFT JOIN agent_cost_pricing cost ON cost.country_code = bc.country_code
+ WHERE bc.state = 'settled'
+   AND bc.created_at >= $2 AND bc.created_at < $3
+   AND t.sales_owner_id = $1`,
+		agentID, from, to).Scan(&in.RetailDirect, &in.CostDirect); err != nil {
+		return settlementInput{}, fmt.Errorf("direct consumption: %w", err)
+	}
+
+	if err := s.systemPool().QueryRow(ctx,
+		subtreeCTE("$1")+`
+SELECT COALESCE(SUM(bc.amount), 0)::bigint
+  FROM billing_charges bc
+  JOIN tenants t ON t.id = bc.tenant_id
+ WHERE bc.state = 'settled'
+   AND bc.created_at >= $2 AND bc.created_at < $3
+   AND t.sales_owner_id IN (SELECT id FROM agent_tree)`,
+		agentID, from, to).Scan(&in.RetailSubtree); err != nil {
+		return settlementInput{}, fmt.Errorf("subtree consumption: %w", err)
+	}
+
+	var rate *float64
+	if err := s.systemPool().QueryRow(ctx,
+		`SELECT commission_rate FROM console_users WHERE id=$1`, agentID).Scan(&rate); err != nil {
+		return settlementInput{}, fmt.Errorf("commission rate: %w", err)
+	}
+	if rate != nil {
+		in.RebateRate = *rate
+	}
+	return in, nil
+}
+
+// settlementJSON renders one agent's settlementInput + computeSettlement
+// output as the shared response shape used by both the agent's own statement
+// and the admin overview.
+func settlementJSON(agentID int64, period string, in settlementInput) gin.H {
+	debt, margin, rebate, net := computeSettlement(in)
+	return gin.H{
+		"agent_id":       agentID,
+		"period":         period,
+		"retail_direct":  in.RetailDirect,
+		"cost_direct":    in.CostDirect,
+		"retail_subtree": in.RetailSubtree,
+		"rebate_rate":    in.RebateRate,
+		"debt":           debt,
+		"margin":         margin,
+		"rebate":         rebate,
+		"net":            net,
+	}
+}
+
+// handleAgentStatement: GET /api/v1/sales/statement?month=YYYY-MM — the
+// calling agent's OWN monthly settlement (debt/margin/rebate/net plus the raw
+// components). Scoped to me.UserID from the session; agents can never request
+// another agent's statement (no :id param on this route).
+func (s *Server) handleAgentStatement(c *gin.Context) {
+	me := sessionFrom(c)
+	if me == nil {
+		fail(c, http.StatusUnauthorized, "no session")
+		return
+	}
+	from, to, err := parseMonth(c.Query("month"))
+	if err != nil {
+		fail(c, http.StatusBadRequest, err.Error())
+		return
+	}
+	ctx := c.Request.Context()
+	in, err := s.agentSettlement(ctx, me.UserID, from, to)
+	if err != nil {
+		fail(c, http.StatusInternalServerError, "settlement computation failed")
+		return
+	}
+	ok(c, settlementJSON(me.UserID, from.Format("2006-01"), in))
 }
 
 // handleAgentAllocate: POST /api/v1/sales/allocate {items:[{tenant_id,amount}]}.
