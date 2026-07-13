@@ -156,6 +156,52 @@ func TestHandleAdminSetAgentParent_CyclePrevented(t *testing.T) {
 	}
 }
 
+func TestHandleAdminSetAgentParent_LockedTx(t *testing.T) {
+	pool := testPool(t)
+	s := &Server{sysPool: pool}
+	ctx := context.Background()
+	// tree: A(root) -> B(sub). C is a separate root we can reparent under A.
+	a := seedAgent(t, ctx, s, "la@x", nil)
+	b := seedAgent(t, ctx, s, "lb@x", &a)
+	cAgent := seedAgent(t, ctx, s, "lc@x", nil)
+
+	// (a) normal reparent: C.parent = A → 200, persisted (locked-tx path).
+	w := doJSONAgent(t, s, s.handleAdminSetAgentParent, "POST", "/admin/agents/x/parent", 0, itoa(cAgent),
+		`{"parent_id":`+itoa(a)+`}`)
+	if w.Code != http.StatusOK {
+		t.Fatalf("normal reparent: expected 200, got %d body=%s", w.Code, w.Body.String())
+	}
+	var parentID *int64
+	if err := pool.QueryRow(ctx, `SELECT parent_id FROM console_users WHERE id=$1`, cAgent).Scan(&parentID); err != nil {
+		t.Fatalf("read parent: %v", err)
+	}
+	if parentID == nil || *parentID != a {
+		t.Fatalf("expected C.parent=A, got %v", parentID)
+	}
+
+	// (b) self-parent → 400.
+	w2 := doJSONAgent(t, s, s.handleAdminSetAgentParent, "POST", "/admin/agents/x/parent", 0, itoa(a),
+		`{"parent_id":`+itoa(a)+`}`)
+	if w2.Code != http.StatusBadRequest {
+		t.Fatalf("self-parent: expected 400, got %d body=%s", w2.Code, w2.Body.String())
+	}
+
+	// (c) cycle-creating reparent: A.parent = B (B is in A's subtree) → 400,
+	// and A.parent must remain NULL (no write happened).
+	w3 := doJSONAgent(t, s, s.handleAdminSetAgentParent, "POST", "/admin/agents/x/parent", 0, itoa(a),
+		`{"parent_id":`+itoa(b)+`}`)
+	if w3.Code != http.StatusBadRequest {
+		t.Fatalf("cycle reparent: expected 400, got %d body=%s", w3.Code, w3.Body.String())
+	}
+	var aParent *int64
+	if err := pool.QueryRow(ctx, `SELECT parent_id FROM console_users WHERE id=$1`, a).Scan(&aParent); err != nil {
+		t.Fatalf("read A parent: %v", err)
+	}
+	if aParent != nil {
+		t.Fatalf("cycle reparent must not write: A.parent=%v", *aParent)
+	}
+}
+
 func TestHandleAdminSetAgentParent_ParentMustBeSalesAgent(t *testing.T) {
 	pool := testPool(t)
 	s := &Server{sysPool: pool}

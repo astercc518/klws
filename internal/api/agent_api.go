@@ -27,6 +27,14 @@ import (
 // instead of a generic 500.
 var errAgentNotFound = errors.New("agent not found")
 
+// Sentinel errors raised inside the set-parent transaction so the caller can
+// map each to a clean 400 after COMMIT/ROLLBACK.
+var (
+	errNotSalesTarget = errors.New("target is not a sales agent")
+	errBadParent      = errors.New("new parent is not an existing sales agent")
+	errWouldCycle     = errors.New("reparent would create a cycle")
+)
+
 // agentInSubtree reports whether targetAgentID is rootAgentID itself or one
 // of its descendants (via console_users.parent_id). Used to reject parent
 // reassignments that would create a cycle.
@@ -121,58 +129,82 @@ func (s *Server) handleAdminSetAgentParent(c *gin.Context) {
 		fail(c, http.StatusBadRequest, "invalid body")
 		return
 	}
+	if req.ParentID != nil && *req.ParentID == id {
+		fail(c, http.StatusBadRequest, "agent cannot be its own parent")
+		return
+	}
 	ctx := c.Request.Context()
-	// The target must itself be an agent (role='sales'); setting a parent on
-	// an admin/customer is meaningless and would corrupt the tree.
-	if isSales, err := s.isSalesAgent(ctx, id); err != nil {
-		fail(c, http.StatusInternalServerError, "target lookup failed")
-		return
-	} else if !isSales {
-		fail(c, http.StatusBadRequest, "target is not a sales agent")
-		return
-	}
-	if req.ParentID != nil {
-		if *req.ParentID == id {
-			fail(c, http.StatusBadRequest, "agent cannot be its own parent")
-			return
-		}
-		// The new parent must exist AND be a sales agent — otherwise a bad id
-		// hits the FK (500) or silently roots the subtree under a non-sales
-		// node, breaking the subtree/rebate invariants.
-		if isSales, err := s.isSalesAgent(ctx, *req.ParentID); err != nil {
-			fail(c, http.StatusInternalServerError, "parent lookup failed")
-			return
-		} else if !isSales {
-			fail(c, http.StatusBadRequest, "new parent is not an existing sales agent")
-			return
-		}
-		cyclic, err := s.agentInSubtree(ctx, id, *req.ParentID)
-		if err != nil {
-			fail(c, http.StatusInternalServerError, "cycle check failed")
-			return
-		}
-		if cyclic {
-			fail(c, http.StatusBadRequest, "would create a cycle: new parent is in this agent's own subtree")
-			return
-		}
-	}
+	// Everything below runs in ONE transaction with the involved rows locked
+	// FOR UPDATE, so a concurrent reparent touching the same rows serializes:
+	// the second txn sees the first's committed change and its in-tx cycle
+	// re-check catches what an unlocked pre-check would have missed (TOCTOU).
 	err = pgx.BeginTxFunc(ctx, s.systemPool(), pgx.TxOptions{}, func(tx pgx.Tx) error {
-		tag, e := tx.Exec(ctx,
-			`UPDATE console_users SET parent_id=$1 WHERE id=$2 AND role='sales'`,
-			req.ParentID, id)
+		// Lock target (and new parent, if any) in ascending id order to avoid
+		// deadlocking against a concurrent reparent that locks the same pair.
+		lockIDs := []int64{id}
+		if req.ParentID != nil {
+			lockIDs = append(lockIDs, *req.ParentID)
+		}
+		rows, e := tx.Query(ctx,
+			`SELECT id, role FROM console_users WHERE id = ANY($1) ORDER BY id FOR UPDATE`,
+			lockIDs)
 		if e != nil {
 			return e
 		}
-		if tag.RowsAffected() == 0 {
-			return errAgentNotFound
+		roles := make(map[int64]string)
+		for rows.Next() {
+			var rid int64
+			var role string
+			if e := rows.Scan(&rid, &role); e != nil {
+				rows.Close()
+				return e
+			}
+			roles[rid] = role
+		}
+		rows.Close()
+		if e := rows.Err(); e != nil {
+			return e
+		}
+		// Target must be an existing sales agent.
+		if roles[id] != string(console.RoleSales) {
+			return errNotSalesTarget
+		}
+		if req.ParentID != nil {
+			// New parent must exist AND be a sales agent (re-checked under lock).
+			if roles[*req.ParentID] != string(console.RoleSales) {
+				return errBadParent
+			}
+			// Cycle re-check ON THE TX so it sees the locked/committed state,
+			// not a separate snapshot: parent must NOT be inside target's subtree.
+			var cyclic bool
+			if e := tx.QueryRow(ctx,
+				subtreeCTE("$1")+`
+				SELECT EXISTS (SELECT 1 FROM agent_tree WHERE id = $2)`,
+				id, *req.ParentID).Scan(&cyclic); e != nil {
+				return e
+			}
+			if cyclic {
+				return errWouldCycle
+			}
+		}
+		if _, e := tx.Exec(ctx,
+			`UPDATE console_users SET parent_id=$1 WHERE id=$2`,
+			req.ParentID, id); e != nil {
+			return e
 		}
 		return s.recordAuditTx(ctx, tx, auditEvent{TenantID: 0, ActorID: actorID(c),
 			Action: "agent.set_parent", ResourceType: "agent", ResourceID: id,
 			Details: map[string]any{"parent_id": req.ParentID}})
 	})
 	switch {
-	case errors.Is(err, errAgentNotFound):
-		fail(c, http.StatusNotFound, "agent not found")
+	case errors.Is(err, errNotSalesTarget):
+		fail(c, http.StatusBadRequest, "target is not a sales agent")
+		return
+	case errors.Is(err, errBadParent):
+		fail(c, http.StatusBadRequest, "new parent is not an existing sales agent")
+		return
+	case errors.Is(err, errWouldCycle):
+		fail(c, http.StatusBadRequest, "would create a cycle: new parent is in this agent's own subtree")
 		return
 	case err != nil:
 		fail(c, http.StatusInternalServerError, "set parent failed")
