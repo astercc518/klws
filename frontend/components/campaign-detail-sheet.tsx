@@ -20,6 +20,7 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
+import { useT } from "@/components/locale-provider";
 
 interface RecipientDetail {
   id: number;
@@ -42,22 +43,24 @@ interface RecipientsResponse {
   recipients: RecipientDetail[];
 }
 
-const STATUS: Record<RecipientDetail["status"], { tone: StatusTone; label: string }> = {
-  queued: { tone: "neutral", label: "排队中" },
-  sent: { tone: "positive", label: "已发送" },
-  delivered: { tone: "positive", label: "已送达" },
-  read: { tone: "positive", label: "已读" },
-  failed: { tone: "negative", label: "失败" },
-  skipped: { tone: "warning", label: "已跳过" },
+// Status/reason → dict key (not the label text), resolved via t() at render
+// time so these module-level maps carry no locale-specific text.
+const STATUS: Record<RecipientDetail["status"], { tone: StatusTone; labelKey: string }> = {
+  queued: { tone: "neutral", labelKey: "common.campaign.status.queued" },
+  sent: { tone: "positive", labelKey: "common.campaign.status.sent" },
+  delivered: { tone: "positive", labelKey: "common.campaign.status.delivered" },
+  read: { tone: "positive", labelKey: "common.campaign.status.read" },
+  failed: { tone: "negative", labelKey: "common.campaign.status.failed" },
+  skipped: { tone: "warning", labelKey: "common.campaign.status.skipped" },
 };
 
-const REASON_LABEL: Record<string, string> = {
-  device_banned: "设备被封",
-  number_invalid: "号码无效",
-  billing_error: "计费失败",
-  rate_limited: "限速拦截",
-  media_error: "媒体错误",
-  unknown: "未知错误",
+const REASON_LABEL_KEY: Record<string, string> = {
+  device_banned: "common.campaign.reason.deviceBanned",
+  number_invalid: "common.campaign.reason.numberInvalid",
+  billing_error: "common.campaign.reason.billingError",
+  rate_limited: "common.campaign.reason.rateLimited",
+  media_error: "common.campaign.reason.mediaError",
+  unknown: "common.campaign.reason.unknown",
 };
 
 const PAGE_SIZE = 50;
@@ -75,6 +78,7 @@ export function CampaignDetailSheet({
   apiBase: string;
   onClose: () => void;
 }) {
+  const t = useT();
   const [data, setData] = useState<RecipientsResponse | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
@@ -98,12 +102,12 @@ export function CampaignDetailSheet({
       setError(null);
     } catch (e) {
       if (!(e instanceof ApiError && e.status === 401)) {
-        setError(e instanceof ApiError ? e.message : "加载失败");
+        setError(e instanceof ApiError ? e.message : t("common.campaign.loadFailed"));
       }
     } finally {
       setLoading(false);
     }
-  }, [apiBase, campaignId, page]);
+  }, [apiBase, campaignId, page, t]);
   useEffect(() => {
     load();
   }, [load]);
@@ -116,21 +120,22 @@ export function CampaignDetailSheet({
     <Sheet open={campaignId != null} onOpenChange={(o) => !o && onClose()}>
       <SheetContent>
         <SheetHeader>
-          <SheetTitle>任务 #{campaignId} · 触达明细</SheetTitle>
-          <SheetDescription>
-            逐号触达穿透。「已发送 → 已送达 → 已读」为递进里程碑;送达 / 已读需节点开启
-            WhatsApp 回执采集后填充,未开启时这两级保持为 0。
-          </SheetDescription>
+          <SheetTitle>
+            {t("common.campaign.sheetTitlePrefix")}
+            {campaignId}
+            {t("common.campaign.sheetTitleSuffix")}
+          </SheetTitle>
+          <SheetDescription>{t("common.campaign.sheetDescription")}</SheetDescription>
         </SheetHeader>
 
         {/* Funnel: submitted → sent → delivered → read */}
         <div className="flex flex-wrap items-stretch gap-2">
-          <FunnelTile accent="brand" icon={Users} label="提交总数" value={total} sub="recipients" />
+          <FunnelTile accent="brand" icon={Users} label={t("common.campaign.totalSubmitted")} value={total} sub="recipients" />
           <FunnelArrow />
           <FunnelTile
             accent="emerald"
             icon={Send}
-            label="已发送"
+            label={t("common.campaign.status.sent")}
             value={counts.sent ?? 0}
             sub={pct(counts.sent ?? 0, total)}
           />
@@ -138,7 +143,7 @@ export function CampaignDetailSheet({
           <FunnelTile
             accent="blue"
             icon={CheckCheck}
-            label="已送达"
+            label={t("common.campaign.status.delivered")}
             value={counts.delivered ?? 0}
             sub={pct(counts.delivered ?? 0, total)}
           />
@@ -146,15 +151,21 @@ export function CampaignDetailSheet({
           <FunnelTile
             accent="violet"
             icon={Eye}
-            label="已读"
+            label={t("common.campaign.status.read")}
             value={counts.read ?? 0}
             sub={pct(counts.read ?? 0, total)}
           />
         </div>
         <div className="-mt-2 flex flex-wrap gap-4 font-mono text-xs text-muted-foreground">
-          <span className="text-rose-600 dark:text-rose-400">失败 {counts.failed ?? 0}</span>
-          <span>排队中 {counts.queued ?? 0}</span>
-          <span>已跳过 {counts.skipped ?? 0}</span>
+          <span className="text-rose-600 dark:text-rose-400">
+            {t("common.campaign.status.failed")} {counts.failed ?? 0}
+          </span>
+          <span>
+            {t("common.campaign.status.queued")} {counts.queued ?? 0}
+          </span>
+          <span>
+            {t("common.campaign.status.skipped")} {counts.skipped ?? 0}
+          </span>
         </div>
 
         {/* Detail table */}
@@ -162,17 +173,18 @@ export function CampaignDetailSheet({
           <Table>
             <TableHeader className="sticky top-0 z-10 bg-muted/60 backdrop-blur">
               <TableRow>
-                <TableHead className="h-9">手机号</TableHead>
-                <TableHead className="h-9">状态</TableHead>
-                <TableHead className="h-9">失败原因</TableHead>
-                <TableHead className="h-9 text-right">处理时间</TableHead>
+                <TableHead className="h-9">{t("common.campaign.col.phone")}</TableHead>
+                <TableHead className="h-9">{t("common.campaign.col.status")}</TableHead>
+                <TableHead className="h-9">{t("common.campaign.col.failReason")}</TableHead>
+                <TableHead className="h-9 text-right">{t("common.campaign.col.processedAt")}</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
               {error ? (
                 <TableRow className="hover:bg-transparent">
                   <TableCell colSpan={4} className="py-12 text-center text-sm text-muted-foreground">
-                    加载失败:{error}
+                    {t("table.loadFailed")}
+                    {error}
                   </TableCell>
                 </TableRow>
               ) : loading && !data ? (
@@ -186,7 +198,7 @@ export function CampaignDetailSheet({
               ) : !data || data.recipients.length === 0 ? (
                 <TableRow className="hover:bg-transparent">
                   <TableCell colSpan={4} className="py-12 text-center text-sm text-muted-foreground">
-                    该任务暂无接收者记录。
+                    {t("common.campaign.noRecipients")}
                   </TableCell>
                 </TableRow>
               ) : (
@@ -196,7 +208,7 @@ export function CampaignDetailSheet({
                     <TableRow key={r.id}>
                       <TableCell className="font-mono text-xs">{r.phone}</TableCell>
                       <TableCell>
-                        <StatusBadge tone={st.tone}>{st.label}</StatusBadge>
+                        <StatusBadge tone={st.tone}>{t(st.labelKey)}</StatusBadge>
                       </TableCell>
                       <TableCell>
                         {r.error_reason ? (
@@ -204,7 +216,7 @@ export function CampaignDetailSheet({
                             className="font-mono text-xs text-rose-600 dark:text-rose-400"
                             title={r.error_detail ?? undefined}
                           >
-                            {REASON_LABEL[r.error_reason] ?? r.error_reason}
+                            {REASON_LABEL_KEY[r.error_reason] ? t(REASON_LABEL_KEY[r.error_reason]) : r.error_reason}
                           </span>
                         ) : (
                           <span className="text-xs text-muted-foreground">—</span>
@@ -225,13 +237,13 @@ export function CampaignDetailSheet({
         <div className="flex shrink-0 items-center justify-between gap-3">
           <span className="font-mono text-xs tabular-nums text-muted-foreground">
             {total === 0
-              ? "0 条"
-              : `${(page - 1) * PAGE_SIZE + 1}–${Math.min(page * PAGE_SIZE, total)} / ${total} 条`}
+              ? t("common.campaign.recordsZero")
+              : `${(page - 1) * PAGE_SIZE + 1}–${Math.min(page * PAGE_SIZE, total)} / ${total}${t("common.campaign.recordsSuffix")}`}
           </span>
           <div className="flex items-center gap-1">
             <button
               type="button"
-              aria-label="上一页"
+              aria-label={t("table.prevPage")}
               disabled={page <= 1 || loading}
               onClick={() => setPage((p) => Math.max(1, p - 1))}
               className="flex size-8 items-center justify-center rounded-md border text-muted-foreground transition-colors hover:bg-muted disabled:opacity-40"
@@ -243,7 +255,7 @@ export function CampaignDetailSheet({
             </span>
             <button
               type="button"
-              aria-label="下一页"
+              aria-label={t("table.nextPage")}
               disabled={page >= pageCount || loading}
               onClick={() => setPage((p) => Math.min(pageCount, p + 1))}
               className="flex size-8 items-center justify-center rounded-md border text-muted-foreground transition-colors hover:bg-muted disabled:opacity-40"

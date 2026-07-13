@@ -18,6 +18,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
+import { useT } from "@/components/locale-provider";
 
 interface Campaign {
   id: number;
@@ -47,15 +48,18 @@ const stateVariant: Record<Campaign["state"], "default" | "secondary" | "outline
 const nf = new Intl.NumberFormat("en-US");
 const PAGE_SIZE = 10;
 
-const STATE_TABS: { key: string; label: string }[] = [
-  { key: "", label: "全部" },
-  { key: "running", label: "运行中" },
-  { key: "paused", label: "已暂停" },
-  { key: "completed", label: "已完成" },
-  { key: "failed", label: "失败" },
+// Filter tab keys → dict label key. Resolved via t() at render time so the
+// module-level array itself carries no locale-specific text.
+const STATE_TABS: { key: string; labelKey: string }[] = [
+  { key: "", labelKey: "admin.campaigns.stateTab.all" },
+  { key: "running", labelKey: "admin.campaigns.stateTab.running" },
+  { key: "paused", labelKey: "admin.campaigns.stateTab.paused" },
+  { key: "completed", labelKey: "admin.campaigns.stateTab.completed" },
+  { key: "failed", labelKey: "admin.campaigns.stateTab.failed" },
 ];
 
 export function AdminCampaigns() {
+  const t = useT();
   const [rows, setRows] = useState<Campaign[] | null>(null);
   const [total, setTotal] = useState(0);
   const [stats, setStats] = useState<CampaignStats | null>(null);
@@ -84,12 +88,12 @@ export function AdminCampaigns() {
       setError(null);
     } catch (e) {
       if (!(e instanceof ApiError && e.status === 401)) {
-        setError(e instanceof ApiError ? e.message : "加载失败");
+        setError(e instanceof ApiError ? e.message : t("admin.campaigns.loadFailed"));
       }
     } finally {
       setLoading(false);
     }
-  }, [page, query, state]);
+  }, [page, query, state, t]);
 
   useEffect(() => {
     load();
@@ -100,11 +104,15 @@ export function AdminCampaigns() {
     setBusy(true);
     try {
       await api.post(`/admin/campaigns/${killTarget.id}/stop`);
-      toast.success("已强制暂停", { description: `任务 #${killTarget.id} → paused` });
+      toast.success(t("admin.campaigns.pausedToastTitle"), {
+        description: t("admin.campaigns.pausedToastDesc").replace("{id}", () => String(killTarget.id)),
+      });
       setKillTarget(null);
       load();
     } catch (e) {
-      toast.error("操作失败", { description: e instanceof ApiError ? e.message : "请重试" });
+      toast.error(t("admin.campaigns.opFailedTitle"), {
+        description: e instanceof ApiError ? e.message : t("admin.campaigns.retry"),
+      });
     } finally {
       setBusy(false);
     }
@@ -114,10 +122,14 @@ export function AdminCampaigns() {
     setResumingId(c.id);
     try {
       await api.post(`/admin/campaigns/${c.id}/resume`);
-      toast.success("已恢复任务", { description: `任务 #${c.id} → running` });
+      toast.success(t("admin.campaigns.resumedToastTitle"), {
+        description: t("admin.campaigns.resumedToastDesc").replace("{id}", () => String(c.id)),
+      });
       load();
     } catch (e) {
-      toast.error("恢复失败", { description: e instanceof ApiError ? e.message : "请重试" });
+      toast.error(t("admin.campaigns.resumeFailedTitle"), {
+        description: e instanceof ApiError ? e.message : t("admin.campaigns.retry"),
+      });
     } finally {
       setResumingId(null);
     }
@@ -126,53 +138,96 @@ export function AdminCampaigns() {
   const tenantLabel = (c: Campaign) => c.tenant_name ?? `#${c.tenant_id}`;
 
   const columns: Column<Campaign>[] = [
-    { key: "id", header: "任务", cell: (c) => <span className="font-mono text-sm">#{c.id}</span> },
-    { key: "tenant", header: "租户", cell: (c) => <span className="text-sm text-muted-foreground">{tenantLabel(c)}</span> },
+    { key: "id", header: t("admin.campaigns.col.task"), cell: (c) => <span className="font-mono text-sm">#{c.id}</span> },
+    {
+      key: "tenant",
+      header: t("admin.campaigns.col.tenant"),
+      cell: (c) => <span className="text-sm text-muted-foreground">{tenantLabel(c)}</span>,
+    },
     {
       key: "state",
-      header: "状态",
+      header: t("admin.campaigns.col.state"),
       cell: (c) => (
         <div className="flex items-center gap-1.5">
           <Badge variant={stateVariant[c.state]}>{c.state}</Badge>
           {c.auto_tripped && (
-            <Badge variant="destructive" className="gap-1" title="风控熔断器因封号率超阈值自动挂起了此任务">
+            <Badge variant="destructive" className="gap-1" title={t("admin.campaigns.autoTrippedTooltip")}>
               <ShieldAlert className="size-3" />
-              自动熔断
+              {t("admin.campaigns.autoTrippedBadge")}
             </Badge>
           )}
         </div>
       ),
     },
-    { key: "total", header: "总数", align: "right", cell: (c) => <span className="font-mono tabular-nums text-sm">{nf.format(c.total)}</span> },
-    { key: "sent", header: "已发", align: "right", cell: (c) => <span className="font-mono tabular-nums text-sm">{nf.format(c.sent)}</span> },
-    { key: "failed", header: "失败", align: "right", cell: (c) => <span className="font-mono tabular-nums text-sm text-muted-foreground">{nf.format(c.failed)}</span> },
+    {
+      key: "total",
+      header: t("admin.campaigns.col.total"),
+      align: "right",
+      cell: (c) => <span className="font-mono tabular-nums text-sm">{nf.format(c.total)}</span>,
+    },
+    {
+      key: "sent",
+      header: t("admin.campaigns.col.sent"),
+      align: "right",
+      cell: (c) => <span className="font-mono tabular-nums text-sm">{nf.format(c.sent)}</span>,
+    },
+    {
+      key: "failed",
+      header: t("admin.campaigns.col.failed"),
+      align: "right",
+      cell: (c) => <span className="font-mono tabular-nums text-sm text-muted-foreground">{nf.format(c.failed)}</span>,
+    },
   ];
 
   return (
     <div className="space-y-6">
       {stats && (
         <MetricCardGroup>
-          <StatCard accent="brand" label="任务总数" value={String(stats.total)} sub="全平台" icon={ListChecks} />
-          <StatCard accent="emerald" label="运行中" value={String(stats.running)} sub="正在发送" icon={Radio} />
-          <StatCard accent="amber" label="已暂停" value={String(stats.paused)} sub="含手动/熔断" icon={Pause} />
-          <StatCard accent="rose" label="熔断挂起" value={String(stats.tripped)} sub="风控自动触发" icon={Zap} />
+          <StatCard
+            accent="brand"
+            label={t("admin.campaigns.stat.totalLabel")}
+            value={String(stats.total)}
+            sub={t("admin.campaigns.stat.totalSub")}
+            icon={ListChecks}
+          />
+          <StatCard
+            accent="emerald"
+            label={t("admin.campaigns.stat.runningLabel")}
+            value={String(stats.running)}
+            sub={t("admin.campaigns.stat.runningSub")}
+            icon={Radio}
+          />
+          <StatCard
+            accent="amber"
+            label={t("admin.campaigns.stat.pausedLabel")}
+            value={String(stats.paused)}
+            sub={t("admin.campaigns.stat.pausedSub")}
+            icon={Pause}
+          />
+          <StatCard
+            accent="rose"
+            label={t("admin.campaigns.stat.trippedLabel")}
+            value={String(stats.tripped)}
+            sub={t("admin.campaigns.stat.trippedSub")}
+            icon={Zap}
+          />
         </MetricCardGroup>
       )}
 
       <div className="inline-flex flex-wrap rounded-lg border bg-muted/40 p-0.5">
-        {STATE_TABS.map((t) => (
+        {STATE_TABS.map((tab) => (
           <button
-            key={t.key || "all"}
+            key={tab.key || "all"}
             onClick={() => {
-              setState(t.key);
+              setState(tab.key);
               setPage(0);
             }}
             className={
               "rounded-md px-3 py-1.5 text-sm font-medium transition-colors " +
-              (state === t.key ? "bg-background text-foreground shadow-sm" : "text-muted-foreground hover:text-foreground")
+              (state === tab.key ? "bg-background text-foreground shadow-sm" : "text-muted-foreground hover:text-foreground")
             }
           >
-            {t.label}
+            {t(tab.labelKey)}
           </button>
         ))}
       </div>
@@ -183,8 +238,8 @@ export function AdminCampaigns() {
         columns={columns}
         getRowKey={(c) => c.id}
         onRowClick={(c) => setDetailId(c.id)}
-        emptyState="当前没有任务。"
-        search={{ placeholder: "搜索租户名或 ID…", accessor: () => "" }}
+        emptyState={t("admin.campaigns.emptyState")}
+        search={{ placeholder: t("admin.campaigns.searchPlaceholder"), accessor: () => "" }}
         server={{
           total,
           page,
@@ -201,7 +256,7 @@ export function AdminCampaigns() {
           c.state === "paused" ? (
             <Button variant="ghost" size="sm" className="gap-1.5" disabled={resumingId === c.id} onClick={() => resume(c)}>
               <Play className="size-3.5" />
-              {resumingId === c.id ? "恢复中…" : "恢复"}
+              {resumingId === c.id ? t("admin.campaigns.resumingButton") : t("admin.campaigns.resumeButton")}
             </Button>
           ) : (
             <Button
@@ -212,7 +267,7 @@ export function AdminCampaigns() {
               onClick={() => setKillTarget(c)}
             >
               <Ban className="size-3.5" />
-              强制终止
+              {t("admin.campaigns.forceStopButton")}
             </Button>
           )
         }
@@ -221,16 +276,19 @@ export function AdminCampaigns() {
       <Dialog open={killTarget != null} onOpenChange={(o) => !o && setKillTarget(null)}>
         <DialogContent className="sm:max-w-md">
           <DialogHeader>
-            <DialogTitle>强制终止任务</DialogTitle>
+            <DialogTitle>{t("admin.campaigns.killDialog.title")}</DialogTitle>
             <DialogDescription>
-              将任务 <span className="font-mono">#{killTarget?.id}</span>(租户 {killTarget ? tenantLabel(killTarget) : ""})置为 paused,
-              调度器会立即停止继续发送。此操作不可在界面撤销。
+              {t("admin.campaigns.killDialog.descPrefix")}
+              <span className="font-mono">#{killTarget?.id}</span>
+              {t("admin.campaigns.killDialog.descMiddle")}
+              {killTarget ? tenantLabel(killTarget) : ""}
+              {t("admin.campaigns.killDialog.descSuffix")}
             </DialogDescription>
           </DialogHeader>
           <DialogFooter>
-            <DialogClose render={<Button variant="ghost" />}>取消</DialogClose>
+            <DialogClose render={<Button variant="ghost" />}>{t("admin.campaigns.cancel")}</DialogClose>
             <Button variant="destructive" onClick={confirmKill} disabled={busy}>
-              {busy ? "处理中…" : "确认终止"}
+              {busy ? t("admin.campaigns.processingButton") : t("admin.campaigns.confirmStopButton")}
             </Button>
           </DialogFooter>
         </DialogContent>

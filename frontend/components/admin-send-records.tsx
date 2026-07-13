@@ -6,6 +6,7 @@ import { api, ApiError } from "@/lib/api";
 import { Badge } from "@/components/ui/badge";
 import { ProDataTable, type Column } from "@/components/admin/pro-data-table";
 import { StatCard, MetricCardGroup } from "@/components/admin/stat-card";
+import { useT } from "@/components/locale-provider";
 
 interface RecipientRow {
   id: number;
@@ -38,15 +39,17 @@ const stateVariant: Record<RecipientRow["state"], "default" | "secondary" | "out
 const nf = new Intl.NumberFormat("en-US");
 const PAGE_SIZE = 15;
 
-const STATE_TABS: { key: string; label: string }[] = [
-  { key: "", label: "全部" },
-  { key: "sent", label: "已发送" },
-  { key: "failed", label: "失败" },
-  { key: "pending", label: "待发" },
-  { key: "skipped", label: "跳过" },
+// Filter tab keys → dict label key, resolved via t() at render time.
+const STATE_TABS: { key: string; labelKey: string }[] = [
+  { key: "", labelKey: "admin.sendrec.stateTab.all" },
+  { key: "sent", labelKey: "admin.sendrec.stateTab.sent" },
+  { key: "failed", labelKey: "admin.sendrec.stateTab.failed" },
+  { key: "pending", labelKey: "admin.sendrec.stateTab.pending" },
+  { key: "skipped", labelKey: "admin.sendrec.stateTab.skipped" },
 ];
 
 export function AdminSendRecords() {
+  const t = useT();
   const [rows, setRows] = useState<RecipientRow[] | null>(null);
   const [total, setTotal] = useState(0);
   const [stats, setStats] = useState<RecipientStats | null>(null);
@@ -71,12 +74,12 @@ export function AdminSendRecords() {
       setError(null);
     } catch (e) {
       if (!(e instanceof ApiError && e.status === 401)) {
-        setError(e instanceof ApiError ? e.message : "加载失败");
+        setError(e instanceof ApiError ? e.message : t("admin.sendrec.loadFailed"));
       }
     } finally {
       setLoading(false);
     }
-  }, [page, query, state]);
+  }, [page, query, state, t]);
 
   useEffect(() => {
     load();
@@ -85,51 +88,87 @@ export function AdminSendRecords() {
   const tenantLabel = (r: RecipientRow) => r.tenant_name ?? `#${r.tenant_id}`;
 
   const columns: Column<RecipientRow>[] = [
-    { key: "phone", header: "手机号", cell: (r) => <span className="font-mono text-sm">{r.phone}</span> },
-    { key: "tenant", header: "租户", cell: (r) => <span className="text-sm text-muted-foreground">{tenantLabel(r)}</span> },
-    { key: "campaign", header: "任务", cell: (r) => <span className="font-mono text-sm text-muted-foreground">#{r.campaign_id}</span> },
+    { key: "phone", header: t("admin.sendrec.col.phone"), cell: (r) => <span className="font-mono text-sm">{r.phone}</span> },
+    {
+      key: "tenant",
+      header: t("admin.sendrec.col.tenant"),
+      cell: (r) => <span className="text-sm text-muted-foreground">{tenantLabel(r)}</span>,
+    },
+    {
+      key: "campaign",
+      header: t("admin.sendrec.col.campaign"),
+      cell: (r) => <span className="font-mono text-sm text-muted-foreground">#{r.campaign_id}</span>,
+    },
     {
       key: "state",
-      header: "状态",
+      header: t("admin.sendrec.col.state"),
       cell: (r) => <Badge variant={stateVariant[r.state]}>{r.state}</Badge>,
     },
     {
       key: "last_error",
-      header: "失败原因",
+      header: t("admin.sendrec.col.failReason"),
       cell: (r) => (
         <span className="block max-w-xs truncate text-xs text-muted-foreground" title={r.last_error ?? undefined}>
           {r.last_error ?? "—"}
         </span>
       ),
     },
-    { key: "updated_at", header: "更新时间", cell: (r) => <span className="font-mono text-xs text-muted-foreground">{r.updated_at}</span> },
+    {
+      key: "updated_at",
+      header: t("admin.sendrec.col.updatedAt"),
+      cell: (r) => <span className="font-mono text-xs text-muted-foreground">{r.updated_at}</span>,
+    },
   ];
 
   return (
     <div className="space-y-6">
       {stats && (
         <MetricCardGroup>
-          <StatCard accent="brand" label="记录总数" value={nf.format(stats.total)} sub="全平台" icon={ListChecks} />
-          <StatCard accent="emerald" label="已发送" value={nf.format(stats.sent)} sub="含待送达/已送达" icon={Send} />
-          <StatCard accent="blue" label="已送达" value={nf.format(stats.delivered)} sub="回执确认" icon={CheckCheck} />
-          <StatCard accent="rose" label="失败" value={nf.format(stats.failed)} sub="发送失败" icon={XCircle} />
+          <StatCard
+            accent="brand"
+            label={t("admin.sendrec.stat.totalLabel")}
+            value={nf.format(stats.total)}
+            sub={t("admin.sendrec.stat.totalSub")}
+            icon={ListChecks}
+          />
+          <StatCard
+            accent="emerald"
+            label={t("admin.sendrec.stat.sentLabel")}
+            value={nf.format(stats.sent)}
+            sub={t("admin.sendrec.stat.sentSub")}
+            icon={Send}
+          />
+          <StatCard
+            accent="blue"
+            label={t("admin.sendrec.stat.deliveredLabel")}
+            value={nf.format(stats.delivered)}
+            sub={t("admin.sendrec.stat.deliveredSub")}
+            icon={CheckCheck}
+          />
+          <StatCard
+            accent="rose"
+            label={t("admin.sendrec.stat.failedLabel")}
+            value={nf.format(stats.failed)}
+            sub={t("admin.sendrec.stat.failedSub")}
+            icon={XCircle}
+          />
         </MetricCardGroup>
       )}
 
       <div className="inline-flex flex-wrap rounded-lg border bg-muted/40 p-0.5">
-        {STATE_TABS.map((t) => (
+        {STATE_TABS.map((tab) => (
           <button
-            key={t.key || "all"}
+            key={tab.key || "all"}
             onClick={() => {
-              setState(t.key);
+              setState(tab.key);
               setPage(0);
             }}
             className={
               "rounded-md px-3 py-1.5 text-sm font-medium transition-colors " +
-              (state === t.key ? "bg-background text-foreground shadow-sm" : "text-muted-foreground hover:text-foreground")
+              (state === tab.key ? "bg-background text-foreground shadow-sm" : "text-muted-foreground hover:text-foreground")
             }
           >
-            {t.label}
+            {t(tab.labelKey)}
           </button>
         ))}
       </div>
@@ -139,8 +178,8 @@ export function AdminSendRecords() {
         error={error}
         columns={columns}
         getRowKey={(r) => r.id}
-        emptyState="暂无发送记录。任务开始发送后这里会实时出现每条明细。"
-        search={{ placeholder: "搜索手机号…", accessor: () => "" }}
+        emptyState={t("admin.sendrec.emptyState")}
+        search={{ placeholder: t("admin.sendrec.searchPlaceholder"), accessor: () => "" }}
         server={{
           total,
           page,

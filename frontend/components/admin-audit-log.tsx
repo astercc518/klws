@@ -4,6 +4,7 @@ import { useCallback, useEffect, useState } from "react";
 import { api, ApiError } from "@/lib/api";
 import { Badge } from "@/components/ui/badge";
 import { ProDataTable, type Column } from "@/components/admin/pro-data-table";
+import { useT } from "@/components/locale-provider";
 
 interface AuditRow {
   id: number;
@@ -26,6 +27,7 @@ function actionVariant(action: string): "default" | "secondary" | "outline" {
 }
 
 export function AdminAuditLog() {
+  const t = useT();
   const [rows, setRows] = useState<AuditRow[] | null>(null);
   const [error, setError] = useState<string | null>(null);
 
@@ -35,24 +37,52 @@ export function AdminAuditLog() {
       setRows(data.rows);
     } catch (e) {
       if (!(e instanceof ApiError && e.status === 401)) {
-        setError(e instanceof ApiError ? e.message : "加载失败");
+        setError(e instanceof ApiError ? e.message : t("admin.audit.loadFailed"));
       }
     }
-  }, []);
+  }, [t]);
 
   useEffect(() => {
     load();
   }, [load]);
 
   const columns: Column<AuditRow>[] = [
-    { key: "occurred_at", header: "时间", cell: (r) => <span className="font-mono text-xs text-muted-foreground">{r.occurred_at}</span> },
-    { key: "actor", header: "操作人", cell: (r) => <span className="text-sm">{r.actor_email ?? (r.actor_id ? `#${r.actor_id}` : "系统")}</span> },
-    { key: "action", header: "动作", cell: (r) => <Badge variant={actionVariant(r.action)}>{r.action}</Badge> },
-    { key: "target", header: "对象", cell: (r) => <span className="text-sm text-muted-foreground">{r.resource_type ? `${r.resource_type}${r.resource_id ? ` #${r.resource_id}` : ""}` : "—"}</span> },
-    { key: "tenant", header: "租户", cell: (r) => <span className="text-sm text-muted-foreground">{r.tenant_name ?? (r.tenant_id ? `#${r.tenant_id}` : "—")}</span> },
+    {
+      key: "occurred_at",
+      header: t("admin.audit.col.time"),
+      cell: (r) => <span className="font-mono text-xs text-muted-foreground">{r.occurred_at}</span>,
+    },
+    {
+      key: "actor",
+      header: t("admin.audit.col.actor"),
+      cell: (r) => (
+        <span className="text-sm">{r.actor_email ?? (r.actor_id ? `#${r.actor_id}` : t("admin.audit.systemActor"))}</span>
+      ),
+    },
+    {
+      key: "action",
+      header: t("admin.audit.col.action"),
+      cell: (r) => <Badge variant={actionVariant(r.action)}>{r.action}</Badge>,
+    },
+    {
+      key: "target",
+      header: t("admin.audit.col.target"),
+      cell: (r) => (
+        <span className="text-sm text-muted-foreground">
+          {r.resource_type ? `${r.resource_type}${r.resource_id ? ` #${r.resource_id}` : ""}` : "—"}
+        </span>
+      ),
+    },
+    {
+      key: "tenant",
+      header: t("admin.audit.col.tenant"),
+      cell: (r) => (
+        <span className="text-sm text-muted-foreground">{r.tenant_name ?? (r.tenant_id ? `#${r.tenant_id}` : "—")}</span>
+      ),
+    },
     {
       key: "details",
-      header: "详情",
+      header: t("admin.audit.col.details"),
       cell: (r) => {
         const s = JSON.stringify(r.details ?? {});
         return <span className="font-mono text-xs text-muted-foreground" title={s}>{s.length > 48 ? s.slice(0, 47) + "…" : s}</span>;
@@ -66,8 +96,11 @@ export function AdminAuditLog() {
       error={error}
       columns={columns}
       getRowKey={(r) => r.id}
-      search={{ placeholder: "搜索动作/操作人/对象…", accessor: (r) => `${r.action} ${r.actor_email ?? ""} ${r.resource_type ?? ""} ${r.tenant_name ?? ""}` }}
-      emptyState="暂无审计记录"
+      search={{
+        placeholder: t("admin.audit.searchPlaceholder"),
+        accessor: (r) => `${r.action} ${r.actor_email ?? ""} ${r.resource_type ?? ""} ${r.tenant_name ?? ""}`,
+      }}
+      emptyState={t("admin.audit.emptyState")}
     />
   );
 }

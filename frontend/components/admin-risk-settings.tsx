@@ -14,6 +14,7 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card";
+import { useT } from "@/components/locale-provider";
 
 interface RiskConfig {
   min_delay_seconds: number;
@@ -148,6 +149,7 @@ function SliderField({
 }
 
 export function AdminRiskSettings() {
+  const t = useT();
   const [loaded, setLoaded] = useState<RiskConfig | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -183,10 +185,10 @@ export function AdminRiskSettings() {
       applyConfig(c);
     } catch (e) {
       if (!(e instanceof ApiError && e.status === 401)) {
-        setError(e instanceof ApiError ? e.message : "加载失败");
+        setError(e instanceof ApiError ? e.message : t("admin.risk.loadFailed"));
       }
     }
-  }, [applyConfig]);
+  }, [applyConfig, t]);
   useEffect(() => {
     load();
   }, [load]);
@@ -225,11 +227,13 @@ export function AdminRiskSettings() {
         eval_interval_seconds: evalN,
       });
       setLoaded((prev) => ({ ...(prev ?? c), ...c }));
-      toast.success("风控策略已保存", {
-        description: "策略已持久化并审计;发信引擎接入将在后续版本生效。",
+      toast.success(t("admin.risk.saveSuccessTitle"), {
+        description: t("admin.risk.saveSuccessDesc"),
       });
     } catch (e) {
-      toast.error("保存失败", { description: e instanceof ApiError ? e.message : "请重试" });
+      toast.error(t("admin.risk.saveFailedTitle"), {
+        description: e instanceof ApiError ? e.message : t("admin.risk.retry"),
+      });
     } finally {
       setBusy(false);
     }
@@ -239,7 +243,8 @@ export function AdminRiskSettings() {
     return (
       <Card>
         <CardContent className="py-10 text-center text-sm text-muted-foreground">
-          加载失败:{error}
+          {t("admin.risk.loadFailedPrefix")}
+          {error}
         </CardContent>
       </Card>
     );
@@ -261,8 +266,9 @@ export function AdminRiskSettings() {
       <div className="flex items-start gap-2.5 rounded-lg bg-amber-500/10 px-3.5 py-3 text-amber-700 ring-1 ring-inset ring-amber-600/20 dark:text-amber-400">
         <Info className="mt-0.5 size-4 shrink-0" />
         <p className="text-xs leading-relaxed">
-          策略将被持久化并审计,作为发信引擎的<strong>单一策略来源</strong>。当前发信引擎仍使用其内置默认值,
-          本页修改不会即时改变正在运行的发送行为,引擎接入将在后续版本落地。
+          {t("admin.risk.noticePrefix")}
+          <strong>{t("admin.risk.noticeStrong")}</strong>
+          {t("admin.risk.noticeSuffix")}
         </p>
       </div>
 
@@ -271,17 +277,15 @@ export function AdminRiskSettings() {
         <CardHeader className="border-b">
           <CardTitle className="flex items-center gap-2">
             <SlidersHorizontal className="size-4 text-muted-foreground" />
-            发信频率控制
+            {t("admin.risk.pacing.title")}
           </CardTitle>
-          <CardDescription>
-            模拟真人发送节奏。系统在最小与最大间隔之间随机抖动,间隔越大越安全、吞吐越低。
-          </CardDescription>
+          <CardDescription>{t("admin.risk.pacing.desc")}</CardDescription>
         </CardHeader>
         <CardContent className="space-y-5 pt-1">
           <SliderField
             id="min-delay"
-            label="最小发送间隔"
-            unit="秒"
+            label={t("admin.risk.pacing.minDelayLabel")}
+            unit={t("admin.risk.unit.seconds")}
             value={minDelay}
             onChange={setMinDelay}
             min={0}
@@ -289,15 +293,15 @@ export function AdminRiskSettings() {
           />
           <SliderField
             id="max-delay"
-            label="最大发送间隔"
-            unit="秒"
+            label={t("admin.risk.pacing.maxDelayLabel")}
+            unit={t("admin.risk.unit.seconds")}
             value={maxDelay}
             onChange={setMaxDelay}
             min={0}
             max={120}
           />
           {!maxOk && (
-            <p className="text-xs text-destructive">最大间隔必须不小于最小间隔。</p>
+            <p className="text-xs text-destructive">{t("admin.risk.pacing.maxDelayError")}</p>
           )}
         </CardContent>
       </Card>
@@ -307,24 +311,22 @@ export function AdminRiskSettings() {
         <CardHeader className="border-b">
           <CardTitle className="flex items-center gap-2">
             <Gauge className="size-4 text-muted-foreground" />
-            设备过载保护
+            {t("admin.risk.overload.title")}
           </CardTitle>
-          <CardDescription>
-            单个 WA 账号每日发送上限。达到上限后,调度器将不再向该设备派发新消息。
-          </CardDescription>
+          <CardDescription>{t("admin.risk.overload.desc")}</CardDescription>
         </CardHeader>
         <CardContent className="space-y-5 pt-1">
           <SliderField
             id="daily-limit"
-            label="单设备日发送上限"
-            unit="条 / 天"
+            label={t("admin.risk.overload.dailyLimitLabel")}
+            unit={t("admin.risk.unit.perDay")}
             value={dailyLimit}
             onChange={setDailyLimit}
             min={1}
             max={5000}
             step={10}
           />
-          {!dailyOk && <p className="text-xs text-destructive">日上限必须为正整数。</p>}
+          {!dailyOk && <p className="text-xs text-destructive">{t("admin.risk.overload.dailyLimitError")}</p>}
         </CardContent>
       </Card>
 
@@ -333,33 +335,33 @@ export function AdminRiskSettings() {
         <CardHeader className="border-b">
           <CardTitle className="flex items-center gap-2">
             <ShieldAlert className="size-4 text-muted-foreground" />
-            自动熔断策略
+            {t("admin.risk.breaker.title")}
           </CardTitle>
-          <CardDescription>当批次封号率超过此值,系统将自动挂起该任务。</CardDescription>
+          <CardDescription>{t("admin.risk.breaker.desc")}</CardDescription>
         </CardHeader>
         <CardContent className="space-y-5 pt-1">
           <SliderField
             id="ban-rate"
-            label="封号率熔断阈值"
-            unit="%"
+            label={t("admin.risk.breaker.banRateLabel")}
+            unit={t("admin.risk.unit.percent")}
             value={banPct}
             onChange={setBanPct}
             min={0}
             max={100}
             step={0.5}
           />
-          {!pctOk && <p className="text-xs text-destructive">阈值需在 0% 到 100% 之间。</p>}
+          {!pctOk && <p className="text-xs text-destructive">{t("admin.risk.breaker.banRateError")}</p>}
 
           <div className="space-y-4 border-t pt-4">
             <ToggleRow
-              label="启用自动熔断"
-              hint="关闭时熔断器完全空跑,不会挂起任何任务。"
+              label={t("admin.risk.breaker.enableLabel")}
+              hint={t("admin.risk.breaker.enableHint")}
               checked={cbEnabled}
               onChange={setCbEnabled}
             />
             <ToggleRow
-              label="观察模式 (Dry-run)"
-              hint="开启后仅记录「将熔断」日志与指标,不真正挂起任务。建议先观察校准阈值。"
+              label={t("admin.risk.breaker.dryRunLabel")}
+              hint={t("admin.risk.breaker.dryRunHint")}
               checked={cbDryRun}
               onChange={setCbDryRun}
               disabled={!cbEnabled}
@@ -367,7 +369,7 @@ export function AdminRiskSettings() {
             <div className="grid gap-4 sm:grid-cols-3">
               <div className="space-y-2">
                 <label htmlFor="cb-sample" className="text-sm font-medium">
-                  最小样本数
+                  {t("admin.risk.breaker.minSampleLabel")}
                 </label>
                 <Input
                   id="cb-sample"
@@ -377,11 +379,11 @@ export function AdminRiskSettings() {
                   onChange={(e) => setMinSample(e.target.value)}
                   className="font-mono text-sm"
                 />
-                <p className="text-xs text-muted-foreground">少于此发送量不评判,防误杀。</p>
+                <p className="text-xs text-muted-foreground">{t("admin.risk.breaker.minSampleHint")}</p>
               </div>
               <div className="space-y-2">
                 <label htmlFor="cb-window" className="text-sm font-medium">
-                  评估窗口
+                  {t("admin.risk.breaker.evalWindowLabel")}
                 </label>
                 <Input
                   id="cb-window"
@@ -391,11 +393,11 @@ export function AdminRiskSettings() {
                   onChange={(e) => setWindowSec(e.target.value)}
                   className="font-mono text-sm"
                 />
-                <p className="text-xs text-muted-foreground">秒。仅看最近此时段(默认 900=15 分)。</p>
+                <p className="text-xs text-muted-foreground">{t("admin.risk.breaker.evalWindowHint")}</p>
               </div>
               <div className="space-y-2">
                 <label htmlFor="cb-eval" className="text-sm font-medium">
-                  评估间隔
+                  {t("admin.risk.breaker.evalIntervalLabel")}
                 </label>
                 <Input
                   id="cb-eval"
@@ -405,11 +407,11 @@ export function AdminRiskSettings() {
                   onChange={(e) => setEvalSec(e.target.value)}
                   className="font-mono text-sm"
                 />
-                <p className="text-xs text-muted-foreground">秒。熔断器多久巡检一次。</p>
+                <p className="text-xs text-muted-foreground">{t("admin.risk.breaker.evalIntervalHint")}</p>
               </div>
             </div>
             {(!sampleOk || !windowOk || !evalOk) && (
-              <p className="text-xs text-destructive">样本数 / 窗口 / 间隔均须为 ≥ 1 的整数。</p>
+              <p className="text-xs text-destructive">{t("admin.risk.breaker.validationError")}</p>
             )}
           </div>
         </CardContent>
@@ -419,16 +421,16 @@ export function AdminRiskSettings() {
       <div className="flex items-center justify-between gap-3 border-t pt-4">
         <span className="font-mono text-xs text-muted-foreground">
           {loaded.updated_at
-            ? `上次更新 ${loaded.updated_at.slice(0, 19).replace("T", " ")}`
-            : "尚未设置过策略"}
+            ? `${t("admin.risk.lastUpdatedPrefix")}${loaded.updated_at.slice(0, 19).replace("T", " ")}`
+            : t("admin.risk.noPolicySetYet")}
         </span>
         <div className="flex items-center gap-2">
           <Button variant="ghost" onClick={() => applyConfig(loaded)} disabled={busy}>
-            重置
+            {t("admin.risk.resetButton")}
           </Button>
           <Button onClick={save} disabled={!valid} className="gap-2">
             <Save className="size-4" />
-            {busy ? "保存中…" : "保存策略"}
+            {busy ? t("admin.risk.savingButton") : t("admin.risk.savePolicyButton")}
           </Button>
         </div>
       </div>
