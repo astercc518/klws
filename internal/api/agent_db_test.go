@@ -455,6 +455,23 @@ func TestAgentAllocate_OutsideSubtree_Forbidden(t *testing.T) {
 	if n != 0 {
 		t.Fatalf("out-of-subtree rejection must not write a row, got %d", n)
 	}
+
+	// Precedence: authorization (403) must win over credit limit (402). An
+	// out-of-subtree tenant with an amount that ALSO exceeds available credit
+	// must be reported as forbidden (403), NOT payment-required (402) — the
+	// subtree check runs before the credit check in allocateOne.
+	setCreditLimit(t, ctx, s, a, 50)
+	if code := doAgentAllocate(t, s, a, tOutside, 100); code != http.StatusForbidden {
+		t.Fatalf("out-of-subtree AND over-limit: got %d, want 403 (403 must win over 402)", code)
+	}
+	assertWalletBalance(t, ctx, s, tOutside, 0)
+	if err := s.systemPool().QueryRow(ctx,
+		`SELECT count(*) FROM agent_allocations WHERE agent_id=$1`, a).Scan(&n); err != nil {
+		t.Fatalf("read agent_allocations after over-limit+out-of-subtree: %v", err)
+	}
+	if n != 0 {
+		t.Fatalf("out-of-subtree+over-limit rejection must not write a row, got %d", n)
+	}
 }
 
 // TestAgentAllocate_SettledConsumptionCreditsBackAvailable proves the

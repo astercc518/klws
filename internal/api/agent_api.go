@@ -359,20 +359,24 @@ func (s *Server) allocateOne(ctx context.Context, agentID, actor, tenantID, amou
 			`SELECT credit_limit FROM console_users WHERE id=$1 FOR UPDATE`, agentID).Scan(&creditLimit); err != nil {
 			return fmt.Errorf("lock agent: %w", err)
 		}
-		available, err := s.agentAvailableCreditQ(ctx, tx, agentID)
-		if err != nil {
-			return fmt.Errorf("available credit: %w", err)
-		}
-		if amount > available {
-			overLimit = true
-			return nil // clean rollback, no writes yet
-		}
+		// Subtree (authorization) check FIRST: an out-of-subtree tenant is
+		// forbidden (403) regardless of amount, so it must win over the
+		// credit-limit (402) check — otherwise an out-of-subtree + over-limit
+		// request would misleadingly report 402.
 		inSubtree, err := s.tenantInSubtreeQ(ctx, tx, agentID, tenantID)
 		if err != nil {
 			return fmt.Errorf("subtree check: %w", err)
 		}
 		if !inSubtree {
 			outOfSubtree = true
+			return nil // clean rollback, no writes yet
+		}
+		available, err := s.agentAvailableCreditQ(ctx, tx, agentID)
+		if err != nil {
+			return fmt.Errorf("available credit: %w", err)
+		}
+		if amount > available {
+			overLimit = true
 			return nil // clean rollback, no writes yet
 		}
 		if err := tx.QueryRow(ctx,
