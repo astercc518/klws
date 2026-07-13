@@ -35,6 +35,15 @@ export interface ServerMode {
   loading?: boolean;
 }
 
+/** Controlled row selection: the parent owns the selected-key set. */
+export interface SelectionMode {
+  /** Controlled set of selected row keys (from getRowKey). */
+  selected: ReadonlySet<string | number>;
+  onChange: (next: Set<string | number>) => void;
+  /** Rendered on the right side of the bulk bar. */
+  actions?: (keys: Array<string | number>) => React.ReactNode;
+}
+
 interface ProDataTableProps<T> {
   data: T[] | null;
   columns: Column<T>[];
@@ -50,6 +59,8 @@ interface ProDataTableProps<T> {
   server?: ServerMode;
   /** When set, clicking a row calls this (rows become cursor-pointer). */
   onRowClick?: (row: T) => void;
+  /** When set, renders a checkbox column and a bulk action bar. */
+  selection?: SelectionMode;
 }
 
 const alignClass = (a?: "left" | "right") => (a === "right" ? "text-right" : "text-left");
@@ -66,6 +77,7 @@ export function ProDataTable<T>({
   rowActions,
   server,
   onRowClick,
+  selection,
 }: ProDataTableProps<T>) {
   const t = useT();
   const [query, setQuery] = useState("");
@@ -96,8 +108,29 @@ export function ProDataTable<T>({
   const current = server ? server.page : Math.min(page, pageCount - 1);
   const start = current * effPageSize;
   const rows = server ? filtered : filtered.slice(start, start + effPageSize);
-  const colSpan = columns.length + (rowActions ? 1 : 0);
+  const colSpan = columns.length + (rowActions ? 1 : 0) + (selection ? 1 : 0);
   const showSkeleton = data === null || (server?.loading ?? false);
+
+  // Current-page selection state (rows are the current page's rows).
+  const pageKeys = rows.map((r) => getRowKey(r));
+  const allPageSelected =
+    !!selection && pageKeys.length > 0 && pageKeys.every((k) => selection.selected.has(k));
+  const somePageSelected = !!selection && pageKeys.some((k) => selection.selected.has(k));
+
+  function togglePage() {
+    if (!selection) return;
+    const next = new Set(selection.selected);
+    if (allPageSelected) pageKeys.forEach((k) => next.delete(k));
+    else pageKeys.forEach((k) => next.add(k));
+    selection.onChange(next);
+  }
+  function toggleRow(key: string | number) {
+    if (!selection) return;
+    const next = new Set(selection.selected);
+    if (next.has(key)) next.delete(key);
+    else next.add(key);
+    selection.onChange(next);
+  }
 
   function changeQuery(v: string) {
     if (server) {
@@ -134,9 +167,42 @@ export function ProDataTable<T>({
         </div>
       )}
 
+      {selection && selection.selected.size > 0 && (
+        <div className="flex flex-wrap items-center gap-2 border-b bg-accent/60 px-3 py-2">
+          <span className="text-sm font-medium">
+            {t("table.selected").replace("{n}", String(selection.selected.size))}
+          </span>
+          <Button
+            variant="ghost"
+            size="sm"
+            className="text-muted-foreground"
+            onClick={() => selection.onChange(new Set())}
+          >
+            {t("table.clearSelection")}
+          </Button>
+          <div className="ml-auto flex items-center gap-2">
+            {selection.actions?.(Array.from(selection.selected))}
+          </div>
+        </div>
+      )}
+
       <Table>
         <TableHeader>
           <TableRow className="bg-muted/30 hover:bg-muted/30">
+            {selection && (
+              <TableHead className="w-10">
+                <input
+                  type="checkbox"
+                  aria-label={t("table.selectAll")}
+                  className="size-3.5 accent-primary"
+                  checked={allPageSelected}
+                  ref={(el) => {
+                    if (el) el.indeterminate = !allPageSelected && somePageSelected;
+                  }}
+                  onChange={togglePage}
+                />
+              </TableHead>
+            )}
             {columns.map((c) => (
               <TableHead
                 key={c.key}
@@ -182,6 +248,17 @@ export function ProDataTable<T>({
                 className={onRowClick ? "cursor-pointer" : undefined}
                 onClick={onRowClick ? () => onRowClick(row) : undefined}
               >
+                {selection && (
+                  <TableCell className="w-10 py-2.5" onClick={(e) => e.stopPropagation()}>
+                    <input
+                      type="checkbox"
+                      aria-label={t("table.selectRow")}
+                      className="size-3.5 accent-primary"
+                      checked={selection.selected.has(getRowKey(row))}
+                      onChange={() => toggleRow(getRowKey(row))}
+                    />
+                  </TableCell>
+                )}
                 {columns.map((c) => (
                   <TableCell
                     key={c.key}

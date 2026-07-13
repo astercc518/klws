@@ -23,6 +23,10 @@ export const common: Record<Locale, Record<string, string>> = {
     "table.noMatch": "没有匹配「{q}」的结果",
     "table.prevPage": "上一页",
     "table.nextPage": "下一页",
+    "table.selected": "已选 {n} 项",
+    "table.clearSelection": "清除选择",
+    "table.selectAll": "全选本页",
+    "table.selectRow": "选择此行",
     "sales.tagline": "名下客户管理",
   },
   en: {
@@ -45,6 +49,10 @@ export const common: Record<Locale, Record<string, string>> = {
     "table.noMatch": "No results for \"{q}\"",
     "table.prevPage": "Previous page",
     "table.nextPage": "Next page",
+    "table.selected": "{n} selected",
+    "table.clearSelection": "Clear selection",
+    "table.selectAll": "Select page",
+    "table.selectRow": "Select row",
     "sales.tagline": "Managed customers",
   },
 };
