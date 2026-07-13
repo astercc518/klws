@@ -231,6 +231,60 @@ func TestHandleAdminSetAgentTerms(t *testing.T) {
 	}
 }
 
+func TestAdminCostPricing_SetAndList(t *testing.T) {
+	s, _ := newCrudServer(t)
+
+	w := doJSON(t, s, s.handleAdminSetCostPricing, "POST", "/admin/agent/cost-pricing", "",
+		`{"country_code":"CN","unit_cost":50}`)
+	if w.Code != http.StatusOK {
+		t.Fatalf("set cost pricing: got %d body=%s", w.Code, w.Body.String())
+	}
+
+	w2 := doJSON(t, s, s.handleAdminListCostPricing, "GET", "/admin/agent/cost-pricing", "", "")
+	if w2.Code != http.StatusOK {
+		t.Fatalf("list cost pricing: got %d body=%s", w2.Code, w2.Body.String())
+	}
+	if !strings.Contains(w2.Body.String(), `"CN"`) || !strings.Contains(w2.Body.String(), `50`) {
+		t.Fatalf("expected CN=50 in list, got %s", w2.Body.String())
+	}
+
+	// Upsert: setting CN again with a different cost must UPDATE the existing
+	// row, not insert a duplicate.
+	w3 := doJSON(t, s, s.handleAdminSetCostPricing, "POST", "/admin/agent/cost-pricing", "",
+		`{"country_code":"CN","unit_cost":70}`)
+	if w3.Code != http.StatusOK {
+		t.Fatalf("update cost pricing: got %d body=%s", w3.Code, w3.Body.String())
+	}
+
+	w4 := doJSON(t, s, s.handleAdminListCostPricing, "GET", "/admin/agent/cost-pricing", "", "")
+	if w4.Code != http.StatusOK {
+		t.Fatalf("relist cost pricing: got %d body=%s", w4.Code, w4.Body.String())
+	}
+	body := w4.Body.String()
+	if !strings.Contains(body, `"CN"`) || !strings.Contains(body, `70`) {
+		t.Fatalf("expected CN=70 after upsert, got %s", body)
+	}
+	if strings.Count(body, `"CN"`) != 1 {
+		t.Fatalf("expected exactly one CN row after upsert, got %s", body)
+	}
+}
+
+func TestAdminSetCostPricing_Validation(t *testing.T) {
+	s, _ := newCrudServer(t)
+
+	w := doJSON(t, s, s.handleAdminSetCostPricing, "POST", "/admin/agent/cost-pricing", "",
+		`{"country_code":"USA","unit_cost":10}`)
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("bad country code: expected 400, got %d body=%s", w.Code, w.Body.String())
+	}
+
+	w2 := doJSON(t, s, s.handleAdminSetCostPricing, "POST", "/admin/agent/cost-pricing", "",
+		`{"country_code":"US","unit_cost":-5}`)
+	if w2.Code != http.StatusBadRequest {
+		t.Fatalf("negative unit cost: expected 400, got %d body=%s", w2.Code, w2.Body.String())
+	}
+}
+
 func TestAgentSchemaApplies(t *testing.T) {
 	pool := testPool(t)
 	ctx := context.Background()

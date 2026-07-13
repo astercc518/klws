@@ -219,6 +219,9 @@ func (s *Server) Router() *gin.Engine {
 		admin.GET("/contacts", s.handleAdminListContacts)
 
 		admin.GET("/audit", s.handleAdminListAudit)
+
+		admin.GET("/agent/cost-pricing", s.handleAdminListCostPricing)
+		admin.POST("/agent/cost-pricing", s.handleAdminSetCostPricing)
 	}
 
 	return r
