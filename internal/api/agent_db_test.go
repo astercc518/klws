@@ -2,6 +2,7 @@ package api
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -765,5 +766,138 @@ func TestAgentSchemaApplies(t *testing.T) {
 	}
 	if cols != 2 {
 		t.Fatalf("want parent_id+credit_limit, got %d", cols)
+	}
+}
+
+// --- Task 7.5: read-only portal endpoints -----------------------------------
+
+// TestHandleAgentOverview: GET /sales/overview for an agent with credit_limit
+// set, one allocation, one sub-agent, and one direct customer. Asserts the
+// three credit figures are internally consistent (credit_limit - available
+// == outstanding, reusing agentAvailableCredit from T5) and that sub_agents /
+// direct_customer_count reflect the seeded data.
+func TestHandleAgentOverview(t *testing.T) {
+	s := newAgentServer(t)
+	ctx := context.Background()
+	a := seedAgent(t, ctx, s, "overview-a@x", nil)
+	setCreditLimit(t, ctx, s, a, 100000)
+	sub := seedAgent(t, ctx, s, "overview-sub@x", &a)
+	setCreditLimit(t, ctx, s, sub, 20000)
+	tn := seedTenantUnderAgent(t, ctx, s, a)
+
+	if code := doAgentAllocate(t, s, a, tn, 40000); code != http.StatusOK {
+		t.Fatalf("seed allocation: got %d", code)
+	}
+
+	w := doJSONAgent(t, s, s.handleAgentOverview, "GET", "/sales/overview", a, "", "")
+	if w.Code != http.StatusOK {
+		t.Fatalf("overview: got %d body=%s", w.Code, w.Body.String())
+	}
+
+	var resp struct {
+		Data struct {
+			CreditLimit         int64 `json:"credit_limit"`
+			Outstanding         int64 `json:"outstanding"`
+			Available           int64 `json:"available"`
+			DirectCustomerCount int64 `json:"direct_customer_count"`
+			SubAgents           []struct {
+				ID          int64  `json:"id"`
+				Email       string `json:"email"`
+				CreditLimit int64  `json:"credit_limit"`
+			} `json:"sub_agents"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode overview response: %v (body=%s)", err, w.Body.String())
+	}
+
+	wantAvailable, err := s.agentAvailableCredit(ctx, a)
+	if err != nil {
+		t.Fatalf("compute expected available: %v", err)
+	}
+	if resp.Data.CreditLimit != 100000 {
+		t.Fatalf("credit_limit: got %d want 100000", resp.Data.CreditLimit)
+	}
+	if resp.Data.Available != wantAvailable {
+		t.Fatalf("available: got %d want %d", resp.Data.Available, wantAvailable)
+	}
+	if resp.Data.CreditLimit-resp.Data.Available != resp.Data.Outstanding {
+		t.Fatalf("consistency: credit_limit(%d) - available(%d) != outstanding(%d)",
+			resp.Data.CreditLimit, resp.Data.Available, resp.Data.Outstanding)
+	}
+	if resp.Data.DirectCustomerCount != 1 {
+		t.Fatalf("direct_customer_count: got %d want 1", resp.Data.DirectCustomerCount)
+	}
+	if len(resp.Data.SubAgents) != 1 || resp.Data.SubAgents[0].ID != sub ||
+		resp.Data.SubAgents[0].Email != "overview-sub@x" || resp.Data.SubAgents[0].CreditLimit != 20000 {
+		t.Fatalf("sub_agents: got %+v", resp.Data.SubAgents)
+	}
+}
+
+// TestHandleAdminListAgents: GET /admin/agents returns every role='sales'
+// console_user with its hierarchy + terms; a non-sales user (customer or
+// admin) must NOT appear in the list.
+func TestHandleAdminListAgents(t *testing.T) {
+	s, ctx := newCrudServer(t)
+	root := seedAgent(t, ctx, s, "list-root@x", nil)
+	child := seedAgent(t, ctx, s, "list-child@x", &root)
+	if _, err := s.systemPool().Exec(ctx,
+		`UPDATE console_users SET commission_rate=$2, credit_limit=$3 WHERE id=$1`,
+		root, 0.12, 75000); err != nil {
+		t.Fatalf("set root terms: %v", err)
+	}
+
+	// Non-sales users that must be excluded from the listing.
+	if _, err := s.systemPool().Exec(ctx,
+		`INSERT INTO console_users (email, password_hash, role, tenant_id) VALUES ('list-admin@x','x','admin',NULL)`); err != nil {
+		t.Fatalf("seed admin user: %v", err)
+	}
+	seedTenantUser(t, ctx, s, "list-customer@x")
+
+	w := doJSON(t, s, s.handleAdminListAgents, "GET", "/admin/agents", "", "")
+	if w.Code != http.StatusOK {
+		t.Fatalf("list agents: got %d body=%s", w.Code, w.Body.String())
+	}
+
+	var resp struct {
+		Data struct {
+			Rows []struct {
+				ID             int64    `json:"id"`
+				Email          string   `json:"email"`
+				ParentID       *int64   `json:"parent_id"`
+				CreditLimit    int64    `json:"credit_limit"`
+				CommissionRate *float64 `json:"commission_rate"`
+			} `json:"rows"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode admin agents response: %v (body=%s)", err, w.Body.String())
+	}
+
+	byID := map[int64]bool{}
+	for _, r := range resp.Data.Rows {
+		byID[r.ID] = true
+		if r.Email == "list-admin@x" || r.Email == "list-customer@x" {
+			t.Fatalf("non-sales user %s must not appear in agent list", r.Email)
+		}
+		if r.ID == root {
+			if r.ParentID != nil {
+				t.Fatalf("root parent_id: got %v want nil", *r.ParentID)
+			}
+			if r.CreditLimit != 75000 {
+				t.Fatalf("root credit_limit: got %d want 75000", r.CreditLimit)
+			}
+			if r.CommissionRate == nil || *r.CommissionRate != 0.12 {
+				t.Fatalf("root commission_rate: got %v want 0.12", r.CommissionRate)
+			}
+		}
+		if r.ID == child {
+			if r.ParentID == nil || *r.ParentID != root {
+				t.Fatalf("child parent_id: got %v want %d", r.ParentID, root)
+			}
+		}
+	}
+	if !byID[root] || !byID[child] {
+		t.Fatalf("expected both root and child agents in list, got %+v", resp.Data.Rows)
 	}
 }

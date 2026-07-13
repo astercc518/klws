@@ -84,6 +84,49 @@ func (s *Server) handleAdminSetCostPricing(c *gin.Context) {
 	ok(c, gin.H{"country_code": req.CountryCode, "unit_cost": *req.UnitCost})
 }
 
+// --- Agent hierarchy listing (T7.5) -----------------------------------------
+
+// agentListRow is one sales agent's hierarchy + terms entry in
+// handleAdminListAgents' rows list. ParentID and CommissionRate are nullable
+// in console_users (root agents have no parent; commission_rate may be
+// unset), so they scan into pointers rather than zero values.
+type agentListRow struct {
+	ID             int64    `json:"id"`
+	Email          string   `json:"email"`
+	ParentID       *int64   `json:"parent_id"`
+	CreditLimit    int64    `json:"credit_limit"`
+	CommissionRate *float64 `json:"commission_rate"`
+}
+
+// handleAdminListAgents: GET /api/v1/admin/agents — every role='sales'
+// console_user with its hierarchy (parent_id) and terms (credit_limit,
+// commission_rate), for the admin tree/terms console.
+func (s *Server) handleAdminListAgents(c *gin.Context) {
+	ctx := c.Request.Context()
+	rows, err := s.systemPool().Query(ctx,
+		`SELECT id, email, parent_id, credit_limit, commission_rate
+		   FROM console_users WHERE role='sales' ORDER BY id`)
+	if err != nil {
+		fail(c, http.StatusInternalServerError, "list agents failed")
+		return
+	}
+	defer rows.Close()
+	out := make([]agentListRow, 0)
+	for rows.Next() {
+		var r agentListRow
+		if err := rows.Scan(&r.ID, &r.Email, &r.ParentID, &r.CreditLimit, &r.CommissionRate); err != nil {
+			fail(c, http.StatusInternalServerError, "scan agent failed")
+			return
+		}
+		out = append(out, r)
+	}
+	if err := rows.Err(); err != nil {
+		fail(c, http.StatusInternalServerError, "iterate agents failed")
+		return
+	}
+	ok(c, gin.H{"rows": out})
+}
+
 // --- Monthly settlement overview / close (T6) -------------------------------
 //
 // MONEY-CRITICAL. Both handlers enumerate every role='sales' console_user and

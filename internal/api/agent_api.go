@@ -519,6 +519,85 @@ func (s *Server) handleAgentStatement(c *gin.Context) {
 	ok(c, settlementJSON(me.UserID, from.Format("2006-01"), in))
 }
 
+// --- Overview (T7.5) ---------------------------------------------------------
+
+// subAgentRow is one direct sub-agent entry in handleAgentOverview's
+// sub_agents list.
+type subAgentRow struct {
+	ID          int64  `json:"id"`
+	Email       string `json:"email"`
+	CreditLimit int64  `json:"credit_limit"`
+}
+
+// handleAgentOverview: GET /api/v1/sales/overview — the calling agent's OWN
+// credit summary + downline, for the agent portal's landing page. Scoped to
+// me.UserID from the session; agents can never request another agent's
+// overview (no :id param on this route), mirroring handleAgentStatement.
+//
+// `available` reuses agentAvailableCredit (T5) unchanged; `outstanding` is
+// DERIVED as credit_limit-available (rather than computed independently) so
+// the three figures returned are always internally consistent by
+// construction.
+func (s *Server) handleAgentOverview(c *gin.Context) {
+	me := sessionFrom(c)
+	if me == nil {
+		fail(c, http.StatusUnauthorized, "no session")
+		return
+	}
+	ctx := c.Request.Context()
+
+	var creditLimit int64
+	if err := s.systemPool().QueryRow(ctx,
+		`SELECT credit_limit FROM console_users WHERE id=$1`, me.UserID).Scan(&creditLimit); err != nil {
+		fail(c, http.StatusInternalServerError, "credit limit lookup failed")
+		return
+	}
+
+	available, err := s.agentAvailableCredit(ctx, me.UserID)
+	if err != nil {
+		fail(c, http.StatusInternalServerError, "available credit lookup failed")
+		return
+	}
+
+	rows, err := s.systemPool().Query(ctx,
+		`SELECT id, email, credit_limit FROM console_users WHERE parent_id=$1 AND role='sales' ORDER BY id`,
+		me.UserID)
+	if err != nil {
+		fail(c, http.StatusInternalServerError, "sub-agents lookup failed")
+		return
+	}
+	subAgents := make([]subAgentRow, 0)
+	for rows.Next() {
+		var r subAgentRow
+		if err := rows.Scan(&r.ID, &r.Email, &r.CreditLimit); err != nil {
+			rows.Close()
+			fail(c, http.StatusInternalServerError, "scan sub-agent failed")
+			return
+		}
+		subAgents = append(subAgents, r)
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		fail(c, http.StatusInternalServerError, "iterate sub-agents failed")
+		return
+	}
+
+	var directCustomerCount int64
+	if err := s.systemPool().QueryRow(ctx,
+		`SELECT count(*) FROM tenants WHERE sales_owner_id=$1`, me.UserID).Scan(&directCustomerCount); err != nil {
+		fail(c, http.StatusInternalServerError, "direct customer count failed")
+		return
+	}
+
+	ok(c, gin.H{
+		"credit_limit":          creditLimit,
+		"outstanding":           creditLimit - available,
+		"available":             available,
+		"sub_agents":            subAgents,
+		"direct_customer_count": directCustomerCount,
+	})
+}
+
 // handleAgentAllocate: POST /api/v1/sales/allocate {items:[{tenant_id,amount}]}.
 //
 // A single-item request returns the item's own outcome at the top level
