@@ -27,6 +27,7 @@ import {
   DialogTitle,
   DialogTrigger,
 } from "@/components/ui/dialog";
+import { useT } from "@/components/locale-provider";
 
 interface Proxy {
   id: number;
@@ -59,6 +60,7 @@ const PAGE_SIZE = 20;
 interface ProxyStats { total: number; alive: number; dead: number }
 
 export function AdminProxies() {
+  const t = useT();
   const [rows, setRows] = useState<Proxy[] | null>(null);
   const [total, setTotal] = useState(0);
   const [stats, setStats] = useState<ProxyStats | null>(null);
@@ -85,12 +87,12 @@ export function AdminProxies() {
       setError(null);
     } catch (e) {
       if (!(e instanceof ApiError && e.status === 401)) {
-        setError(e instanceof ApiError ? e.message : "加载失败");
+        setError(e instanceof ApiError ? e.message : t("admin.proxies.loadFailed"));
       }
     } finally {
       setLoading(false);
     }
-  }, [page, query, alive]);
+  }, [page, query, alive, t]);
 
   useEffect(() => {
     load();
@@ -99,7 +101,7 @@ export function AdminProxies() {
   const columns: Column<Proxy>[] = [
     {
       key: "url",
-      header: "代理地址",
+      header: t("admin.proxies.col.address"),
       cell: (p) => (
         <div className="flex items-center gap-2.5">
           <RowAvatar icon={Globe} accent={p.is_alive ? "emerald" : "rose"} />
@@ -109,26 +111,26 @@ export function AdminProxies() {
     },
     {
       key: "type",
-      header: "类型",
+      header: t("admin.proxies.col.type"),
       cell: (p) => <span className="font-mono text-xs uppercase">{p.proxy_type}</span>,
     },
     {
       key: "country",
-      header: "国家",
+      header: t("admin.proxies.col.country"),
       cell: (p) => <span className="font-mono text-xs">{p.country_code}</span>,
     },
     {
       key: "status",
-      header: "状态",
+      header: t("admin.proxies.col.status"),
       cell: (p) => (
         <StatusBadge tone={p.is_alive ? "positive" : "negative"}>
-          {p.is_alive ? "在线" : "失效"}
+          {p.is_alive ? t("admin.proxies.status.online") : t("admin.proxies.status.invalid")}
         </StatusBadge>
       ),
     },
     {
       key: "bindings",
-      header: "绑定",
+      header: t("admin.proxies.col.bindings"),
       align: "right",
       cell: (p) => (
         <span className="font-mono text-sm tabular-nums">
@@ -138,7 +140,7 @@ export function AdminProxies() {
     },
     {
       key: "failures",
-      header: "失败",
+      header: t("admin.proxies.col.failures"),
       align: "right",
       cell: (p) => (
         <span className="font-mono text-sm tabular-nums text-muted-foreground">
@@ -152,10 +154,34 @@ export function AdminProxies() {
     <>
       {stats && (
         <MetricCardGroup className="mb-6">
-          <StatCard accent="brand" label="代理总数" value={String(stats.total)} sub="全平台出口" icon={Globe} />
-          <StatCard accent="emerald" label="在线" value={String(stats.alive)} sub="健康可调度" icon={Wifi} />
-          <StatCard accent="rose" label="离线 / 失效" value={String(stats.dead)} sub="需排查或剔除" icon={WifiOff} />
-          <StatCard accent="amber" label="当前页" value={String(total)} sub="匹配筛选的总数" icon={Activity} />
+          <StatCard
+            accent="brand"
+            label={t("admin.proxies.stat.totalLabel")}
+            value={String(stats.total)}
+            sub={t("admin.proxies.stat.totalSub")}
+            icon={Globe}
+          />
+          <StatCard
+            accent="emerald"
+            label={t("admin.proxies.status.online")}
+            value={String(stats.alive)}
+            sub={t("admin.proxies.stat.onlineSub")}
+            icon={Wifi}
+          />
+          <StatCard
+            accent="rose"
+            label={t("admin.proxies.stat.offlineLabel")}
+            value={String(stats.dead)}
+            sub={t("admin.proxies.stat.offlineSub")}
+            icon={WifiOff}
+          />
+          <StatCard
+            accent="amber"
+            label={t("admin.proxies.stat.currentPageLabel")}
+            value={String(total)}
+            sub={t("admin.proxies.stat.currentPageSub")}
+            icon={Activity}
+          />
         </MetricCardGroup>
       )}
       <ProDataTable
@@ -163,7 +189,7 @@ export function AdminProxies() {
         error={error}
         columns={columns}
         getRowKey={(p) => p.id}
-        emptyState="代理池为空,点击右上角批量导入。"
+        emptyState={t("admin.proxies.emptyState")}
         server={{
           total,
           page,
@@ -173,35 +199,37 @@ export function AdminProxies() {
           onQueryChange: (q) => { setQuery(q); setPage(0); },
           loading,
         }}
-        search={{ placeholder: "搜索地址或国家…", accessor: () => "" }}
+        search={{ placeholder: t("admin.proxies.searchPlaceholder"), accessor: () => "" }}
         toolbar={
           <div className="flex items-center gap-2">
             <select
               value={alive}
               onChange={(e) => { setAlive(e.target.value as "all" | "true" | "false"); setPage(0); }}
               className="h-8 rounded-md border bg-transparent px-2 text-sm"
-              aria-label="按状态筛选"
+              aria-label={t("admin.proxies.filterByStatusAria")}
             >
-              <option value="all">全部状态</option>
-              <option value="true">在线</option>
-              <option value="false">失效</option>
+              <option value="all">{t("admin.proxies.filter.allStatuses")}</option>
+              <option value="true">{t("admin.proxies.status.online")}</option>
+              <option value="false">{t("admin.proxies.status.invalid")}</option>
             </select>
             <ImportProxiesDialog onDone={load} />
           </div>
         }
         rowActions={(p) => (
           <DropdownMenu>
-            <DropdownMenuTrigger render={<Button variant="ghost" size="icon-sm" aria-label="操作" />}>
+            <DropdownMenuTrigger
+              render={<Button variant="ghost" size="icon-sm" aria-label={t("admin.proxies.actionsAria")} />}
+            >
               <MoreHorizontal className="size-4" />
             </DropdownMenuTrigger>
             <DropdownMenuContent align="end">
               <DropdownMenuItem onClick={() => setEditTarget(p)}>
                 <Pencil className="size-4" />
-                编辑
+                {t("admin.proxies.action.edit")}
               </DropdownMenuItem>
               <DropdownMenuItem variant="destructive" onClick={() => setDeleteTarget(p)}>
                 <Trash2 className="size-4" />
-                删除
+                {t("admin.proxies.action.delete")}
               </DropdownMenuItem>
             </DropdownMenuContent>
           </DropdownMenu>
@@ -215,6 +243,7 @@ export function AdminProxies() {
 }
 
 function ImportProxiesDialog({ onDone }: { onDone: () => void }) {
+  const t = useT();
   const [open, setOpen] = useState(false);
   const [raw, setRaw] = useState("");
   const [type, setType] = useState("socks5");
@@ -231,12 +260,18 @@ function ImportProxiesDialog({ onDone }: { onDone: () => void }) {
         "/admin/resources/proxies",
         { proxies: parsed },
       );
-      toast.success("代理导入完成", { description: `新增 ${res.imported} · 跳过 ${res.skipped}` });
+      toast.success(t("admin.proxies.import.successTitle"), {
+        description: t("admin.proxies.import.successDesc")
+          .replace("{added}", () => String(res.imported))
+          .replace("{skipped}", () => String(res.skipped)),
+      });
       setOpen(false);
       setRaw("");
       onDone();
     } catch (e) {
-      toast.error("导入失败", { description: e instanceof ApiError ? e.message : "请重试" });
+      toast.error(t("admin.proxies.import.failedTitle"), {
+        description: e instanceof ApiError ? e.message : t("admin.proxies.retry"),
+      });
     } finally {
       setBusy(false);
     }
@@ -246,19 +281,21 @@ function ImportProxiesDialog({ onDone }: { onDone: () => void }) {
     <Dialog open={open} onOpenChange={setOpen}>
       <DialogTrigger render={<Button className="gap-2" />}>
         <Plus className="size-4" />
-        批量导入代理
+        {t("admin.proxies.import.title")}
       </DialogTrigger>
       <DialogContent className="sm:max-w-lg">
         <DialogHeader>
-          <DialogTitle>批量导入代理</DialogTitle>
+          <DialogTitle>{t("admin.proxies.import.title")}</DialogTitle>
           <DialogDescription>
-            每行一个,格式 <span className="font-mono">IP:Port:User:Pass</span>(无认证可省略后两段)。
+            {t("admin.proxies.import.descPrefix")}
+            <span className="font-mono">IP:Port:User:Pass</span>
+            {t("admin.proxies.import.descSuffix")}
           </DialogDescription>
         </DialogHeader>
         <div className="space-y-4 py-1">
           <div className="flex gap-3">
             <div className="space-y-2">
-              <label htmlFor="px-type" className="text-sm font-medium">类型</label>
+              <label htmlFor="px-type" className="text-sm font-medium">{t("admin.proxies.typeLabel")}</label>
               <select
                 id="px-type"
                 value={type}
@@ -270,7 +307,9 @@ function ImportProxiesDialog({ onDone }: { onDone: () => void }) {
               </select>
             </div>
             <div className="space-y-2">
-              <label htmlFor="px-country" className="text-sm font-medium">国家 ISO-2</label>
+              <label htmlFor="px-country" className="text-sm font-medium">
+                {t("admin.proxies.countryIsoLabel")}
+              </label>
               <Input
                 id="px-country"
                 value={country}
@@ -282,9 +321,9 @@ function ImportProxiesDialog({ onDone }: { onDone: () => void }) {
           </div>
           <div className="space-y-2">
             <div className="flex items-center justify-between">
-              <label htmlFor="px-raw" className="text-sm font-medium">代理列表</label>
+              <label htmlFor="px-raw" className="text-sm font-medium">{t("admin.proxies.listLabel")}</label>
               <span className="font-mono text-xs tabular-nums text-muted-foreground">
-                解析到 {parsed.length} 条
+                {t("admin.proxies.parsedCount").replace("{n}", () => String(parsed.length))}
               </span>
             </div>
             <Textarea
@@ -297,9 +336,11 @@ function ImportProxiesDialog({ onDone }: { onDone: () => void }) {
           </div>
         </div>
         <DialogFooter>
-          <DialogClose render={<Button variant="ghost" />}>取消</DialogClose>
+          <DialogClose render={<Button variant="ghost" />}>{t("admin.proxies.cancel")}</DialogClose>
           <Button onClick={submit} disabled={!valid}>
-            {busy ? "导入中…" : `确认导入 ${parsed.length} 条`}
+            {busy
+              ? t("admin.proxies.import.importing")
+              : t("admin.proxies.import.confirm").replace("{n}", () => String(parsed.length))}
           </Button>
         </DialogFooter>
       </DialogContent>
@@ -316,6 +357,7 @@ function EditProxyDialog({
   onClose: () => void;
   onDone: () => void;
 }) {
+  const t = useT();
   const [type, setType] = useState("socks5");
   const [country, setCountry] = useState("");
   const [maxBindings, setMaxBindings] = useState("1");
@@ -346,11 +388,13 @@ function EditProxyDialog({
         country_code: country.trim().toUpperCase(),
         max_bindings: maxBindingsNum,
       });
-      toast.success("代理已更新", { description: target.proxy_url });
+      toast.success(t("admin.proxies.edit.successTitle"), { description: target.proxy_url });
       onClose();
       onDone();
     } catch (e) {
-      toast.error("更新失败", { description: e instanceof ApiError ? e.message : "请重试" });
+      toast.error(t("admin.proxies.edit.failedTitle"), {
+        description: e instanceof ApiError ? e.message : t("admin.proxies.retry"),
+      });
     } finally {
       setBusy(false);
     }
@@ -360,15 +404,17 @@ function EditProxyDialog({
     <Dialog open={target != null} onOpenChange={(o) => !o && onClose()}>
       <DialogContent className="sm:max-w-md">
         <DialogHeader>
-          <DialogTitle>编辑代理</DialogTitle>
+          <DialogTitle>{t("admin.proxies.edit.title")}</DialogTitle>
           <DialogDescription>
-            修改 <span className="font-mono text-xs">{target?.proxy_url}</span> 的类型、国家与最大绑定数。
+            {t("admin.proxies.edit.descPrefix")}
+            <span className="font-mono text-xs">{target?.proxy_url}</span>
+            {t("admin.proxies.edit.descSuffix")}
           </DialogDescription>
         </DialogHeader>
         <div className="space-y-4 py-1">
           <div className="flex gap-3">
             <div className="space-y-2">
-              <label htmlFor="edit-px-type" className="text-sm font-medium">类型</label>
+              <label htmlFor="edit-px-type" className="text-sm font-medium">{t("admin.proxies.typeLabel")}</label>
               <select
                 id="edit-px-type"
                 value={type}
@@ -381,7 +427,9 @@ function EditProxyDialog({
               </select>
             </div>
             <div className="space-y-2">
-              <label htmlFor="edit-px-country" className="text-sm font-medium">国家 ISO-2</label>
+              <label htmlFor="edit-px-country" className="text-sm font-medium">
+                {t("admin.proxies.countryIsoLabel")}
+              </label>
               <Input
                 id="edit-px-country"
                 value={country}
@@ -392,7 +440,9 @@ function EditProxyDialog({
             </div>
           </div>
           <div className="space-y-2">
-            <label htmlFor="edit-px-max" className="text-sm font-medium">最大绑定数</label>
+            <label htmlFor="edit-px-max" className="text-sm font-medium">
+              {t("admin.proxies.maxBindingsLabel")}
+            </label>
             <Input
               id="edit-px-max"
               type="number"
@@ -404,8 +454,10 @@ function EditProxyDialog({
           </div>
         </div>
         <DialogFooter>
-          <DialogClose render={<Button variant="ghost" />}>取消</DialogClose>
-          <Button onClick={submit} disabled={!valid}>{busy ? "保存中…" : "确认保存"}</Button>
+          <DialogClose render={<Button variant="ghost" />}>{t("admin.proxies.cancel")}</DialogClose>
+          <Button onClick={submit} disabled={!valid}>
+            {busy ? t("admin.proxies.edit.saving") : t("admin.proxies.edit.confirmSave")}
+          </Button>
         </DialogFooter>
       </DialogContent>
     </Dialog>
@@ -421,6 +473,7 @@ function DeleteProxyDialog({
   onClose: () => void;
   onDone: () => void;
 }) {
+  const t = useT();
   const [busy, setBusy] = useState(false);
 
   async function submit() {
@@ -428,11 +481,13 @@ function DeleteProxyDialog({
     setBusy(true);
     try {
       await api.delete(`/admin/resources/proxies/${target.id}`);
-      toast.success("代理已删除", { description: target.proxy_url });
+      toast.success(t("admin.proxies.delete.successTitle"), { description: target.proxy_url });
       onClose();
       onDone();
     } catch (e) {
-      toast.error("删除失败", { description: e instanceof ApiError ? e.message : "请重试" });
+      toast.error(t("admin.proxies.delete.failedTitle"), {
+        description: e instanceof ApiError ? e.message : t("admin.proxies.retry"),
+      });
     } finally {
       setBusy(false);
     }
@@ -442,16 +497,17 @@ function DeleteProxyDialog({
     <Dialog open={target != null} onOpenChange={(o) => !o && onClose()}>
       <DialogContent className="sm:max-w-md">
         <DialogHeader>
-          <DialogTitle>删除代理</DialogTitle>
+          <DialogTitle>{t("admin.proxies.delete.title")}</DialogTitle>
           <DialogDescription>
-            确认删除代理 <span className="font-mono text-xs">{target?.proxy_url}</span>
-            ?此操作不可撤销,已绑定的设备将自动解绑。
+            {t("admin.proxies.delete.descPrefix")}
+            <span className="font-mono text-xs">{target?.proxy_url}</span>
+            {t("admin.proxies.delete.descSuffix")}
           </DialogDescription>
         </DialogHeader>
         <DialogFooter>
-          <DialogClose render={<Button variant="ghost" />}>取消</DialogClose>
+          <DialogClose render={<Button variant="ghost" />}>{t("admin.proxies.cancel")}</DialogClose>
           <Button variant="destructive" onClick={submit} disabled={busy}>
-            {busy ? "删除中…" : "确认删除"}
+            {busy ? t("admin.proxies.delete.deleting") : t("admin.proxies.delete.confirm")}
           </Button>
         </DialogFooter>
       </DialogContent>

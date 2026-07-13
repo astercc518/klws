@@ -5,6 +5,7 @@ import { Banknote, Smartphone, ListChecks, ShieldAlert } from "lucide-react";
 import { api, ApiError } from "@/lib/api";
 import { Card } from "@/components/ui/card";
 import { StatCard, MetricCardGroup, type Trend } from "@/components/admin/stat-card";
+import { useT } from "@/components/locale-provider";
 
 interface AdminStats {
   total_topup: number;
@@ -36,6 +37,7 @@ function banTrend(rate: number): Trend {
 }
 
 export function AdminMetrics() {
+  const t = useT();
   const [stats, setStats] = useState<AdminStats | null>(null);
   const [error, setError] = useState<string | null>(null);
 
@@ -53,7 +55,7 @@ export function AdminMetrics() {
           // Only a first-load failure surfaces; refresh errors are ignored so
           // the dashboard doesn't flicker to an error card on a transient blip.
           if (!isRefresh && !(e instanceof ApiError && e.status === 401)) {
-            setError(e instanceof ApiError ? e.message : "加载失败");
+            setError(e instanceof ApiError ? e.message : t("admin.metrics.loadFailedGeneric"));
           }
         });
     };
@@ -64,10 +66,15 @@ export function AdminMetrics() {
       alive = false;
       clearInterval(id);
     };
-  }, []);
+  }, [t]);
 
   if (error) {
-    return <Card className="p-5 text-sm text-muted-foreground">大盘加载失败:{error}</Card>;
+    return (
+      <Card className="p-5 text-sm text-muted-foreground">
+        {t("admin.metrics.overviewLoadFailedPrefix")}
+        {error}
+      </Card>
+    );
   }
   if (!stats) {
     return (
@@ -86,34 +93,34 @@ export function AdminMetrics() {
     <MetricCardGroup>
       <StatCard
         accent="brand"
-        label="平台总消耗 / 收入"
+        label={t("admin.metrics.totalConsumedRevenue")}
         value={usd(stats.consumed)}
-        sub={`累计充值 ${usd(stats.total_topup)}`}
+        sub={`${t("admin.metrics.cumulativeTopupPrefix")}${usd(stats.total_topup)}`}
         icon={Banknote}
         href="/admin/ledger"
       />
       <StatCard
         accent="emerald"
-        label="活跃 WA 账号"
+        label={t("admin.metrics.activeWaAccounts")}
         value={`${nf.format(stats.accounts_active)} / ${nf.format(stats.accounts_total)}`}
-        sub={`封禁/标记 ${nf.format(stats.accounts_banned)}`}
+        sub={`${t("admin.metrics.bannedFlaggedPrefix")}${nf.format(stats.accounts_banned)}`}
         icon={Smartphone}
         trend={activeTrend(stats.accounts_active, stats.accounts_total)}
         href="/admin/devices"
       />
       <StatCard
         accent="blue"
-        label="队列积压任务"
+        label={t("admin.metrics.queueBacklog")}
         value={nf.format(stats.queue_backlog)}
-        sub="待发送收件人"
+        sub={t("admin.metrics.pendingRecipients")}
         icon={ListChecks}
         href="/admin/audit"
       />
       <StatCard
         accent="rose"
-        label="风控封号率"
+        label={t("admin.metrics.banRate")}
         value={pct(stats.ban_rate)}
-        sub="banned+flagged / 总账号"
+        sub={t("admin.metrics.bannedFlaggedOverTotal")}
         icon={ShieldAlert}
         trend={banTrend(stats.ban_rate)}
         href="/admin/devices"
