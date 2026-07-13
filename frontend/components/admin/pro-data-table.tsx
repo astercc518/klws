@@ -1,9 +1,10 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
-import { Search, ChevronLeft, ChevronRight, Columns3, Check } from "lucide-react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { Search, ChevronLeft, ChevronRight, Columns3, Check, ListFilter } from "lucide-react";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
+import { Badge } from "@/components/ui/badge";
 import {
   Table,
   TableBody,
@@ -18,6 +19,7 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
+import { Sheet, SheetContent, SheetHeader, SheetTitle } from "@/components/ui/sheet";
 import { cn } from "@/lib/utils";
 import { useT } from "@/components/locale-provider";
 
@@ -74,6 +76,8 @@ interface ProDataTableProps<T> {
   /** When set, the toolbar gains a "Columns" menu that hides columns and
    *  persists the choice to `localStorage["pdt:{storageKey}:hidden"]`. */
   storageKey?: string;
+  /** Filter drawer. Parent owns filter state; content is rendered inside a Sheet. */
+  filters?: { content: React.ReactNode; activeCount?: number; title?: string };
 }
 
 const alignClass = (a?: "left" | "right") => (a === "right" ? "text-right" : "text-left");
@@ -92,10 +96,31 @@ export function ProDataTable<T>({
   onRowClick,
   selection,
   storageKey,
+  filters,
 }: ProDataTableProps<T>) {
   const t = useT();
   const [query, setQuery] = useState("");
   const [page, setPage] = useState(0);
+  const [filtersOpen, setFiltersOpen] = useState(false);
+
+  // `/` focuses this table's search box, unless the keypress originates
+  // inside an input/textarea/select/contenteditable or carries a modifier.
+  // Known tradeoff: with multiple ProDataTables mounted on one screen, the
+  // shortcut focuses whichever instance mounted last (single window listener
+  // per instance, no de-duplication). Acceptable for current usage.
+  const searchRef = useRef<HTMLInputElement>(null);
+  useEffect(() => {
+    function onKey(e: KeyboardEvent) {
+      if (e.key !== "/" || e.metaKey || e.ctrlKey || e.altKey) return;
+      const target = e.target as HTMLElement | null;
+      if (target?.closest("input, textarea, select, [contenteditable='true']")) return;
+      if (!searchRef.current) return;
+      e.preventDefault();
+      searchRef.current.focus();
+    }
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, []);
 
   // Server mode: debounce the search input, then notify the parent.
   const [serverInput, setServerInput] = useState(server?.query ?? "");
@@ -199,12 +224,13 @@ export function ProDataTable<T>({
 
   return (
     <Card className="gap-0 p-0">
-      {(search || toolbar || storageKey) && (
+      {(search || toolbar || storageKey || filters) && (
         <div className="flex flex-wrap items-center gap-2 border-b px-3 py-2.5">
           {search && (
             <div className="flex h-8 min-w-0 flex-1 items-center gap-2 rounded-lg border bg-muted/40 px-2.5 text-muted-foreground sm:max-w-xs">
               <Search className="size-3.5 shrink-0" />
               <input
+                ref={searchRef}
                 type="search"
                 value={queryValue}
                 onChange={(e) => changeQuery(e.target.value)}
@@ -235,8 +261,26 @@ export function ProDataTable<T>({
               </DropdownMenuContent>
             </DropdownMenu>
           )}
+          {filters && (
+            <Button
+              variant="outline"
+              size="sm"
+              className={cn("text-muted-foreground", !storageKey && "ml-auto")}
+              onClick={() => setFiltersOpen(true)}
+            >
+              <ListFilter className="size-3.5" />
+              {t("table.filters")}
+              {(filters.activeCount ?? 0) > 0 && (
+                <Badge variant="secondary" className="ml-1 px-1.5 font-mono text-[10px]">
+                  {filters.activeCount}
+                </Badge>
+              )}
+            </Button>
+          )}
           {toolbar && (
-            <div className={cn("flex items-center gap-2", !storageKey && "ml-auto")}>{toolbar}</div>
+            <div className={cn("flex items-center gap-2", !storageKey && !filters && "ml-auto")}>
+              {toolbar}
+            </div>
           )}
         </div>
       )}
@@ -383,6 +427,17 @@ export function ProDataTable<T>({
             </div>
           )}
         </div>
+      )}
+
+      {filters && (
+        <Sheet open={filtersOpen} onOpenChange={setFiltersOpen}>
+          <SheetContent>
+            <SheetHeader>
+              <SheetTitle>{filters.title ?? t("table.filters")}</SheetTitle>
+            </SheetHeader>
+            <div className="grid gap-4 px-4">{filters.content}</div>
+          </SheetContent>
+        </Sheet>
       )}
     </Card>
   );
