@@ -219,7 +219,7 @@ export const admin: Record<Locale, Record<string, string>> = {
     "admin.users.action.resume": "恢复",
     "admin.users.action.suspend": "挂起",
     "admin.users.action.quickLogin": "快捷登录",
-    "admin.users.action.edit": "编辑 Edit",
+    "admin.users.action.edit": "编辑",
     "admin.users.action.enableAccount": "启用账号",
     "admin.users.action.disableAccount": "禁用账号",
     "admin.users.action.resetPassword": "重置密码",

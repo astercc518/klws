@@ -9,7 +9,7 @@ export default function AdminAuditPage() {
         title={{ zh: "风控与审计", en: "Risk & audit" }}
         description={{
           zh: "平台操作审计日志。群发任务监控已迁移至「发送任务」。",
-          en: "Platform operation audit log. Campaign monitoring has moved to “Send tasks.”",
+          en: "Platform operation audit log. Campaign monitoring has moved to “Campaigns.”",
         }}
       />
       <AdminAuditLog />
