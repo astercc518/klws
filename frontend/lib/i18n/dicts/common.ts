@@ -27,6 +27,7 @@ export const common: Record<Locale, Record<string, string>> = {
     "table.clearSelection": "清除选择",
     "table.selectAll": "全选本页",
     "table.selectRow": "选择此行",
+    "table.columns": "列",
     "sales.tagline": "名下客户管理",
   },
   en: {
@@ -53,6 +54,7 @@ export const common: Record<Locale, Record<string, string>> = {
     "table.clearSelection": "Clear selection",
     "table.selectAll": "Select page",
     "table.selectRow": "Select row",
+    "table.columns": "Columns",
     "sales.tagline": "Managed customers",
   },
 };

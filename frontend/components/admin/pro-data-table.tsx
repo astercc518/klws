@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { Search, ChevronLeft, ChevronRight } from "lucide-react";
+import { Search, ChevronLeft, ChevronRight, Columns3, Check } from "lucide-react";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import {
@@ -12,6 +12,12 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import { cn } from "@/lib/utils";
 import { useT } from "@/components/locale-provider";
 
@@ -22,6 +28,10 @@ export interface Column<T> {
   align?: "left" | "right";
   headClassName?: string;
   cellClassName?: string;
+  /** Plain-text name shown in the column-visibility menu. Defaults to key. */
+  title?: string;
+  /** Set false to pin the column (not hideable). Default true. */
+  hideable?: boolean;
 }
 
 /** Server-driven mode: the parent owns paging/search and fetches each page. */
@@ -61,6 +71,9 @@ interface ProDataTableProps<T> {
   onRowClick?: (row: T) => void;
   /** When set, renders a checkbox column and a bulk action bar. */
   selection?: SelectionMode;
+  /** When set, the toolbar gains a "Columns" menu that hides columns and
+   *  persists the choice to `localStorage["pdt:{storageKey}:hidden"]`. */
+  storageKey?: string;
 }
 
 const alignClass = (a?: "left" | "right") => (a === "right" ? "text-right" : "text-left");
@@ -78,6 +91,7 @@ export function ProDataTable<T>({
   server,
   onRowClick,
   selection,
+  storageKey,
 }: ProDataTableProps<T>) {
   const t = useT();
   const [query, setQuery] = useState("");
@@ -108,8 +122,40 @@ export function ProDataTable<T>({
   const current = server ? server.page : Math.min(page, pageCount - 1);
   const start = current * effPageSize;
   const rows = server ? filtered : filtered.slice(start, start + effPageSize);
-  const colSpan = columns.length + (rowActions ? 1 : 0) + (selection ? 1 : 0);
   const showSkeleton = data === null || (server?.loading ?? false);
+
+  // Column visibility (only active when storageKey is set).
+  const [hidden, setHidden] = useState<Set<string>>(new Set());
+  useEffect(() => {
+    if (!storageKey) return;
+    try {
+      const raw = localStorage.getItem(`pdt:${storageKey}:hidden`);
+      // localStorage is browser-only, so this can't run during render/SSR.
+      // eslint-disable-next-line react-hooks/set-state-in-effect
+      if (raw) setHidden(new Set(JSON.parse(raw) as string[]));
+    } catch {} // 损坏的存储值静默忽略,等同默认全显
+  }, [storageKey]);
+
+  function toggleColumn(key: string) {
+    setHidden((prev) => {
+      const next = new Set(prev);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
+      if (storageKey) {
+        try {
+          localStorage.setItem(`pdt:${storageKey}:hidden`, JSON.stringify([...next]));
+        } catch {}
+      }
+      return next;
+    });
+  }
+
+  const visibleColumns = useMemo(
+    () => (storageKey ? columns.filter((c) => !hidden.has(c.key)) : columns),
+    [columns, hidden, storageKey],
+  );
+
+  const colSpan = visibleColumns.length + (rowActions ? 1 : 0) + (selection ? 1 : 0);
 
   // Current-page selection state (rows are the current page's rows).
   const pageKeys = rows.map((r) => getRowKey(r));
@@ -149,7 +195,7 @@ export function ProDataTable<T>({
 
   return (
     <Card className="gap-0 p-0">
-      {(search || toolbar) && (
+      {(search || toolbar || storageKey) && (
         <div className="flex flex-wrap items-center gap-2 border-b px-3 py-2.5">
           {search && (
             <div className="flex h-8 min-w-0 flex-1 items-center gap-2 rounded-lg border bg-muted/40 px-2.5 text-muted-foreground sm:max-w-xs">
@@ -163,7 +209,31 @@ export function ProDataTable<T>({
               />
             </div>
           )}
-          {toolbar && <div className="ml-auto flex items-center gap-2">{toolbar}</div>}
+          {storageKey && (
+            <DropdownMenu>
+              <DropdownMenuTrigger
+                render={<Button variant="outline" size="sm" className="ml-auto text-muted-foreground" />}
+              >
+                <Columns3 className="size-3.5" />
+                {t("table.columns")}
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end">
+                {columns
+                  .filter((c) => c.hideable !== false)
+                  .map((c) => (
+                    <DropdownMenuItem key={c.key} closeOnClick={false} onClick={() => toggleColumn(c.key)}>
+                      <span className="flex size-4 items-center justify-center">
+                        {!hidden.has(c.key) && <Check className="size-3.5" />}
+                      </span>
+                      {c.title ?? c.key}
+                    </DropdownMenuItem>
+                  ))}
+              </DropdownMenuContent>
+            </DropdownMenu>
+          )}
+          {toolbar && (
+            <div className={cn("flex items-center gap-2", !storageKey && "ml-auto")}>{toolbar}</div>
+          )}
         </div>
       )}
 
@@ -203,7 +273,7 @@ export function ProDataTable<T>({
                 />
               </TableHead>
             )}
-            {columns.map((c) => (
+            {visibleColumns.map((c) => (
               <TableHead
                 key={c.key}
                 className={cn(
@@ -259,7 +329,7 @@ export function ProDataTable<T>({
                     />
                   </TableCell>
                 )}
-                {columns.map((c) => (
+                {visibleColumns.map((c) => (
                   <TableCell
                     key={c.key}
                     className={cn("py-2.5", alignClass(c.align), c.cellClassName)}
