@@ -18,6 +18,7 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
+import { useT } from "@/components/locale-provider";
 
 interface LedgerRow {
   id: number;
@@ -66,6 +67,7 @@ export function CustomerLedgerSheet({
   label: string;
   onClose: () => void;
 }) {
+  const t = useT();
   const [rows, setRows] = useState<LedgerRow[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
@@ -87,12 +89,12 @@ export function CustomerLedgerSheet({
       setError(null);
     } catch (e) {
       if (!(e instanceof ApiError && e.status === 401)) {
-        setError(e instanceof ApiError ? e.message : "加载失败");
+        setError(e instanceof ApiError ? e.message : t("admin.ledger.sheet.loadFailed"));
       }
     } finally {
       setLoading(false);
     }
-  }, [tenantId]);
+  }, [tenantId, t]);
   useEffect(() => {
     load();
   }, [load]);
@@ -101,25 +103,29 @@ export function CustomerLedgerSheet({
     <Sheet open={tenantId != null} onOpenChange={(o) => !o && onClose()}>
       <SheetContent className="sm:max-w-xl">
         <SheetHeader>
-          <SheetTitle>{label} · 钱包流水</SheetTitle>
-          <SheetDescription>最近 50 条</SheetDescription>
+          <SheetTitle>
+            {label}
+            {t("admin.ledger.sheet.titleSuffix")}
+          </SheetTitle>
+          <SheetDescription>{t("admin.ledger.sheet.recentCount")}</SheetDescription>
         </SheetHeader>
 
         <div className="min-h-0 flex-1 overflow-y-auto rounded-lg border">
           <Table>
             <TableHeader className="sticky top-0 z-10 bg-muted/60 backdrop-blur">
               <TableRow>
-                <TableHead className="h-9">类型</TableHead>
-                <TableHead className="h-9 text-right">余额变动</TableHead>
-                <TableHead className="h-9 text-right">变动后余额</TableHead>
-                <TableHead className="h-9 text-right">时间</TableHead>
+                <TableHead className="h-9">{t("admin.ledger.sheet.col.kind")}</TableHead>
+                <TableHead className="h-9 text-right">{t("admin.ledger.sheet.col.deltaBalance")}</TableHead>
+                <TableHead className="h-9 text-right">{t("admin.ledger.sheet.col.balanceAfter")}</TableHead>
+                <TableHead className="h-9 text-right">{t("admin.ledger.sheet.col.time")}</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
               {error ? (
                 <TableRow className="hover:bg-transparent">
                   <TableCell colSpan={4} className="py-12 text-center text-sm text-muted-foreground">
-                    加载失败:{error}
+                    {t("admin.ledger.sheet.loadFailedPrefix")}
+                    {error}
                   </TableCell>
                 </TableRow>
               ) : loading && !rows ? (
@@ -133,7 +139,7 @@ export function CustomerLedgerSheet({
               ) : !rows || rows.length === 0 ? (
                 <TableRow className="hover:bg-transparent">
                   <TableCell colSpan={4} className="py-12 text-center text-sm text-muted-foreground">
-                    该客户暂无流水
+                    {t("admin.ledger.sheet.empty")}
                   </TableCell>
                 </TableRow>
               ) : (

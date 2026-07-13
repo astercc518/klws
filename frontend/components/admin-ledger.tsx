@@ -7,6 +7,7 @@ import { api, ApiError } from "@/lib/api";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { ProDataTable, type Column } from "@/components/admin/pro-data-table";
+import { useT } from "@/components/locale-provider";
 
 interface LedgerRow {
   id: number;
@@ -41,16 +42,17 @@ const refundStateVariant: Record<string, "default" | "secondary" | "outline"> = 
   rejected: "outline",
 };
 
-const KIND_TABS: { key: string; label: string }[] = [
-  { key: "", label: "全部" },
-  { key: "topup", label: "充值" },
-  { key: "settle", label: "结算" },
-  { key: "refund", label: "退款" },
-  { key: "adjust", label: "调整" },
+const KIND_TABS: { key: string; labelKey: string }[] = [
+  { key: "", labelKey: "admin.ledger.tab.all" },
+  { key: "topup", labelKey: "admin.ledger.tab.topup" },
+  { key: "settle", labelKey: "admin.ledger.tab.settle" },
+  { key: "refund", labelKey: "admin.ledger.tab.refund" },
+  { key: "adjust", labelKey: "admin.ledger.tab.adjust" },
 ];
 const PAGE_SIZE = 15;
 
 export function AdminLedger() {
+  const t = useT();
   const [rows, setRows] = useState<LedgerRow[] | null>(null);
   const [total, setTotal] = useState(0);
   const [refunds, setRefunds] = useState<RefundRow[] | null>(null);
@@ -75,12 +77,12 @@ export function AdminLedger() {
       setError(null);
     } catch (e) {
       if (!(e instanceof ApiError && e.status === 401)) {
-        setError(e instanceof ApiError ? e.message : "加载失败");
+        setError(e instanceof ApiError ? e.message : t("admin.ledger.loadFailed"));
       }
     } finally {
       setLoading(false);
     }
-  }, [page, query, kind]);
+  }, [page, query, kind, t]);
 
   useEffect(() => {
     load();
@@ -93,26 +95,28 @@ export function AdminLedger() {
     try {
       await api.download(`/admin/finance/ledger/export?${params.toString()}`, "ledger.csv");
     } catch (e) {
-      toast.error("导出失败", { description: e instanceof ApiError ? e.message : "请重试" });
+      toast.error(t("admin.ledger.exportFailedTitle"), {
+        description: e instanceof ApiError ? e.message : t("admin.ledger.retry"),
+      });
     }
   }
 
   const tenantLabel = (r: LedgerRow) => r.tenant_name ?? `#${r.tenant_id}`;
 
   const ledgerCols: Column<LedgerRow>[] = [
-    { key: "kind", header: "类型", cell: (r) => <Badge variant="outline">{r.kind}</Badge> },
-    { key: "tenant", header: "租户", cell: (r) => <span className="text-sm text-muted-foreground">{tenantLabel(r)}</span> },
-    { key: "delta_balance", header: "余额变动", align: "right", cell: (r) => <Money cents={r.delta_balance} /> },
-    { key: "delta_frozen", header: "冻结变动", align: "right", cell: (r) => <span className="font-mono tabular-nums text-muted-foreground">{usd(r.delta_frozen)}</span> },
-    { key: "balance_after", header: "变动后余额", align: "right", cell: (r) => <span className="font-mono tabular-nums">{usd(r.balance_after)}</span> },
-    { key: "created_at", header: "时间", cell: (r) => <span className="font-mono text-xs text-muted-foreground">{r.created_at}</span> },
+    { key: "kind", header: t("admin.ledger.col.kind"), cell: (r) => <Badge variant="outline">{r.kind}</Badge> },
+    { key: "tenant", header: t("admin.ledger.col.tenant"), cell: (r) => <span className="text-sm text-muted-foreground">{tenantLabel(r)}</span> },
+    { key: "delta_balance", header: t("admin.ledger.col.deltaBalance"), align: "right", cell: (r) => <Money cents={r.delta_balance} /> },
+    { key: "delta_frozen", header: t("admin.ledger.col.deltaFrozen"), align: "right", cell: (r) => <span className="font-mono tabular-nums text-muted-foreground">{usd(r.delta_frozen)}</span> },
+    { key: "balance_after", header: t("admin.ledger.col.balanceAfter"), align: "right", cell: (r) => <span className="font-mono tabular-nums">{usd(r.balance_after)}</span> },
+    { key: "created_at", header: t("admin.ledger.col.time"), cell: (r) => <span className="font-mono text-xs text-muted-foreground">{r.created_at}</span> },
   ];
 
   const refundCols: Column<RefundRow>[] = [
-    { key: "tenant", header: "租户", cell: (r) => <span className="text-sm text-muted-foreground">#{r.tenant_id}</span> },
-    { key: "amount", header: "金额", align: "right", cell: (r) => <span className="font-mono tabular-nums">{usd(r.amount)}</span> },
-    { key: "reason", header: "原因", cell: (r) => <span className="text-sm">{r.reason}</span> },
-    { key: "state", header: "状态", cell: (r) => <Badge variant={refundStateVariant[r.state] ?? "outline"}>{r.state}</Badge> },
+    { key: "tenant", header: t("admin.ledger.col.tenant"), cell: (r) => <span className="text-sm text-muted-foreground">#{r.tenant_id}</span> },
+    { key: "amount", header: t("admin.ledger.col.amount"), align: "right", cell: (r) => <span className="font-mono tabular-nums">{usd(r.amount)}</span> },
+    { key: "reason", header: t("admin.ledger.col.reason"), cell: (r) => <span className="text-sm">{r.reason}</span> },
+    { key: "state", header: t("admin.ledger.col.state"), cell: (r) => <Badge variant={refundStateVariant[r.state] ?? "outline"}>{r.state}</Badge> },
   ];
 
   return (
@@ -120,25 +124,25 @@ export function AdminLedger() {
       <section className="space-y-3">
         <div className="flex flex-wrap items-center justify-between gap-2">
           <div className="inline-flex flex-wrap rounded-lg border bg-muted/40 p-0.5">
-            {KIND_TABS.map((t) => (
+            {KIND_TABS.map((tab) => (
               <button
-                key={t.key || "all"}
+                key={tab.key || "all"}
                 onClick={() => {
-                  setKind(t.key);
+                  setKind(tab.key);
                   setPage(0);
                 }}
                 className={
                   "rounded-md px-3 py-1.5 text-sm font-medium transition-colors " +
-                  (kind === t.key ? "bg-background text-foreground shadow-sm" : "text-muted-foreground hover:text-foreground")
+                  (kind === tab.key ? "bg-background text-foreground shadow-sm" : "text-muted-foreground hover:text-foreground")
                 }
               >
-                {t.label}
+                {t(tab.labelKey)}
               </button>
             ))}
           </div>
           <Button variant="outline" size="sm" className="gap-1.5" onClick={exportCsv}>
             <Download className="size-4" />
-            导出 CSV
+            {t("admin.ledger.exportCsv")}
           </Button>
         </div>
 
@@ -147,8 +151,8 @@ export function AdminLedger() {
           error={error}
           columns={ledgerCols}
           getRowKey={(r) => `l${r.id}`}
-          emptyState="暂无流水"
-          search={{ placeholder: "搜索租户 ID…", accessor: () => "" }}
+          emptyState={t("admin.ledger.emptyLedger")}
+          search={{ placeholder: t("admin.ledger.searchPlaceholder"), accessor: () => "" }}
           server={{
             total,
             page,
@@ -162,18 +166,18 @@ export function AdminLedger() {
             loading,
           }}
         />
-        <p className="font-mono text-xs text-muted-foreground">搜索框按租户 ID 精确筛选 · 导出为当前筛选的全量结果</p>
+        <p className="font-mono text-xs text-muted-foreground">{t("admin.ledger.searchHint")}</p>
       </section>
 
       <section className="space-y-2">
-        <p className="font-mono text-xs uppercase tracking-wider text-muted-foreground">退款申请 · 仅显示最近 100 条</p>
+        <p className="font-mono text-xs uppercase tracking-wider text-muted-foreground">{t("admin.ledger.refundCaption")}</p>
         <ProDataTable
           data={refunds}
           error={error}
           columns={refundCols}
           getRowKey={(r) => `r${r.id}`}
-          search={{ placeholder: "搜索原因…", accessor: (r) => `${r.tenant_id} ${r.reason}` }}
-          emptyState="暂无退款申请"
+          search={{ placeholder: t("admin.ledger.refundSearchPlaceholder"), accessor: (r) => `${r.tenant_id} ${r.reason}` }}
+          emptyState={t("admin.ledger.emptyRefunds")}
         />
       </section>
     </div>

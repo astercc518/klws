@@ -21,6 +21,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
+import { useT } from "@/components/locale-provider";
 
 /** Shared shape for the tenant-scoped dialogs below. `label` is shown in
  *  dialog copy/toasts — the caller passes the customer's account email. */
@@ -51,6 +52,7 @@ export function TopupDialog({
   onClose: () => void;
   onDone: () => void;
 }) {
+  const t = useT();
   const [amount, setAmount] = useState("");
   const [ref, setRef] = useState("");
   const [busy, setBusy] = useState(false);
@@ -75,11 +77,15 @@ export function TopupDialog({
         amount: cents,
         ref: ref.trim(),
       });
-      toast.success("充值成功", { description: `${target.label} +$${(cents / 100).toFixed(2)}` });
+      toast.success(t("admin.users.dlg.topupSuccessTitle"), {
+        description: `${target.label} +$${(cents / 100).toFixed(2)}`,
+      });
       onClose();
       onDone();
     } catch (e) {
-      toast.error("充值失败", { description: e instanceof ApiError ? e.message : "请重试" });
+      toast.error(t("admin.users.dlg.topupFailedTitle"), {
+        description: e instanceof ApiError ? e.message : t("admin.users.dlg.retry"),
+      });
     } finally {
       setBusy(false);
     }
@@ -89,15 +95,18 @@ export function TopupDialog({
     <Dialog open={target != null} onOpenChange={(o) => !o && onClose()}>
       <DialogContent className="sm:max-w-md">
         <DialogHeader>
-          <DialogTitle>充值 Top-up</DialogTitle>
+          <DialogTitle>{t("admin.users.dlg.topupTitle")}</DialogTitle>
           <DialogDescription>
-            为 <span className="font-mono">{target?.label}</span> 的钱包手动加款。请再次核对金额。
+            {t("admin.users.dlg.topupDescPrefix")}
+            <span className="font-mono">{target?.label}</span>
+            {t("admin.users.dlg.topupDescSuffix")}
           </DialogDescription>
         </DialogHeader>
         <div className="space-y-4 py-1">
           <div className="space-y-2">
             <label htmlFor="topup-amount" className="text-sm font-medium">
-              充值金额 <span className="font-mono text-xs text-muted-foreground">USD</span>
+              {t("admin.users.dlg.topupAmountLabel")}{" "}
+              <span className="font-mono text-xs text-muted-foreground">USD</span>
             </label>
             <Input
               id="topup-amount"
@@ -112,7 +121,8 @@ export function TopupDialog({
           </div>
           <div className="space-y-2">
             <label htmlFor="topup-ref" className="text-sm font-medium">
-              流水号 <span className="font-mono text-xs text-muted-foreground">幂等键</span>
+              {t("admin.users.dlg.refLabel")}{" "}
+              <span className="font-mono text-xs text-muted-foreground">{t("admin.users.dlg.refHint")}</span>
             </label>
             <Input
               id="topup-ref"
@@ -123,9 +133,9 @@ export function TopupDialog({
           </div>
         </div>
         <DialogFooter>
-          <DialogClose render={<Button variant="ghost" />}>取消</DialogClose>
+          <DialogClose render={<Button variant="ghost" />}>{t("admin.users.dlg.cancel")}</DialogClose>
           <Button onClick={submit} disabled={!valid}>
-            {busy ? "提交中…" : "确认充值"}
+            {busy ? t("admin.users.dlg.submitting") : t("admin.users.dlg.confirmTopup")}
           </Button>
         </DialogFooter>
       </DialogContent>
@@ -146,6 +156,7 @@ export function PricingDialog({
   onClose: () => void;
   onDone: () => void;
 }) {
+  const t = useT();
   const [country, setCountry] = useState("US");
   const [price, setPrice] = useState("");
   const [busy, setBusy] = useState(false);
@@ -169,13 +180,15 @@ export function PricingDialog({
         country: country.trim().toUpperCase(),
         unit_price: cents,
       });
-      toast.success("单价已更新", {
-        description: `${country.toUpperCase()} → $${(cents / 100).toFixed(2)} / 条`,
+      toast.success(t("admin.users.dlg.pricingUpdatedTitle"), {
+        description: `${country.toUpperCase()} → $${(cents / 100).toFixed(2)}${t("admin.users.dlg.perMessageUnitSuffix")}`,
       });
       onClose();
       onDone();
     } catch (e) {
-      toast.error("设置失败", { description: e instanceof ApiError ? e.message : "请重试" });
+      toast.error(t("admin.users.dlg.pricingFailedTitle"), {
+        description: e instanceof ApiError ? e.message : t("admin.users.dlg.retry"),
+      });
     } finally {
       setBusy(false);
     }
@@ -185,15 +198,18 @@ export function PricingDialog({
     <Dialog open={target != null} onOpenChange={(o) => !o && onClose()}>
       <DialogContent className="sm:max-w-md">
         <DialogHeader>
-          <DialogTitle>配置发信单价</DialogTitle>
+          <DialogTitle>{t("admin.users.dlg.pricingTitle")}</DialogTitle>
           <DialogDescription>
-            为 <span className="font-mono">{target?.label}</span> 设置指定国家的每条单价。
+            {t("admin.users.dlg.pricingDescPrefix")}
+            <span className="font-mono">{target?.label}</span>
+            {t("admin.users.dlg.pricingDescSuffix")}
           </DialogDescription>
         </DialogHeader>
         <div className="space-y-4 py-1">
           <div className="space-y-2">
             <label htmlFor="price-country" className="text-sm font-medium">
-              国家 <span className="font-mono text-xs text-muted-foreground">ISO-2</span>
+              {t("admin.users.dlg.countryLabel")}{" "}
+              <span className="font-mono text-xs text-muted-foreground">ISO-2</span>
             </label>
             <Input
               id="price-country"
@@ -205,7 +221,8 @@ export function PricingDialog({
           </div>
           <div className="space-y-2">
             <label htmlFor="price-unit" className="text-sm font-medium">
-              每条单价 <span className="font-mono text-xs text-muted-foreground">USD</span>
+              {t("admin.users.dlg.perMessagePriceLabel")}{" "}
+              <span className="font-mono text-xs text-muted-foreground">USD</span>
             </label>
             <Input
               id="price-unit"
@@ -220,9 +237,9 @@ export function PricingDialog({
           </div>
         </div>
         <DialogFooter>
-          <DialogClose render={<Button variant="ghost" />}>取消</DialogClose>
+          <DialogClose render={<Button variant="ghost" />}>{t("admin.users.dlg.cancel")}</DialogClose>
           <Button onClick={submit} disabled={!valid}>
-            {busy ? "提交中…" : "确认设置"}
+            {busy ? t("admin.users.dlg.submitting") : t("admin.users.dlg.confirmPricing")}
           </Button>
         </DialogFooter>
       </DialogContent>
@@ -245,6 +262,7 @@ export function AssignSalesDialog({
   onClose: () => void;
   onDone: () => void;
 }) {
+  const t = useT();
   const [salesId, setSalesId] = useState<string>("");
   const [busy, setBusy] = useState(false);
 
@@ -259,13 +277,15 @@ export function AssignSalesDialog({
     setBusy(true);
     try {
       await api.post(`/admin/sales/${target.tenantId}/assign`, { sales_user_id: Number(salesId) });
-      toast.success("已指派销售", {
+      toast.success(t("admin.users.dlg.assignedTitle"), {
         description: `${target.label} → ${salesUsers.find((s) => String(s.id) === salesId)?.email ?? salesId}`,
       });
       onClose();
       onDone();
     } catch (e) {
-      toast.error("指派失败", { description: e instanceof ApiError ? e.message : "请重试" });
+      toast.error(t("admin.users.dlg.assignFailedTitle"), {
+        description: e instanceof ApiError ? e.message : t("admin.users.dlg.retry"),
+      });
     } finally {
       setBusy(false);
     }
@@ -275,15 +295,17 @@ export function AssignSalesDialog({
     <Dialog open={target != null} onOpenChange={(o) => !o && onClose()}>
       <DialogContent className="sm:max-w-md">
         <DialogHeader>
-          <DialogTitle>指派销售归属</DialogTitle>
+          <DialogTitle>{t("admin.users.dlg.assignTitle")}</DialogTitle>
           <DialogDescription>
-            为 <span className="font-mono">{target?.label}</span> 选择负责的销售账号。
+            {t("admin.users.dlg.assignDescPrefix")}
+            <span className="font-mono">{target?.label}</span>
+            {t("admin.users.dlg.assignDescSuffix")}
           </DialogDescription>
         </DialogHeader>
         <div className="space-y-2 py-1">
-          <label htmlFor="assign-sales" className="text-sm font-medium">销售账号</label>
+          <label htmlFor="assign-sales" className="text-sm font-medium">{t("admin.users.dlg.salesAccountLabel")}</label>
           {salesUsers.length === 0 ? (
-            <p className="text-sm text-muted-foreground">暂无销售账号,请先创建一个 sales 用户。</p>
+            <p className="text-sm text-muted-foreground">{t("admin.users.dlg.noSalesUsers")}</p>
           ) : (
             <select
               id="assign-sales"
@@ -291,7 +313,7 @@ export function AssignSalesDialog({
               onChange={(e) => setSalesId(e.target.value)}
               className="h-9 w-full rounded-lg border bg-transparent px-2.5 text-sm outline-none"
             >
-              <option value="" disabled>选择销售…</option>
+              <option value="" disabled>{t("admin.users.dlg.selectSalesPlaceholder")}</option>
               {salesUsers.map((s) => (
                 <option key={s.id} value={String(s.id)}>{s.email}</option>
               ))}
@@ -299,8 +321,10 @@ export function AssignSalesDialog({
           )}
         </div>
         <DialogFooter>
-          <DialogClose render={<Button variant="ghost" />}>取消</DialogClose>
-          <Button onClick={submit} disabled={!valid}>{busy ? "提交中…" : "确认指派"}</Button>
+          <DialogClose render={<Button variant="ghost" />}>{t("admin.users.dlg.cancel")}</DialogClose>
+          <Button onClick={submit} disabled={!valid}>
+            {busy ? t("admin.users.dlg.submitting") : t("admin.users.dlg.confirmAssign")}
+          </Button>
         </DialogFooter>
       </DialogContent>
     </Dialog>

@@ -9,6 +9,7 @@ import { Card } from "@/components/ui/card";
 import { StatCard, MetricCardGroup } from "@/components/admin/stat-card";
 import { ProDataTable, type Column } from "@/components/admin/pro-data-table";
 import { BillingTrendChart, type DailyPoint } from "@/components/billing-trend-chart";
+import { useT } from "@/components/locale-provider";
 
 interface Summary {
   topup: number;
@@ -40,10 +41,10 @@ interface Bill {
 const usd = (cents: number) =>
   new Intl.NumberFormat("en-US", { style: "currency", currency: "USD" }).format(cents / 100);
 
-const RANGES: { key: string; label: string; days: number }[] = [
-  { key: "7", label: "近 7 天", days: 7 },
-  { key: "30", label: "近 30 天", days: 30 },
-  { key: "90", label: "近 90 天", days: 90 },
+const RANGES: { key: string; labelKey: string; days: number }[] = [
+  { key: "7", labelKey: "admin.billing.range.7d", days: 7 },
+  { key: "30", labelKey: "admin.billing.range.30d", days: 30 },
+  { key: "90", labelKey: "admin.billing.range.90d", days: 90 },
 ];
 
 // Compute a YYYY-MM-DD pair for the last N days ending today (client-local).
@@ -56,6 +57,7 @@ function rangeParams(days: number): { from: string; to: string } {
 }
 
 export function AdminBilling() {
+  const t = useT();
   const [rangeKey, setRangeKey] = useState("30");
   const [stats, setStats] = useState<Stats | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -71,27 +73,29 @@ export function AdminBilling() {
       setError(null);
     } catch (e) {
       if (!(e instanceof ApiError && e.status === 401)) {
-        setError(e instanceof ApiError ? e.message : "加载失败");
+        setError(e instanceof ApiError ? e.message : t("admin.billing.loadFailed"));
       }
     }
-  }, [days]);
+  }, [days, t]);
 
   useEffect(() => {
     loadStats();
   }, [loadStats]);
 
   const loadBill = useCallback(
-    async (t: TenantSpend) => {
+    async (tenant: TenantSpend) => {
       const { from, to } = rangeParams(days);
-      setSelected(t);
+      setSelected(tenant);
       setBill(null);
       try {
-        setBill(await api.get<Bill>(`/admin/finance/bill?tenant_id=${t.tenant_id}&from=${from}&to=${to}`));
+        setBill(await api.get<Bill>(`/admin/finance/bill?tenant_id=${tenant.tenant_id}&from=${from}&to=${to}`));
       } catch (e) {
-        toast.error("加载账单失败", { description: e instanceof ApiError ? e.message : "请重试" });
+        toast.error(t("admin.billing.billLoadFailedTitle"), {
+          description: e instanceof ApiError ? e.message : t("admin.billing.retry"),
+        });
       }
     },
-    [days],
+    [days, t],
   );
 
   async function exportBill() {
@@ -103,7 +107,9 @@ export function AdminBilling() {
         `bill-${selected.tenant_id}.csv`,
       );
     } catch (e) {
-      toast.error("导出失败", { description: e instanceof ApiError ? e.message : "请重试" });
+      toast.error(t("admin.billing.exportFailedTitle"), {
+        description: e instanceof ApiError ? e.message : t("admin.billing.retry"),
+      });
     }
   }
 
@@ -118,7 +124,7 @@ export function AdminBilling() {
             (rangeKey === r.key ? "bg-background text-foreground shadow-sm" : "text-muted-foreground hover:text-foreground")
           }
         >
-          {r.label}
+          {t(r.labelKey)}
         </button>
       ))}
     </div>
@@ -131,17 +137,22 @@ export function AdminBilling() {
         <div className="flex items-center justify-between gap-3">
           <Button variant="ghost" size="sm" className="gap-1.5" onClick={() => { setSelected(null); setBill(null); }}>
             <ArrowLeft className="size-4" />
-            返回大盘
+            {t("admin.billing.backToOverview")}
           </Button>
           <Button variant="outline" size="sm" className="gap-1.5" onClick={exportBill} disabled={!bill}>
             <Download className="size-4" />
-            导出 CSV
+            {t("admin.billing.exportCsv")}
           </Button>
         </div>
 
         <div>
-          <h2 className="text-lg font-semibold">{selected.name || `租户 #${selected.tenant_id}`}</h2>
-          <p className="font-mono text-xs text-muted-foreground">账期口径:Asia/Shanghai · {RANGES.find((r) => r.key === rangeKey)?.label}</p>
+          <h2 className="text-lg font-semibold">
+            {selected.name || t("admin.billing.tenantFallback").replace("{id}", () => String(selected.tenant_id))}
+          </h2>
+          <p className="font-mono text-xs text-muted-foreground">
+            {t("admin.billing.periodBasisPrefix")}
+            {t(RANGES.find((r) => r.key === rangeKey)?.labelKey ?? RANGES[1].labelKey)}
+          </p>
         </div>
 
         {!bill ? (
@@ -149,13 +160,13 @@ export function AdminBilling() {
         ) : (
           <>
             <MetricCardGroup>
-              <StatCard accent="neutral" label="期初余额" value={usd(bill.opening)} icon={Wallet} />
-              <StatCard accent="emerald" label="充值" value={usd(bill.summary.topup)} icon={Wallet} />
-              <StatCard accent="rose" label="消耗" value={usd(bill.summary.settle)} icon={TrendingDown} />
-              <StatCard accent="brand" label="期末余额" value={usd(bill.closing)} icon={Scale} />
+              <StatCard accent="neutral" label={t("admin.billing.openingBalance")} value={usd(bill.opening)} icon={Wallet} />
+              <StatCard accent="emerald" label={t("admin.billing.topup")} value={usd(bill.summary.topup)} icon={Wallet} />
+              <StatCard accent="rose" label={t("admin.billing.settle")} value={usd(bill.summary.settle)} icon={TrendingDown} />
+              <StatCard accent="brand" label={t("admin.billing.closingBalance")} value={usd(bill.closing)} icon={Scale} />
             </MetricCardGroup>
             <Card className="p-5">
-              <p className="mb-3 font-mono text-xs uppercase tracking-wider text-muted-foreground">按天充值 / 消耗</p>
+              <p className="mb-3 font-mono text-xs uppercase tracking-wider text-muted-foreground">{t("admin.billing.dailyTopupSettle")}</p>
               <BillingTrendChart daily={bill.daily} />
             </Card>
           </>
@@ -165,12 +176,18 @@ export function AdminBilling() {
   }
 
   // --- platform dashboard ---
-  if (error) return <Card className="p-5 text-sm text-muted-foreground">加载失败:{error}</Card>;
+  if (error)
+    return (
+      <Card className="p-5 text-sm text-muted-foreground">
+        {t("admin.billing.loadFailedPrefix")}
+        {error}
+      </Card>
+    );
 
   const tenantCols: Column<TenantSpend>[] = [
-    { key: "name", header: "租户", cell: (t) => <span className="text-sm">{t.name || `#${t.tenant_id}`}</span> },
-    { key: "settle", header: "消耗", align: "right", cell: (t) => <span className="font-mono tabular-nums text-rose-600 dark:text-rose-400">{usd(t.settle)}</span> },
-    { key: "topup", header: "充值", align: "right", cell: (t) => <span className="font-mono tabular-nums text-emerald-600 dark:text-emerald-400">{usd(t.topup)}</span> },
+    { key: "name", header: t("admin.billing.col.tenant"), cell: (row) => <span className="text-sm">{row.name || `#${row.tenant_id}`}</span> },
+    { key: "settle", header: t("admin.billing.settle"), align: "right", cell: (row) => <span className="font-mono tabular-nums text-rose-600 dark:text-rose-400">{usd(row.settle)}</span> },
+    { key: "topup", header: t("admin.billing.topup"), align: "right", cell: (row) => <span className="font-mono tabular-nums text-emerald-600 dark:text-emerald-400">{usd(row.topup)}</span> },
   ];
 
   return (
@@ -182,29 +199,29 @@ export function AdminBilling() {
       ) : (
         <>
           <MetricCardGroup>
-            <StatCard accent="emerald" label="总充值" value={usd(stats.summary.topup)} icon={Wallet} />
-            <StatCard accent="rose" label="总消耗" value={usd(stats.summary.settle)} icon={TrendingDown} />
-            <StatCard accent="amber" label="总退款" value={usd(stats.summary.refund)} icon={RotateCcw} />
-            <StatCard accent="brand" label="净额" value={usd(stats.summary.net)} sub="充值−消耗+退款+调整" icon={Scale} />
+            <StatCard accent="emerald" label={t("admin.billing.totalTopup")} value={usd(stats.summary.topup)} icon={Wallet} />
+            <StatCard accent="rose" label={t("admin.billing.totalSettle")} value={usd(stats.summary.settle)} icon={TrendingDown} />
+            <StatCard accent="amber" label={t("admin.billing.totalRefund")} value={usd(stats.summary.refund)} icon={RotateCcw} />
+            <StatCard accent="brand" label={t("admin.billing.netAmount")} value={usd(stats.summary.net)} sub={t("admin.billing.netFormula")} icon={Scale} />
           </MetricCardGroup>
 
           <Card className="p-5">
-            <p className="mb-3 font-mono text-xs uppercase tracking-wider text-muted-foreground">按天充值 / 消耗</p>
+            <p className="mb-3 font-mono text-xs uppercase tracking-wider text-muted-foreground">{t("admin.billing.dailyTopupSettle")}</p>
             <BillingTrendChart daily={stats.daily} />
           </Card>
 
           <section className="space-y-2">
-            <p className="font-mono text-xs uppercase tracking-wider text-muted-foreground">租户消耗排行 · Top 20 · 点击查看账单</p>
+            <p className="font-mono text-xs uppercase tracking-wider text-muted-foreground">{t("admin.billing.rankingCaption")}</p>
             <ProDataTable
               data={stats.top_tenants}
               columns={tenantCols}
-              getRowKey={(t) => t.tenant_id}
-              onRowClick={(t) => loadBill(t)}
-              emptyState="该账期暂无消耗记录"
+              getRowKey={(row) => row.tenant_id}
+              onRowClick={(row) => loadBill(row)}
+              emptyState={t("admin.billing.emptyState")}
             />
           </section>
 
-          <p className="font-mono text-xs text-muted-foreground">金额单位 USD · 数据源 wallet_ledger · 时区 Asia/Shanghai</p>
+          <p className="font-mono text-xs text-muted-foreground">{t("admin.billing.footnote")}</p>
         </>
       )}
     </div>
