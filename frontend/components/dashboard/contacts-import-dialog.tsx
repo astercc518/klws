@@ -21,6 +21,7 @@ import {
   DialogTitle,
   DialogTrigger,
 } from "@/components/ui/dialog";
+import { useT } from "@/components/locale-provider";
 
 interface ImportReport {
   batch_id: number;
@@ -38,6 +39,7 @@ function lineCount(raw: string): number {
 }
 
 export function ImportContactsDialog({ onDone }: { onDone: () => void }) {
+  const t = useT();
   const [open, setOpen] = useState(false);
   const [text, setText] = useState("");
   const [filename, setFilename] = useState("");
@@ -75,7 +77,7 @@ export function ImportContactsDialog({ onDone }: { onDone: () => void }) {
       setReport(rep);
       onDone();
     } catch (e) {
-      toast.error("导入失败", { description: e instanceof ApiError ? e.message : "请重试" });
+      toast.error(t("dash.import.failed"), { description: e instanceof ApiError ? e.message : t("dash.import.retry") });
     } finally {
       setBusy(false);
     }
@@ -91,32 +93,34 @@ export function ImportContactsDialog({ onDone }: { onDone: () => void }) {
     >
       <DialogTrigger render={<Button size="sm" className="gap-1.5" />}>
         <Plus className="size-4" />
-        导入联系人
+        {t("dash.import.trigger")}
       </DialogTrigger>
 
       <DialogContent className="sm:max-w-lg">
         <DialogHeader>
-          <DialogTitle>批量导入联系人</DialogTitle>
+          <DialogTitle>{t("dash.import.title")}</DialogTitle>
           <DialogDescription>
-            每行一个号码,或用逗号分隔;也可选择一个文本/CSV 文件,内容会追加到粘贴框。
+            {t("dash.import.desc")}
           </DialogDescription>
         </DialogHeader>
 
         {report ? (
           <div className="space-y-3 py-1">
             <div className="grid grid-cols-4 gap-2 text-center">
-              <ReportTile label="总数" value={report.total} />
-              <ReportTile label="新增" value={report.inserted} tone="positive" />
-              <ReportTile label="重复" value={report.duplicates} tone="warning" />
-              <ReportTile label="无效" value={report.invalid} tone="negative" />
+              <ReportTile label={t("dash.import.report.total")} value={report.total} />
+              <ReportTile label={t("dash.import.report.inserted")} value={report.inserted} tone="positive" />
+              <ReportTile label={t("dash.import.report.duplicates")} value={report.duplicates} tone="warning" />
+              <ReportTile label={t("dash.import.report.invalid")} value={report.invalid} tone="negative" />
             </div>
-            <p className="font-mono text-[11px] text-muted-foreground">批次号 #{report.batch_id}</p>
+            <p className="font-mono text-[11px] text-muted-foreground">
+              {t("dash.import.batchNumber").replace("{id}", () => String(report.batch_id))}
+            </p>
           </div>
         ) : (
           <div className="space-y-4 py-1">
             <div className="space-y-2">
               <label htmlFor="import-country" className="text-sm font-medium">
-                目标国家 <span className="font-mono text-xs text-muted-foreground">ISO-2,用于号码归一化</span>
+                {t("dash.import.countryLabel")} <span className="font-mono text-xs text-muted-foreground">{t("dash.import.countryHint")}</span>
               </label>
               <Input
                 id="import-country"
@@ -129,14 +133,14 @@ export function ImportContactsDialog({ onDone }: { onDone: () => void }) {
             </div>
             <div className="space-y-2">
               <div className="flex items-center justify-between">
-                <label htmlFor="import-text" className="text-sm font-medium">号码列表</label>
-                <span className="font-mono text-xs tabular-nums text-muted-foreground">{count} 个号码</span>
+                <label htmlFor="import-text" className="text-sm font-medium">{t("dash.import.phoneListLabel")}</label>
+                <span className="font-mono text-xs tabular-nums text-muted-foreground">{t("dash.import.countSuffix").replace("{n}", () => String(count))}</span>
               </div>
               <Textarea
                 id="import-text"
                 value={text}
                 onChange={(e) => setText(e.target.value)}
-                placeholder={"每行一个号码,或用逗号分隔\n+8613800000000\n+8613900000000"}
+                placeholder={t("dash.import.phonesPlaceholder")}
                 className="h-40 resize-none font-mono text-sm"
               />
               <div className="flex items-center gap-2">
@@ -149,7 +153,7 @@ export function ImportContactsDialog({ onDone }: { onDone: () => void }) {
                 />
                 <Button type="button" variant="outline" size="sm" className="gap-1.5" onClick={() => fileRef.current?.click()}>
                   <Upload className="size-3.5" />
-                  选择文件
+                  {t("dash.import.chooseFile")}
                 </Button>
                 {filename && <span className="truncate text-xs text-muted-foreground">{filename}</span>}
               </div>
@@ -160,14 +164,14 @@ export function ImportContactsDialog({ onDone }: { onDone: () => void }) {
         <DialogFooter>
           {report ? (
             <>
-              <Button variant="ghost" onClick={reset}>再导入一批</Button>
-              <DialogClose render={<Button />}>完成</DialogClose>
+              <Button variant="ghost" onClick={reset}>{t("dash.import.again")}</Button>
+              <DialogClose render={<Button />}>{t("dash.import.done")}</DialogClose>
             </>
           ) : (
             <>
-              <DialogClose render={<Button variant="ghost" />}>取消</DialogClose>
+              <DialogClose render={<Button variant="ghost" />}>{t("dash.import.cancel")}</DialogClose>
               <Button onClick={submit} disabled={!valid}>
-                {busy ? "导入中…" : `确认导入 ${count} 条`}
+                {busy ? t("dash.import.importing") : t("dash.import.confirmImport").replace("{n}", () => String(count))}
               </Button>
             </>
           )}

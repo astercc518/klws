@@ -17,6 +17,7 @@ import {
   DialogTitle,
   DialogTrigger,
 } from "@/components/ui/dialog";
+import { useT } from "@/components/locale-provider";
 
 // Split non-empty lines / comma-separated entries into a trimmed phone list.
 function parsePhones(raw: string): string[] {
@@ -32,6 +33,7 @@ interface Segment {
 }
 
 export function NewCampaignDialog({ onDone }: { onDone?: () => void } = {}) {
+  const t = useT();
   const [open, setOpen] = useState(false);
   // Recipient source is exactly one of pasted phones XOR a saved segment —
   // mirrors the backend's createCampaignRequest contract (POST /campaigns
@@ -103,15 +105,17 @@ export function NewCampaignDialog({ onDone }: { onDone?: () => void } = {}) {
       setOpen(false);
       resetForm();
       const sentDesc =
-        source === "phones" ? `${count} 个号码已提交,后台将按受控速率发送` : `分段预计 ${previewCount ?? "—"} 个号码已提交`;
-      toast.success("群发任务已进入调度队列", { description: sentDesc });
+        source === "phones"
+          ? t("dash.newCampaign.queuedDescPhones").replace("{n}", () => String(count))
+          : t("dash.newCampaign.queuedDescSegment").replace("{n}", () => String(previewCount ?? "—"));
+      toast.success(t("dash.newCampaign.queuedTitle"), { description: sentDesc });
       onDone?.();
     } catch (e) {
       // 401 redirects globally; show the backend's message for everything else
       // (e.g. 余额不足 / 未配置单价).
       if (!(e instanceof ApiError && e.status === 401)) {
-        toast.error("提交失败", {
-          description: e instanceof ApiError ? e.message : "请稍后重试",
+        toast.error(t("dash.newCampaign.submitFailed"), {
+          description: e instanceof ApiError ? e.message : t("dash.newCampaign.submitFailedDesc"),
         });
       }
     } finally {
@@ -129,21 +133,21 @@ export function NewCampaignDialog({ onDone }: { onDone?: () => void } = {}) {
     >
       <DialogTrigger render={<Button size="lg" className="gap-2" />}>
         <Plus className="size-4" />
-        新建群发
+        {t("dash.newCampaign.trigger")}
       </DialogTrigger>
 
       <DialogContent className="sm:max-w-lg">
         <DialogHeader>
-          <DialogTitle>新建群发任务</DialogTitle>
+          <DialogTitle>{t("dash.newCampaign.title")}</DialogTitle>
           <DialogDescription>
-            粘贴收件号码,或从已保存的分段选取,写好文案后提交将按受控速率分散发送。
+            {t("dash.newCampaign.desc")}
           </DialogDescription>
         </DialogHeader>
 
         <div className="space-y-5 py-1">
           <div className="space-y-2">
             <label htmlFor="country" className="text-sm font-medium">
-              目标国家 <span className="font-mono text-xs text-muted-foreground">ISO-2,用于定价</span>
+              {t("dash.newCampaign.countryLabel")} <span className="font-mono text-xs text-muted-foreground">{t("dash.newCampaign.countryHint")}</span>
             </label>
             <Input
               id="country"
@@ -165,7 +169,7 @@ export function NewCampaignDialog({ onDone }: { onDone?: () => void } = {}) {
                   (source === "phones" ? "bg-background text-foreground shadow-sm" : "text-muted-foreground hover:text-foreground")
                 }
               >
-                粘贴号码
+                {t("dash.newCampaign.sourcePhones")}
               </button>
               <button
                 type="button"
@@ -175,7 +179,7 @@ export function NewCampaignDialog({ onDone }: { onDone?: () => void } = {}) {
                   (source === "segment" ? "bg-background text-foreground shadow-sm" : "text-muted-foreground hover:text-foreground")
                 }
               >
-                从分段选择
+                {t("dash.newCampaign.sourceSegment")}
               </button>
             </div>
           </div>
@@ -184,30 +188,30 @@ export function NewCampaignDialog({ onDone }: { onDone?: () => void } = {}) {
             <div className="space-y-2">
               <div className="flex items-center justify-between">
                 <label htmlFor="phones" className="text-sm font-medium">
-                  收件号码
+                  {t("dash.newCampaign.phonesLabel")}
                 </label>
                 <span className="font-mono text-xs tabular-nums text-muted-foreground">
-                  {count} 个号码
+                  {t("dash.newCampaign.countSuffix").replace("{n}", () => String(count))}
                 </span>
               </div>
               <Textarea
                 id="phones"
                 value={phones}
                 onChange={(e) => setPhones(e.target.value)}
-                placeholder={"每行一个号码,或用逗号分隔\n+8613800000000\n+8613900000000"}
+                placeholder={t("dash.newCampaign.phonesPlaceholder")}
                 className="h-28 resize-none font-mono text-sm"
               />
             </div>
           ) : (
             <div className="space-y-2">
               <label htmlFor="segment" className="text-sm font-medium">
-                收件分段
+                {t("dash.newCampaign.segmentLabel")}
               </label>
               {segments === null ? (
                 <div className="h-9 animate-pulse rounded-lg bg-muted motion-reduce:animate-none" />
               ) : segments.length === 0 ? (
                 <p className="text-sm text-muted-foreground">
-                  还没有已保存的分段,请先到「联系人 → 标签与分段」创建一个。
+                  {t("dash.newCampaign.noSegments")}
                 </p>
               ) : (
                 <select
@@ -216,7 +220,7 @@ export function NewCampaignDialog({ onDone }: { onDone?: () => void } = {}) {
                   onChange={(e) => setSegmentID(e.target.value)}
                   className="h-9 w-full rounded-lg border bg-transparent px-2.5 text-sm outline-none"
                 >
-                  <option value="" disabled>选择分段…</option>
+                  <option value="" disabled>{t("dash.newCampaign.chooseSegment")}</option>
                   {segments.map((s) => (
                     <option key={s.id} value={String(s.id)}>{s.name}</option>
                   ))}
@@ -225,7 +229,11 @@ export function NewCampaignDialog({ onDone }: { onDone?: () => void } = {}) {
               {segmentID && (
                 <p className="flex items-center gap-1.5 font-mono text-xs text-muted-foreground">
                   <Users className="size-3.5" />
-                  {previewing ? "计算预计发送量…" : previewCount !== null ? `预计发送量 ${previewCount} 个号码` : "预览失败"}
+                  {previewing
+                    ? t("dash.newCampaign.previewCalculating")
+                    : previewCount !== null
+                      ? t("dash.newCampaign.previewCount").replace("{n}", () => String(previewCount))
+                      : t("dash.newCampaign.previewFailed")}
                 </p>
               )}
             </div>
@@ -233,25 +241,25 @@ export function NewCampaignDialog({ onDone }: { onDone?: () => void } = {}) {
 
           <div className="space-y-2">
             <label htmlFor="body" className="text-sm font-medium">
-              营销文案 <span className="font-mono text-xs text-muted-foreground">Spintax</span>
+              {t("dash.newCampaign.bodyLabel")} <span className="font-mono text-xs text-muted-foreground">Spintax</span>
             </label>
             <Textarea
               id="body"
               value={body}
               onChange={(e) => setBody(e.target.value)}
-              placeholder={"{Hi|Hello} {{name}}, 限时优惠 {今天|本周} 截止…"}
+              placeholder={t("dash.newCampaign.bodyPlaceholder")}
               className="h-28 resize-none text-sm"
             />
             <p className="font-mono text-[11px] leading-relaxed text-muted-foreground">
-              {"{a|b} 随机取一 · {{name}} 变量替换 · 按消息做种,重试结果一致"}
+              {t("dash.newCampaign.bodyHint")}
             </p>
           </div>
         </div>
 
         <DialogFooter>
-          <DialogClose render={<Button variant="ghost" />}>取消</DialogClose>
+          <DialogClose render={<Button variant="ghost" />}>{t("dash.newCampaign.cancel")}</DialogClose>
           <Button onClick={handleSubmit} disabled={!canSubmit}>
-            {submitting ? "提交中…" : "确认发送"}
+            {submitting ? t("dash.newCampaign.submitting") : t("dash.newCampaign.confirmSubmit")}
           </Button>
         </DialogFooter>
       </DialogContent>

@@ -21,6 +21,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import type { Tag } from "@/components/dashboard/contacts-list";
+import { useT } from "@/components/locale-provider";
 
 interface SegmentFilter {
   tags?: number[];
@@ -35,13 +36,14 @@ interface Segment {
 }
 
 const STATUS_OPTIONS = [
-  { value: "", label: "任意状态" },
-  { value: "active", label: "有效" },
-  { value: "unsubscribed", label: "已退订" },
-  { value: "invalid", label: "无效" },
+  { value: "", labelKey: "dash.segments.status.any" },
+  { value: "active", labelKey: "dash.contacts.status.active" },
+  { value: "unsubscribed", labelKey: "dash.contacts.status.unsubscribed" },
+  { value: "invalid", labelKey: "dash.contacts.status.invalid" },
 ];
 
 export function ContactsTagsSegments() {
+  const t = useT();
   const [tags, setTags] = useState<Tag[]>([]);
   const [tagsLoaded, setTagsLoaded] = useState(false);
   const [deleteTagTarget, setDeleteTagTarget] = useState<Tag | null>(null);
@@ -50,11 +52,11 @@ export function ContactsTagsSegments() {
     try {
       setTags(await api.get<Tag[]>("/contacts/tags"));
     } catch (e) {
-      toast.error("加载标签失败", { description: e instanceof ApiError ? e.message : "请重试" });
+      toast.error(t("dash.tags.loadFailed"), { description: e instanceof ApiError ? e.message : t("dash.tags.retry") });
     } finally {
       setTagsLoaded(true);
     }
-  }, []);
+  }, [t]);
   useEffect(() => {
     loadTags();
   }, [loadTags]);
@@ -63,8 +65,8 @@ export function ContactsTagsSegments() {
     <div className="grid grid-cols-1 gap-6 xl:grid-cols-2">
       <Card>
         <CardHeader>
-          <CardTitle>标签管理</CardTitle>
-          <CardDescription>为联系人打标签,便于按标签筛选与建群发。</CardDescription>
+          <CardTitle>{t("dash.tags.title")}</CardTitle>
+          <CardDescription>{t("dash.tags.description")}</CardDescription>
         </CardHeader>
         <CardContent className="space-y-4">
           <CreateTagForm onCreated={loadTags} />
@@ -72,19 +74,19 @@ export function ContactsTagsSegments() {
             {!tagsLoaded ? (
               <div className="h-6 w-full animate-pulse rounded bg-muted motion-reduce:animate-none" />
             ) : tags.length === 0 ? (
-              <p className="text-sm text-muted-foreground">还没有标签,先创建一个。</p>
+              <p className="text-sm text-muted-foreground">{t("dash.tags.empty")}</p>
             ) : (
-              tags.map((t) => (
+              tags.map((tag) => (
                 <span
-                  key={t.id}
+                  key={tag.id}
                   className="inline-flex items-center gap-1.5 rounded-full border bg-muted/40 py-1 pl-2.5 pr-1.5 text-xs font-medium"
                 >
                   <TagIcon className="size-3 text-muted-foreground" />
-                  {t.name}
+                  {tag.name}
                   <button
                     type="button"
-                    aria-label={`删除标签 ${t.name}`}
-                    onClick={() => setDeleteTagTarget(t)}
+                    aria-label={t("dash.tags.deleteAria").replace("{name}", () => tag.name)}
+                    onClick={() => setDeleteTagTarget(tag)}
                     className="rounded-full p-0.5 text-muted-foreground transition-colors hover:bg-destructive/10 hover:text-destructive"
                   >
                     <Trash2 className="size-3" />
@@ -104,6 +106,7 @@ export function ContactsTagsSegments() {
 }
 
 function CreateTagForm({ onCreated }: { onCreated: () => void }) {
+  const t = useT();
   const [name, setName] = useState("");
   const [busy, setBusy] = useState(false);
 
@@ -115,7 +118,7 @@ function CreateTagForm({ onCreated }: { onCreated: () => void }) {
       setName("");
       onCreated();
     } catch (e) {
-      toast.error("创建标签失败", { description: e instanceof ApiError ? e.message : "请重试" });
+      toast.error(t("dash.tags.createFailed"), { description: e instanceof ApiError ? e.message : t("dash.tags.retry") });
     } finally {
       setBusy(false);
     }
@@ -127,18 +130,19 @@ function CreateTagForm({ onCreated }: { onCreated: () => void }) {
         value={name}
         onChange={(e) => setName(e.target.value)}
         onKeyDown={(e) => e.key === "Enter" && submit()}
-        placeholder="新标签名称,如 VIP / 待激活"
+        placeholder={t("dash.tags.namePlaceholder")}
         className="flex-1"
       />
       <Button size="sm" className="gap-1.5" onClick={submit} disabled={!name.trim() || busy}>
         <Plus className="size-4" />
-        新建
+        {t("dash.tags.create")}
       </Button>
     </div>
   );
 }
 
 function DeleteTagDialog({ target, onClose, onDone }: { target: Tag | null; onClose: () => void; onDone: () => void }) {
+  const t = useT();
   const [busy, setBusy] = useState(false);
 
   async function submit() {
@@ -146,11 +150,11 @@ function DeleteTagDialog({ target, onClose, onDone }: { target: Tag | null; onCl
     setBusy(true);
     try {
       await api.delete(`/contacts/tags/${target.id}`);
-      toast.success("标签已删除", { description: target.name });
+      toast.success(t("dash.tags.deleted"), { description: target.name });
       onClose();
       onDone();
     } catch (e) {
-      toast.error("删除失败", { description: e instanceof ApiError ? e.message : "请重试" });
+      toast.error(t("dash.tags.deleteFailed"), { description: e instanceof ApiError ? e.message : t("dash.tags.retry") });
     } finally {
       setBusy(false);
     }
@@ -160,16 +164,17 @@ function DeleteTagDialog({ target, onClose, onDone }: { target: Tag | null; onCl
     <Dialog open={target != null} onOpenChange={(o) => !o && onClose()}>
       <DialogContent className="sm:max-w-md">
         <DialogHeader>
-          <DialogTitle>删除标签</DialogTitle>
+          <DialogTitle>{t("dash.tags.deleteTitle")}</DialogTitle>
           <DialogDescription>
-            确认删除标签 <span className="font-mono text-xs">{target?.name}</span>
-            ?已打上该标签的联系人会自动解除关联,联系人本身不受影响。此操作不可撤销。
+            {t("dash.tags.deleteDescPrefix")}
+            <span className="font-mono text-xs">{target?.name}</span>
+            {t("dash.tags.deleteDescSuffix")}
           </DialogDescription>
         </DialogHeader>
         <DialogFooter>
-          <DialogClose render={<Button variant="ghost" />}>取消</DialogClose>
+          <DialogClose render={<Button variant="ghost" />}>{t("dash.tags.cancel")}</DialogClose>
           <Button variant="destructive" onClick={submit} disabled={busy}>
-            {busy ? "删除中…" : "确认删除"}
+            {busy ? t("dash.tags.deleting") : t("dash.tags.confirmDelete")}
           </Button>
         </DialogFooter>
       </DialogContent>
@@ -188,6 +193,7 @@ function DeleteTagDialog({ target, onClose, onDone }: { target: Tag | null; onCl
 // ---------------------------------------------------------------------------
 
 function SegmentBuilder({ tags }: { tags: Tag[] }) {
+  const t = useT();
   const [segments, setSegments] = useState<Segment[] | null>(null);
   const [counts, setCounts] = useState<Record<number, number | "loading" | null>>({});
   const [name, setName] = useState("");
@@ -213,9 +219,9 @@ function SegmentBuilder({ tags }: { tags: Tag[] }) {
       setSegments(list);
       list.forEach((s) => previewOne(s.id));
     } catch (e) {
-      toast.error("加载分段失败", { description: e instanceof ApiError ? e.message : "请重试" });
+      toast.error(t("dash.segments.loadFailed"), { description: e instanceof ApiError ? e.message : t("dash.segments.retry") });
     }
-  }, [previewOne]);
+  }, [previewOne, t]);
   useEffect(() => {
     load();
   }, [load]);
@@ -242,10 +248,10 @@ function SegmentBuilder({ tags }: { tags: Tag[] }) {
       setSelectedTags(new Set());
       setCountry("");
       setStatus("");
-      toast.success("分段已保存", { description: created.name });
+      toast.success(t("dash.segments.saved"), { description: created.name });
       await load();
     } catch (e) {
-      toast.error("保存分段失败", { description: e instanceof ApiError ? e.message : "请重试" });
+      toast.error(t("dash.segments.saveFailed"), { description: e instanceof ApiError ? e.message : t("dash.segments.retry") });
     } finally {
       setBusy(false);
     }
@@ -254,27 +260,27 @@ function SegmentBuilder({ tags }: { tags: Tag[] }) {
   return (
     <Card>
       <CardHeader>
-        <CardTitle>分段构建器</CardTitle>
-        <CardDescription>按标签 / 国家 / 状态圈选一批联系人,保存后可在建群发时直接选用。</CardDescription>
+        <CardTitle>{t("dash.segments.title")}</CardTitle>
+        <CardDescription>{t("dash.segments.description")}</CardDescription>
       </CardHeader>
       <CardContent className="space-y-5">
         <div className="space-y-3">
-          <Input value={name} onChange={(e) => setName(e.target.value)} placeholder="分段名称,如 US-VIP-有效" />
+          <Input value={name} onChange={(e) => setName(e.target.value)} placeholder={t("dash.segments.namePlaceholder")} />
           {tags.length > 0 && (
             <div className="flex flex-wrap gap-1.5">
-              {tags.map((t) => {
-                const on = selectedTags.has(t.id);
+              {tags.map((tag) => {
+                const on = selectedTags.has(tag.id);
                 return (
                   <button
-                    key={t.id}
+                    key={tag.id}
                     type="button"
-                    onClick={() => toggleTag(t.id)}
+                    onClick={() => toggleTag(tag.id)}
                     className={
                       "rounded-full border px-2.5 py-1 text-xs font-medium transition-colors " +
                       (on ? "border-brand-600 bg-brand-600/10 text-brand-700 dark:text-brand-400" : "text-muted-foreground hover:text-foreground")
                     }
                   >
-                    {t.name}
+                    {tag.name}
                   </button>
                 );
               })}
@@ -284,7 +290,7 @@ function SegmentBuilder({ tags }: { tags: Tag[] }) {
             <Input
               value={country}
               onChange={(e) => setCountry(e.target.value)}
-              placeholder="国家 ISO-2(可选)"
+              placeholder={t("dash.segments.countryPlaceholder")}
               maxLength={2}
               className="w-32 font-mono uppercase"
             />
@@ -294,12 +300,12 @@ function SegmentBuilder({ tags }: { tags: Tag[] }) {
               className="h-8 rounded-lg border bg-transparent px-2 text-sm"
             >
               {STATUS_OPTIONS.map((o) => (
-                <option key={o.value} value={o.value}>{o.label}</option>
+                <option key={o.value} value={o.value}>{t(o.labelKey)}</option>
               ))}
             </select>
             <Button size="sm" className="gap-1.5" onClick={submit} disabled={!name.trim() || busy}>
               <Plus className="size-4" />
-              {busy ? "保存中…" : "保存分段"}
+              {busy ? t("dash.segments.saving") : t("dash.segments.save")}
             </Button>
           </div>
         </div>
@@ -308,7 +314,7 @@ function SegmentBuilder({ tags }: { tags: Tag[] }) {
           {segments === null ? (
             <div className="h-16 animate-pulse rounded bg-muted motion-reduce:animate-none" />
           ) : segments.length === 0 ? (
-            <p className="text-sm text-muted-foreground">还没有已保存的分段。</p>
+            <p className="text-sm text-muted-foreground">{t("dash.segments.empty")}</p>
           ) : (
             segments.map((s) => {
               const c = counts[s.id];
@@ -318,10 +324,14 @@ function SegmentBuilder({ tags }: { tags: Tag[] }) {
                     <div className="truncate text-sm font-medium">{s.name}</div>
                     <div className="mt-0.5 flex items-center gap-1 font-mono text-xs text-muted-foreground">
                       <Users className="size-3" />
-                      {c === "loading" || c === undefined ? "计算中…" : c === null ? "预览失败" : `预计 ${c} 个联系人`}
+                      {c === "loading" || c === undefined
+                        ? t("dash.segments.counting")
+                        : c === null
+                          ? t("dash.segments.previewFailed")
+                          : t("dash.segments.estimatedCount").replace("{n}", () => String(c))}
                     </div>
                   </div>
-                  <Button variant="ghost" size="icon-sm" aria-label="删除分段" onClick={() => setDeleteTarget(s)}>
+                  <Button variant="ghost" size="icon-sm" aria-label={t("dash.segments.deleteAria")} onClick={() => setDeleteTarget(s)}>
                     <Trash2 className="size-4" />
                   </Button>
                 </div>
@@ -337,6 +347,7 @@ function SegmentBuilder({ tags }: { tags: Tag[] }) {
 }
 
 function DeleteSegmentDialog({ target, onClose, onDone }: { target: Segment | null; onClose: () => void; onDone: () => void }) {
+  const t = useT();
   const [busy, setBusy] = useState(false);
 
   async function submit() {
@@ -344,11 +355,11 @@ function DeleteSegmentDialog({ target, onClose, onDone }: { target: Segment | nu
     setBusy(true);
     try {
       await api.delete(`/contacts/segments/${target.id}`);
-      toast.success("分段已删除", { description: target.name });
+      toast.success(t("dash.segments.deleted"), { description: target.name });
       onClose();
       onDone();
     } catch (e) {
-      toast.error("删除失败", { description: e instanceof ApiError ? e.message : "请重试" });
+      toast.error(t("dash.segments.deleteFailed"), { description: e instanceof ApiError ? e.message : t("dash.segments.retry") });
     } finally {
       setBusy(false);
     }
@@ -358,16 +369,17 @@ function DeleteSegmentDialog({ target, onClose, onDone }: { target: Segment | nu
     <Dialog open={target != null} onOpenChange={(o) => !o && onClose()}>
       <DialogContent className="sm:max-w-md">
         <DialogHeader>
-          <DialogTitle>删除分段</DialogTitle>
+          <DialogTitle>{t("dash.segments.deleteTitle")}</DialogTitle>
           <DialogDescription>
-            确认删除分段 <span className="font-mono text-xs">{target?.name}</span>
-            ?依赖此分段建群发的历史任务不受影响,但之后无法再用它建新任务。此操作不可撤销。
+            {t("dash.segments.deleteDescPrefix")}
+            <span className="font-mono text-xs">{target?.name}</span>
+            {t("dash.segments.deleteDescSuffix")}
           </DialogDescription>
         </DialogHeader>
         <DialogFooter>
-          <DialogClose render={<Button variant="ghost" />}>取消</DialogClose>
+          <DialogClose render={<Button variant="ghost" />}>{t("dash.segments.cancel")}</DialogClose>
           <Button variant="destructive" onClick={submit} disabled={busy}>
-            {busy ? "删除中…" : "确认删除"}
+            {busy ? t("dash.segments.deleting") : t("dash.segments.confirmDelete")}
           </Button>
         </DialogFooter>
       </DialogContent>

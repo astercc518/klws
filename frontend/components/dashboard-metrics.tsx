@@ -5,6 +5,7 @@ import { Wallet, Snowflake, Smartphone, Rocket } from "lucide-react";
 import { api, ApiError } from "@/lib/api";
 import { MetricCard } from "@/components/metric-card";
 import { Card } from "@/components/ui/card";
+import { useT } from "@/components/locale-provider";
 
 interface Stats {
   balance: number; // smallest currency unit (e.g. cents)
@@ -26,6 +27,7 @@ const OnlineDot = (
 );
 
 export function DashboardMetrics() {
+  const t = useT();
   const [stats, setStats] = useState<Stats | null>(null);
   const [error, setError] = useState<string | null>(null);
 
@@ -37,18 +39,18 @@ export function DashboardMetrics() {
       .catch((e) => {
         // 401 is handled globally (redirect to /login); surface anything else.
         if (alive && !(e instanceof ApiError && e.status === 401)) {
-          setError(e instanceof ApiError ? e.message : "加载失败");
+          setError(e instanceof ApiError ? e.message : t("dash.metrics.loadFailed"));
         }
       });
     return () => {
       alive = false;
     };
-  }, []);
+  }, [t]);
 
   if (error) {
     return (
       <Card className="p-5 text-sm text-muted-foreground">
-        指标加载失败:{error}
+        {t("dash.metrics.loadFailedPrefix")}{error}
       </Card>
     );
   }
@@ -65,16 +67,16 @@ export function DashboardMetrics() {
 
   return (
     <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
-      <MetricCard hero label="可用余额" value={usd(stats.balance)} sub="可用于发送 · USD" icon={Wallet} />
-      <MetricCard label="冻结金额" value={usd(stats.frozen)} sub="进行中活动占用" icon={Snowflake} />
+      <MetricCard hero label={t("dash.metrics.balance.label")} value={usd(stats.balance)} sub={t("dash.metrics.balance.sub")} icon={Wallet} />
+      <MetricCard label={t("dash.metrics.frozen.label")} value={usd(stats.frozen)} sub={t("dash.metrics.frozen.sub")} icon={Snowflake} />
       <MetricCard
-        label="在线 WA 账号"
+        label={t("dash.metrics.online.label")}
         value={`${nf.format(stats.accounts_online)} / ${nf.format(stats.accounts_total)}`}
-        sub={`${nf.format(stats.accounts_total - stats.accounts_online)} 个不可用`}
+        sub={t("dash.metrics.online.sub").replace("{n}", () => nf.format(stats.accounts_total - stats.accounts_online))}
         icon={Smartphone}
         status={OnlineDot}
       />
-      <MetricCard label="今日发送总量" value={nf.format(stats.sent_today)} sub="今日已送达" icon={Rocket} />
+      <MetricCard label={t("dash.metrics.sentToday.label")} value={nf.format(stats.sent_today)} sub={t("dash.metrics.sentToday.sub")} icon={Rocket} />
     </div>
   );
 }

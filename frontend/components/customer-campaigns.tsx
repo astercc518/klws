@@ -14,6 +14,7 @@ import {
 import { StatusBadge, type StatusTone } from "@/components/admin/status-badge";
 import { NewCampaignDialog } from "@/components/new-campaign-dialog";
 import { CampaignDetailSheet } from "@/components/campaign-detail-sheet";
+import { useT } from "@/components/locale-provider";
 
 interface Campaign {
   id: number;
@@ -24,18 +25,19 @@ interface Campaign {
   created_at: string;
 }
 
-const STATE: Record<Campaign["state"], { tone: StatusTone; label: string }> = {
-  draft: { tone: "neutral", label: "草稿" },
-  running: { tone: "positive", label: "进行中" },
-  paused: { tone: "warning", label: "已暂停" },
-  completed: { tone: "positive", label: "已完成" },
-  failed: { tone: "negative", label: "失败" },
+const STATE: Record<Campaign["state"], { tone: StatusTone; key: string }> = {
+  draft: { tone: "neutral", key: "dash.campaigns.state.draft" },
+  running: { tone: "positive", key: "dash.campaigns.state.running" },
+  paused: { tone: "warning", key: "dash.campaigns.state.paused" },
+  completed: { tone: "positive", key: "dash.campaigns.state.completed" },
+  failed: { tone: "negative", key: "dash.campaigns.state.failed" },
 };
 
 const nf = new Intl.NumberFormat("en-US");
 const fmtTime = (s: string) => (s ? s.slice(0, 19).replace("T", " ") : "—");
 
 export function CustomerCampaigns() {
+  const t = useT();
   const [rows, setRows] = useState<Campaign[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [detailId, setDetailId] = useState<number | null>(null);
@@ -45,10 +47,10 @@ export function CustomerCampaigns() {
       setRows(await api.get<Campaign[]>("/campaigns"));
     } catch (e) {
       if (!(e instanceof ApiError && e.status === 401)) {
-        setError(e instanceof ApiError ? e.message : "加载失败");
+        setError(e instanceof ApiError ? e.message : t("dash.campaigns.loadFailed"));
       }
     }
-  }, []);
+  }, [t]);
   useEffect(() => {
     load();
   }, [load]);
@@ -60,16 +62,16 @@ export function CustomerCampaigns() {
           <div className="font-mono text-[10px] uppercase tracking-[0.18em] text-muted-foreground">
             Campaigns
           </div>
-          <h1 className="mt-1 text-2xl font-semibold tracking-tight">群发任务</h1>
+          <h1 className="mt-1 text-2xl font-semibold tracking-tight">{t("dash.campaigns.title")}</h1>
           <p className="mt-1 text-sm text-muted-foreground">
-            点击任意任务查看逐号触达明细与转化漏斗。
+            {t("dash.campaigns.subtitle")}
           </p>
         </div>
         <NewCampaignDialog onDone={load} />
       </div>
 
       {error ? (
-        <Card className="p-5 text-sm text-muted-foreground">加载失败:{error}</Card>
+        <Card className="p-5 text-sm text-muted-foreground">{t("table.loadFailed")}{error}</Card>
       ) : !rows ? (
         <div className="h-64 animate-pulse rounded-xl bg-muted motion-reduce:animate-none" />
       ) : (
@@ -77,19 +79,19 @@ export function CustomerCampaigns() {
           <Table>
             <TableHeader>
               <TableRow className="bg-muted/40">
-                <TableHead>任务</TableHead>
-                <TableHead>状态</TableHead>
-                <TableHead className="text-right">总数</TableHead>
-                <TableHead className="text-right">已发</TableHead>
-                <TableHead className="text-right">失败</TableHead>
-                <TableHead className="text-right">创建时间</TableHead>
+                <TableHead>{t("dash.campaigns.col.task")}</TableHead>
+                <TableHead>{t("dash.campaigns.col.status")}</TableHead>
+                <TableHead className="text-right">{t("dash.campaigns.col.total")}</TableHead>
+                <TableHead className="text-right">{t("dash.campaigns.col.sent")}</TableHead>
+                <TableHead className="text-right">{t("dash.campaigns.col.failed")}</TableHead>
+                <TableHead className="text-right">{t("dash.campaigns.col.createdAt")}</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
               {rows.length === 0 ? (
                 <TableRow className="hover:bg-transparent">
                   <TableCell colSpan={6} className="py-12 text-center text-sm text-muted-foreground">
-                    还没有群发任务。点击右上角「新建群发」开始。
+                    {t("dash.campaigns.empty")}
                   </TableCell>
                 </TableRow>
               ) : (
@@ -99,7 +101,7 @@ export function CustomerCampaigns() {
                     <TableRow key={c.id} className="cursor-pointer" onClick={() => setDetailId(c.id)}>
                       <TableCell className="font-mono text-sm">#{c.id}</TableCell>
                       <TableCell>
-                        <StatusBadge tone={st.tone}>{st.label}</StatusBadge>
+                        <StatusBadge tone={st.tone}>{t(st.key)}</StatusBadge>
                       </TableCell>
                       <TableCell className="text-right font-mono tabular-nums text-sm">{nf.format(c.total)}</TableCell>
                       <TableCell className="text-right font-mono tabular-nums text-sm">{nf.format(c.sent)}</TableCell>

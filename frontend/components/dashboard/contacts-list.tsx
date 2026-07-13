@@ -30,6 +30,7 @@ import {
 import { ProDataTable, type Column } from "@/components/admin/pro-data-table";
 import { StatusBadge, type StatusTone } from "@/components/admin/status-badge";
 import { ImportContactsDialog } from "@/components/dashboard/contacts-import-dialog";
+import { useT } from "@/components/locale-provider";
 
 export interface Contact {
   id: number;
@@ -45,20 +46,21 @@ export interface Tag {
   created_at: string;
 }
 
-const STATUS_LABEL: Record<Contact["status"], { tone: StatusTone; label: string }> = {
-  active: { tone: "positive", label: "有效" },
-  unsubscribed: { tone: "warning", label: "已退订" },
-  invalid: { tone: "negative", label: "无效" },
+const STATUS_KEY: Record<Contact["status"], { tone: StatusTone; key: string }> = {
+  active: { tone: "positive", key: "dash.contacts.status.active" },
+  unsubscribed: { tone: "warning", key: "dash.contacts.status.unsubscribed" },
+  invalid: { tone: "negative", key: "dash.contacts.status.invalid" },
 };
-const STATUS_TABS: { key: string; label: string }[] = [
-  { key: "", label: "全部" },
-  { key: "active", label: "有效" },
-  { key: "unsubscribed", label: "已退订" },
-  { key: "invalid", label: "无效" },
+const STATUS_TABS: { key: string; labelKey: string }[] = [
+  { key: "", labelKey: "dash.contacts.status.all" },
+  { key: "active", labelKey: "dash.contacts.status.active" },
+  { key: "unsubscribed", labelKey: "dash.contacts.status.unsubscribed" },
+  { key: "invalid", labelKey: "dash.contacts.status.invalid" },
 ];
 const PAGE_SIZE = 15;
 
 export function ContactsList() {
+  const t = useT();
   const [rows, setRows] = useState<Contact[] | null>(null);
   const [total, setTotal] = useState(0);
   const [tags, setTags] = useState<Tag[]>([]);
@@ -87,12 +89,12 @@ export function ContactsList() {
       setError(null);
     } catch (e) {
       if (!(e instanceof ApiError && e.status === 401)) {
-        setError(e instanceof ApiError ? e.message : "加载失败");
+        setError(e instanceof ApiError ? e.message : t("dash.contacts.loadFailed"));
       }
     } finally {
       setLoading(false);
     }
-  }, [page, query, status, country, tagID]);
+  }, [page, query, status, country, tagID, t]);
 
   useEffect(() => {
     load();
@@ -132,7 +134,9 @@ export function ContactsList() {
     try {
       await api.download(`/contacts/export?${params.toString()}`, "contacts.csv");
     } catch (e) {
-      toast.error("导出失败", { description: e instanceof ApiError ? e.message : "请重试" });
+      toast.error(t("dash.contacts.exportFailedTitle"), {
+        description: e instanceof ApiError ? e.message : t("dash.contacts.retry"),
+      });
     }
   }
 
@@ -143,12 +147,16 @@ export function ContactsList() {
         contact_ids: Array.from(selected),
         remove,
       });
-      toast.success(remove ? "已移除标签" : "已打上标签", {
-        description: `${tag.name} · ${selected.size} 个联系人`,
+      toast.success(t(remove ? "dash.contacts.tagRemoved" : "dash.contacts.tagAdded"), {
+        description: t("dash.contacts.tagAppliedDesc")
+          .replace("{tag}", () => tag.name)
+          .replace("{n}", () => String(selected.size)),
       });
       setSelected(new Set());
     } catch (e) {
-      toast.error(remove ? "移除失败" : "打标签失败", { description: e instanceof ApiError ? e.message : "请重试" });
+      toast.error(t(remove ? "dash.contacts.tagRemoveFailed" : "dash.contacts.tagApplyFailed"), {
+        description: e instanceof ApiError ? e.message : t("dash.contacts.retry"),
+      });
     }
   }
 
@@ -166,7 +174,7 @@ export function ContactsList() {
       header: (
         <input
           type="checkbox"
-          aria-label="全选本页"
+          aria-label={t("table.selectAll")}
           checked={allOnPageSelected}
           onChange={(e) => {
             setSelected((prev) => {
@@ -181,7 +189,7 @@ export function ContactsList() {
       cell: (r) => (
         <input
           type="checkbox"
-          aria-label={`选择 ${r.phone}`}
+          aria-label={t("dash.contacts.selectRowAria").replace("{phone}", () => r.phone)}
           checked={selected.has(r.id)}
           onChange={() => toggleRow(r.id)}
           className="size-3.5 accent-brand-600"
@@ -190,23 +198,23 @@ export function ContactsList() {
       headClassName: "w-8",
       cellClassName: "w-8",
     },
-    { key: "phone", header: "手机号", cell: (r) => <span className="font-mono text-sm">{r.phone}</span> },
+    { key: "phone", header: t("dash.contacts.col.phone"), cell: (r) => <span className="font-mono text-sm">{r.phone}</span> },
     {
       key: "country",
-      header: "国家",
+      header: t("dash.contacts.col.country"),
       cell: (r) => <span className="font-mono text-xs text-muted-foreground">{r.country_code || "—"}</span>,
     },
     {
       key: "status",
-      header: "状态",
+      header: t("dash.contacts.col.status"),
       cell: (r) => {
-        const s = STATUS_LABEL[r.status];
-        return <StatusBadge tone={s.tone}>{s.label}</StatusBadge>;
+        const s = STATUS_KEY[r.status];
+        return <StatusBadge tone={s.tone}>{t(s.key)}</StatusBadge>;
       },
     },
     {
       key: "tags",
-      header: "标签",
+      header: t("dash.contacts.col.tags"),
       cell: () =>
         activeTagName ? (
           <span className="inline-flex h-5.5 w-fit items-center rounded-full bg-muted px-2 text-xs text-muted-foreground">
@@ -218,7 +226,7 @@ export function ContactsList() {
     },
     {
       key: "created_at",
-      header: "创建时间",
+      header: t("dash.contacts.col.createdAt"),
       cell: (r) => <span className="font-mono text-xs text-muted-foreground">{r.created_at.slice(0, 19).replace("T", " ")}</span>,
     },
   ];
@@ -227,26 +235,26 @@ export function ContactsList() {
     <div className="space-y-4">
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div className="inline-flex flex-wrap rounded-lg border bg-muted/40 p-0.5">
-          {STATUS_TABS.map((t) => (
+          {STATUS_TABS.map((tab) => (
             <button
-              key={t.key || "all"}
+              key={tab.key || "all"}
               onClick={() => {
-                setStatus(t.key);
+                setStatus(tab.key);
                 setPage(0);
               }}
               className={
                 "rounded-md px-3 py-1.5 text-sm font-medium transition-colors " +
-                (status === t.key ? "bg-background text-foreground shadow-sm" : "text-muted-foreground hover:text-foreground")
+                (status === tab.key ? "bg-background text-foreground shadow-sm" : "text-muted-foreground hover:text-foreground")
               }
             >
-              {t.label}
+              {t(tab.labelKey)}
             </button>
           ))}
         </div>
         <div className="flex items-center gap-2">
           <Button variant="outline" size="sm" className="gap-1.5" onClick={exportCsv}>
             <Download className="size-4" />
-            导出 CSV
+            {t("dash.contacts.exportCsv")}
           </Button>
           <ImportContactsDialog onDone={load} />
         </div>
@@ -257,8 +265,8 @@ export function ContactsList() {
         error={error}
         columns={columns}
         getRowKey={(r) => r.id}
-        emptyState="暂无联系人。点击右上角「导入联系人」批量导入号码。"
-        search={{ placeholder: "搜索手机号或备注名…", accessor: () => "" }}
+        emptyState={t("dash.contacts.empty")}
+        search={{ placeholder: t("dash.contacts.searchPlaceholder"), accessor: () => "" }}
         toolbar={
           <div className="flex flex-wrap items-center gap-2">
             <Input
@@ -267,10 +275,10 @@ export function ContactsList() {
                 setCountry(e.target.value);
                 setPage(0);
               }}
-              placeholder="国家 ISO-2"
+              placeholder={t("dash.contacts.countryPlaceholder")}
               maxLength={2}
               className="h-8 w-24 font-mono uppercase"
-              aria-label="按国家筛选"
+              aria-label={t("dash.contacts.countryFilterAria")}
             />
             <select
               value={tagID}
@@ -279,12 +287,12 @@ export function ContactsList() {
                 setPage(0);
               }}
               className="h-8 rounded-lg border bg-transparent px-2 text-sm"
-              aria-label="按标签筛选"
+              aria-label={t("dash.contacts.tagFilterAria")}
             >
-              <option value="">全部标签</option>
-              {tags.map((t) => (
-                <option key={t.id} value={String(t.id)}>
-                  {t.name}
+              <option value="">{t("dash.contacts.allTags")}</option>
+              {tags.map((tag) => (
+                <option key={tag.id} value={String(tag.id)}>
+                  {tag.name}
                 </option>
               ))}
             </select>
@@ -292,24 +300,24 @@ export function ContactsList() {
               <DropdownMenu>
                 <DropdownMenuTrigger render={<Button variant="outline" size="sm" className="gap-1.5" />}>
                   <TagsIcon className="size-4" />
-                  批量打标签({selected.size})
+                  {t("dash.contacts.batchTag").replace("{n}", () => String(selected.size))}
                 </DropdownMenuTrigger>
                 <DropdownMenuContent align="end">
                   {tags.length === 0 ? (
-                    <DropdownMenuLabel className="text-muted-foreground">暂无标签,请先创建</DropdownMenuLabel>
+                    <DropdownMenuLabel className="text-muted-foreground">{t("dash.contacts.noTagsYet")}</DropdownMenuLabel>
                   ) : (
                     <>
-                      <DropdownMenuLabel>添加标签</DropdownMenuLabel>
-                      {tags.map((t) => (
-                        <DropdownMenuItem key={`add-${t.id}`} onClick={() => applyTagToSelected(t, false)}>
-                          {t.name}
+                      <DropdownMenuLabel>{t("dash.contacts.addTagLabel")}</DropdownMenuLabel>
+                      {tags.map((tag) => (
+                        <DropdownMenuItem key={`add-${tag.id}`} onClick={() => applyTagToSelected(tag, false)}>
+                          {tag.name}
                         </DropdownMenuItem>
                       ))}
                       <DropdownMenuSeparator />
-                      <DropdownMenuLabel>移除标签</DropdownMenuLabel>
-                      {tags.map((t) => (
-                        <DropdownMenuItem key={`rm-${t.id}`} variant="destructive" onClick={() => applyTagToSelected(t, true)}>
-                          {t.name}
+                      <DropdownMenuLabel>{t("dash.contacts.removeTagLabel")}</DropdownMenuLabel>
+                      {tags.map((tag) => (
+                        <DropdownMenuItem key={`rm-${tag.id}`} variant="destructive" onClick={() => applyTagToSelected(tag, true)}>
+                          {tag.name}
                         </DropdownMenuItem>
                       ))}
                     </>
@@ -321,17 +329,17 @@ export function ContactsList() {
         }
         rowActions={(r) => (
           <DropdownMenu>
-            <DropdownMenuTrigger render={<Button variant="ghost" size="icon-sm" aria-label="操作" />}>
+            <DropdownMenuTrigger render={<Button variant="ghost" size="icon-sm" aria-label={t("dash.contacts.rowActionsAria")} />}>
               <MoreHorizontal className="size-4" />
             </DropdownMenuTrigger>
             <DropdownMenuContent align="end">
               <DropdownMenuItem onClick={() => setEditTarget(r)}>
                 <Pencil className="size-4" />
-                编辑
+                {t("dash.contacts.editAction")}
               </DropdownMenuItem>
               <DropdownMenuItem variant="destructive" onClick={() => setDeleteTarget(r)}>
                 <Trash2 className="size-4" />
-                删除
+                {t("dash.contacts.deleteAction")}
               </DropdownMenuItem>
             </DropdownMenuContent>
           </DropdownMenu>
@@ -365,6 +373,7 @@ function EditContactDialog({
   onClose: () => void;
   onDone: () => void;
 }) {
+  const t = useT();
   const [displayName, setDisplayName] = useState("");
   const [status, setStatus] = useState<Contact["status"]>("active");
   const [busy, setBusy] = useState(false);
@@ -381,11 +390,11 @@ function EditContactDialog({
     setBusy(true);
     try {
       await api.put(`/contacts/${target.id}`, { display_name: displayName, status });
-      toast.success("联系人已更新", { description: target.phone });
+      toast.success(t("dash.contacts.updated"), { description: target.phone });
       onClose();
       onDone();
     } catch (e) {
-      toast.error("更新失败", { description: e instanceof ApiError ? e.message : "请重试" });
+      toast.error(t("dash.contacts.updateFailed"), { description: e instanceof ApiError ? e.message : t("dash.contacts.retry") });
     } finally {
       setBusy(false);
     }
@@ -395,33 +404,35 @@ function EditContactDialog({
     <Dialog open={target != null} onOpenChange={(o) => !o && onClose()}>
       <DialogContent className="sm:max-w-md">
         <DialogHeader>
-          <DialogTitle>编辑联系人</DialogTitle>
+          <DialogTitle>{t("dash.contacts.editTitle")}</DialogTitle>
           <DialogDescription>
-            修改 <span className="font-mono text-xs">{target?.phone}</span> 的备注名与状态。
+            {t("dash.contacts.editDescPrefix")}
+            <span className="font-mono text-xs">{target?.phone}</span>
+            {t("dash.contacts.editDescSuffix")}
           </DialogDescription>
         </DialogHeader>
         <div className="space-y-4 py-1">
           <div className="space-y-2">
-            <label htmlFor="edit-contact-name" className="text-sm font-medium">备注名</label>
+            <label htmlFor="edit-contact-name" className="text-sm font-medium">{t("dash.contacts.displayNameLabel")}</label>
             <Input id="edit-contact-name" value={displayName} onChange={(e) => setDisplayName(e.target.value)} />
           </div>
           <div className="space-y-2">
-            <label htmlFor="edit-contact-status" className="text-sm font-medium">状态</label>
+            <label htmlFor="edit-contact-status" className="text-sm font-medium">{t("dash.contacts.col.status")}</label>
             <select
               id="edit-contact-status"
               value={status}
               onChange={(e) => setStatus(e.target.value as Contact["status"])}
               className="h-9 w-full rounded-lg border bg-transparent px-2.5 text-sm outline-none"
             >
-              <option value="active">有效</option>
-              <option value="unsubscribed">已退订</option>
-              <option value="invalid">无效</option>
+              <option value="active">{t("dash.contacts.status.active")}</option>
+              <option value="unsubscribed">{t("dash.contacts.status.unsubscribed")}</option>
+              <option value="invalid">{t("dash.contacts.status.invalid")}</option>
             </select>
           </div>
         </div>
         <DialogFooter>
-          <DialogClose render={<Button variant="ghost" />}>取消</DialogClose>
-          <Button onClick={submit} disabled={busy}>{busy ? "保存中…" : "确认保存"}</Button>
+          <DialogClose render={<Button variant="ghost" />}>{t("dash.contacts.cancel")}</DialogClose>
+          <Button onClick={submit} disabled={busy}>{busy ? t("dash.contacts.saving") : t("dash.contacts.confirmSave")}</Button>
         </DialogFooter>
       </DialogContent>
     </Dialog>
@@ -437,6 +448,7 @@ function DeleteContactDialog({
   onClose: () => void;
   onDone: () => void;
 }) {
+  const t = useT();
   const [busy, setBusy] = useState(false);
 
   async function submit() {
@@ -444,11 +456,11 @@ function DeleteContactDialog({
     setBusy(true);
     try {
       await api.delete(`/contacts/${target.id}`);
-      toast.success("联系人已删除", { description: target.phone });
+      toast.success(t("dash.contacts.deleted"), { description: target.phone });
       onClose();
       onDone();
     } catch (e) {
-      toast.error("删除失败", { description: e instanceof ApiError ? e.message : "请重试" });
+      toast.error(t("dash.contacts.deleteFailed"), { description: e instanceof ApiError ? e.message : t("dash.contacts.retry") });
     } finally {
       setBusy(false);
     }
@@ -458,15 +470,17 @@ function DeleteContactDialog({
     <Dialog open={target != null} onOpenChange={(o) => !o && onClose()}>
       <DialogContent className="sm:max-w-md">
         <DialogHeader>
-          <DialogTitle>删除联系人</DialogTitle>
+          <DialogTitle>{t("dash.contacts.deleteTitle")}</DialogTitle>
           <DialogDescription>
-            确认删除 <span className="font-mono text-xs">{target?.phone}</span>?此操作不可撤销。
+            {t("dash.contacts.deleteDescPrefix")}
+            <span className="font-mono text-xs">{target?.phone}</span>
+            {t("dash.contacts.deleteDescSuffix")}
           </DialogDescription>
         </DialogHeader>
         <DialogFooter>
-          <DialogClose render={<Button variant="ghost" />}>取消</DialogClose>
+          <DialogClose render={<Button variant="ghost" />}>{t("dash.contacts.cancel")}</DialogClose>
           <Button variant="destructive" onClick={submit} disabled={busy}>
-            {busy ? "删除中…" : "确认删除"}
+            {busy ? t("dash.contacts.deleting") : t("dash.contacts.confirmDelete")}
           </Button>
         </DialogFooter>
       </DialogContent>
