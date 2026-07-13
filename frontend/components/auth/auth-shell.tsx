@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { ArrowLeft } from "lucide-react";
 import { ThemeToggle } from "@/components/theme-toggle";
+import { LanguageToggle } from "@/components/language-toggle";
 import { Logo } from "@/components/landing/logo";
 import { BroadcastDemo } from "@/components/auth/broadcast-demo";
 
@@ -68,7 +69,8 @@ export function AuthShell({
 
       {/* ── right: form ── */}
       <div className="relative flex flex-col items-center justify-center px-6 py-12 sm:px-10">
-        <div className="absolute top-4 right-4">
+        <div className="absolute top-4 right-4 flex items-center gap-1">
+          <LanguageToggle />
           <ThemeToggle />
         </div>
 

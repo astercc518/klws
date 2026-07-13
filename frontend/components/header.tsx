@@ -3,11 +3,15 @@
 import { LogOut } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { logout } from "@/lib/api";
+import { ThemeToggle } from "@/components/theme-toggle";
+import { LanguageToggle } from "@/components/language-toggle";
+import { useT } from "@/components/locale-provider";
 
 // Mock session context until /auth/me is wired in task two.
 const MOCK_TENANT = { name: "Acme Corp", status: "Active", email: "ops@acme.com" };
 
 export function Header() {
+  const t = useT();
   async function handleLogout() {
     // logout() clears the token; the api layer redirects to /login on 401.
     await logout().catch(() => {});
@@ -31,13 +35,15 @@ export function Header() {
       </div>
 
       {/* Account + sign out */}
-      <div className="flex items-center gap-4">
+      <div className="flex items-center gap-2">
         <span className="hidden font-mono text-xs text-muted-foreground sm:inline">
           {MOCK_TENANT.email}
         </span>
+        <LanguageToggle />
+        <ThemeToggle />
         <Button variant="ghost" size="sm" onClick={handleLogout} className="text-muted-foreground">
           <LogOut className="size-4" />
-          退出登录
+          {t("menu.logout")}
         </Button>
       </div>
     </header>

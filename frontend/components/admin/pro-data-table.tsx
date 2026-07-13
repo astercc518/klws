@@ -13,6 +13,7 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { cn } from "@/lib/utils";
+import { useT } from "@/components/locale-provider";
 
 export interface Column<T> {
   key: string;
@@ -66,6 +67,7 @@ export function ProDataTable<T>({
   server,
   onRowClick,
 }: ProDataTableProps<T>) {
+  const t = useT();
   const [query, setQuery] = useState("");
   const [page, setPage] = useState(0);
 
@@ -123,7 +125,7 @@ export function ProDataTable<T>({
                 type="search"
                 value={queryValue}
                 onChange={(e) => changeQuery(e.target.value)}
-                placeholder={search.placeholder ?? "搜索…"}
+                placeholder={search.placeholder ?? t("table.searchPlaceholder")}
                 className="min-w-0 flex-1 bg-transparent text-sm text-foreground outline-none placeholder:text-muted-foreground/70"
               />
             </div>
@@ -154,7 +156,7 @@ export function ProDataTable<T>({
           {error ? (
             <TableRow className="hover:bg-transparent">
               <TableCell colSpan={colSpan} className="py-12 text-center text-sm text-muted-foreground">
-                加载失败:{error}
+                {t("table.loadFailed")}{error}
               </TableCell>
             </TableRow>
           ) : showSkeleton ? (
@@ -169,8 +171,8 @@ export function ProDataTable<T>({
             <TableRow className="hover:bg-transparent">
               <TableCell colSpan={colSpan} className="py-12 text-center text-sm text-muted-foreground">
                 {queryValue.trim()
-                  ? `没有匹配「${queryValue.trim()}」的结果`
-                  : (emptyState ?? "暂无数据")}
+                  ? t("table.noMatch").replace("{q}", queryValue.trim())
+                  : (emptyState ?? t("table.empty"))}
               </TableCell>
             </TableRow>
           ) : (
@@ -209,7 +211,7 @@ export function ProDataTable<T>({
               <Button
                 variant="outline"
                 size="icon-sm"
-                aria-label="上一页"
+                aria-label={t("table.prevPage")}
                 disabled={current === 0}
                 onClick={() => goTo(current - 1)}
               >
@@ -221,7 +223,7 @@ export function ProDataTable<T>({
               <Button
                 variant="outline"
                 size="icon-sm"
-                aria-label="下一页"
+                aria-label={t("table.nextPage")}
                 disabled={current >= pageCount - 1}
                 onClick={() => goTo(current + 1)}
               >
