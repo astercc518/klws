@@ -1,4 +1,5 @@
 import { Card } from "@/components/ui/card";
+import { PageHeader } from "@/components/admin/page-header";
 import { DashboardMetrics } from "@/components/dashboard-metrics";
 import { SendTrendChart } from "@/components/send-trend-chart";
 import { NewCampaignDialog } from "@/components/new-campaign-dialog";
@@ -6,16 +7,12 @@ import { NewCampaignDialog } from "@/components/new-campaign-dialog";
 export default function DashboardPage() {
   return (
     <div className="mx-auto max-w-7xl space-y-6">
-      {/* Page heading + primary action */}
-      <div className="flex items-end justify-between gap-4">
-        <div>
-          <div className="font-mono text-[10px] uppercase tracking-[0.18em] text-muted-foreground">
-            Overview
-          </div>
-          <h1 className="mt-1 text-2xl font-semibold tracking-tight">数据大盘</h1>
-        </div>
-        <NewCampaignDialog />
-      </div>
+      <PageHeader
+        eyebrow="Overview"
+        title={{ zh: "数据大盘", en: "Dashboard" }}
+        actions={<NewCampaignDialog />}
+        className="pb-0"
+      />
 
       {/* Metric row — live data from GET /tenant/stats */}
       <DashboardMetrics />

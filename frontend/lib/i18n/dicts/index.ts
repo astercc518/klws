@@ -1,9 +1,18 @@
 import type { Locale } from "@/lib/i18n";
 import { common } from "./common";
+import { admin } from "./admin";
+import { dashboard } from "./dashboard";
+import { sales } from "./sales";
+import { auth } from "./auth";
 
-/** Every message namespace. Later phases push their dicts here
- *  (e.g. admin, dashboard, sales). */
-const namespaces: Record<Locale, Record<string, string>>[] = [common];
+/** Every message namespace. */
+const namespaces: Record<Locale, Record<string, string>>[] = [
+  common,
+  admin,
+  dashboard,
+  sales,
+  auth,
+];
 
 /** All namespaces merged per locale into a single flat lookup. */
 export const messages: Record<Locale, Record<string, string>> = {

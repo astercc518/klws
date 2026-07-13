@@ -6,8 +6,11 @@ export default function AdminCampaignsPage() {
     <div className="mx-auto max-w-7xl">
       <PageHeader
         eyebrow="Send Center"
-        title="发送任务"
-        description="全租户群发任务监控:筛选、强制暂停/恢复、下钻收件人明细。"
+        title={{ zh: "发送任务", en: "Send tasks" }}
+        description={{
+          zh: "全租户群发任务监控:筛选、强制暂停/恢复、下钻收件人明细。",
+          en: "Campaign monitoring across every tenant: filter, force-pause/resume, and drill into per-recipient detail.",
+        }}
       />
       <AdminCampaigns />
     </div>

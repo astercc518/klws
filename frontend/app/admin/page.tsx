@@ -6,8 +6,11 @@ export default function AdminOverviewPage() {
     <div className="mx-auto max-w-7xl">
       <PageHeader
         eyebrow="God View"
-        title="全局大盘"
-        description="全平台财务、资源与风控的实时概览。"
+        title={{ zh: "全局大盘", en: "Global overview" }}
+        description={{
+          zh: "全平台财务、资源与风控的实时概览。",
+          en: "Real-time overview of platform-wide finance, resources, and risk.",
+        }}
       />
       <AdminMetrics />
     </div>

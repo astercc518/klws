@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import { PageHeader } from "@/components/admin/page-header";
 import { ContactsList } from "@/components/dashboard/contacts-list";
 import { ContactsTagsSegments } from "@/components/dashboard/contacts-tags-segments";
 import { SuppressionList } from "@/components/dashboard/suppression-list";
@@ -17,15 +18,15 @@ export default function DashboardContactsPage() {
 
   return (
     <div className="mx-auto max-w-7xl space-y-6">
-      <div>
-        <div className="font-mono text-[10px] uppercase tracking-[0.18em] text-muted-foreground">
-          Contacts
-        </div>
-        <h1 className="mt-1 text-2xl font-semibold tracking-tight">联系人</h1>
-        <p className="mt-1 text-sm text-muted-foreground">
-          管理联系人库、标签与分段,并维护退订黑名单——建群发时可直接从分段选取收件人。
-        </p>
-      </div>
+      <PageHeader
+        eyebrow="Contacts"
+        title={{ zh: "联系人", en: "Contacts" }}
+        description={{
+          zh: "管理联系人库、标签与分段,并维护退订黑名单——建群发时可直接从分段选取收件人。",
+          en: "Manage your contact directory, tags, and segments, and maintain the opt-out suppression list — pick recipients directly from a segment when creating a campaign.",
+        }}
+        className="pb-0"
+      />
 
       <div className="inline-flex flex-wrap rounded-lg border bg-muted/40 p-0.5">
         {TABS.map((t) => (
