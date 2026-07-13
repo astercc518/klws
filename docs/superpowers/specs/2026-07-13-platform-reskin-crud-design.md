@@ -34,7 +34,7 @@
 
 ### 4.2 双语方案
 - **不用 URL 前缀路由**(`/en/...` 会破坏现有路由与书签)。
-- React Context + 两份 JSON 字典(`zh.json` / `en.json`),locale 存 localStorage,顶栏切换即时生效。登录后应用无 SEO 需求,零路由改动、零新依赖。
+- React Context + 两份 JSON 字典(`zh.json` / `en.json`),locale 存 cookie,服务端 async 根布局经 `getLocale()` 读取(cookie 优先→`Accept-Language`→默认 zh),SSR 首屏即正确语言,无水合闪烁;切换写 cookie + `router.refresh()`。(采纳自 `feat/app-i18n-ssr` 分支已实现机制,原 localStorage 方案有英文浏览器首屏闪烁问题。)登录后应用无 SEO 需求,零路由改动、零新依赖。
 
 ### 4.3 布局壳
 - 统一侧边栏(可折叠,沿用 SP8 OKCC 式分组导航)+ 顶栏(全局搜索、语言切换、主题切换、身份/模拟登录标识)。
