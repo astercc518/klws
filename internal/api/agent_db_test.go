@@ -151,6 +151,65 @@ func TestHandleAdminSetAgentParent_CyclePrevented(t *testing.T) {
 	}
 }
 
+func TestHandleAdminSetAgentParent_ParentMustBeSalesAgent(t *testing.T) {
+	pool := testPool(t)
+	s := &Server{sysPool: pool}
+	ctx := context.Background()
+	agent := seedAgent(t, ctx, s, "child3@x", nil)
+	// An admin console_user (NOT a sales agent) — valid FK target, wrong role.
+	var adminID int64
+	if err := pool.QueryRow(ctx,
+		`INSERT INTO console_users (email, password_hash, role, tenant_id)
+		 VALUES ('admin3@x','x','admin',NULL) RETURNING id`).Scan(&adminID); err != nil {
+		t.Fatalf("seed admin: %v", err)
+	}
+
+	// (a) non-existent parent id → clean 400, not a 500 from the FK.
+	w := doJSONAgent(t, s, s.handleAdminSetAgentParent, "POST", "/admin/agents/x/parent", 0, itoa(agent),
+		`{"parent_id":999999}`)
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("nonexistent parent: expected 400, got %d body=%s", w.Code, w.Body.String())
+	}
+
+	// (b) parent id exists but is role='admin' → 400, not silently written.
+	w2 := doJSONAgent(t, s, s.handleAdminSetAgentParent, "POST", "/admin/agents/x/parent", 0, itoa(agent),
+		`{"parent_id":`+itoa(adminID)+`}`)
+	if w2.Code != http.StatusBadRequest {
+		t.Fatalf("admin parent: expected 400, got %d body=%s", w2.Code, w2.Body.String())
+	}
+	var parentID *int64
+	if err := pool.QueryRow(ctx, `SELECT parent_id FROM console_users WHERE id=$1`, agent).Scan(&parentID); err != nil {
+		t.Fatalf("read parent: %v", err)
+	}
+	if parentID != nil {
+		t.Fatalf("parent must not have been written, got %v", *parentID)
+	}
+
+	// (c) target itself is not a sales agent → 400.
+	w3 := doJSONAgent(t, s, s.handleAdminSetAgentParent, "POST", "/admin/agents/x/parent", 0, itoa(adminID),
+		`{"parent_id":`+itoa(agent)+`}`)
+	if w3.Code != http.StatusBadRequest {
+		t.Fatalf("non-sales target: expected 400, got %d body=%s", w3.Code, w3.Body.String())
+	}
+}
+
+func TestHandleAdminSetAgentTerms_TargetMustBeSalesAgent(t *testing.T) {
+	pool := testPool(t)
+	s := &Server{sysPool: pool}
+	ctx := context.Background()
+	var adminID int64
+	if err := pool.QueryRow(ctx,
+		`INSERT INTO console_users (email, password_hash, role, tenant_id)
+		 VALUES ('admin4@x','x','admin',NULL) RETURNING id`).Scan(&adminID); err != nil {
+		t.Fatalf("seed admin: %v", err)
+	}
+	w := doJSONAgent(t, s, s.handleAdminSetAgentTerms, "POST", "/admin/agents/x/terms", 0, itoa(adminID),
+		`{"commission_rate":0.1,"credit_limit":100}`)
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("non-sales target: expected 400, got %d body=%s", w.Code, w.Body.String())
+	}
+}
+
 func TestHandleAdminSetAgentTerms(t *testing.T) {
 	pool := testPool(t)
 	s := &Server{sysPool: pool}

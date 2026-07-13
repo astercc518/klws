@@ -36,6 +36,17 @@ func (s *Server) agentInSubtree(ctx context.Context, rootAgentID, targetAgentID 
 	return in, err
 }
 
+// isSalesAgent reports whether id refers to an existing console_users row with
+// role='sales'. A non-existent id returns (false, nil), so callers can treat
+// "missing" and "wrong role" identically as a 400.
+func (s *Server) isSalesAgent(ctx context.Context, id int64) (bool, error) {
+	var ok bool
+	err := s.systemPool().QueryRow(ctx,
+		`SELECT EXISTS (SELECT 1 FROM console_users WHERE id=$1 AND role='sales')`,
+		id).Scan(&ok)
+	return ok, err
+}
+
 // tenantInSubtree reports whether tenantID's sales_owner_id is rootAgentID or
 // one of rootAgentID's descendant agents.
 func (s *Server) tenantInSubtree(ctx context.Context, rootAgentID, tenantID int64) (bool, error) {
@@ -108,9 +119,28 @@ func (s *Server) handleAdminSetAgentParent(c *gin.Context) {
 		return
 	}
 	ctx := c.Request.Context()
+	// The target must itself be an agent (role='sales'); setting a parent on
+	// an admin/customer is meaningless and would corrupt the tree.
+	if isSales, err := s.isSalesAgent(ctx, id); err != nil {
+		fail(c, http.StatusInternalServerError, "target lookup failed")
+		return
+	} else if !isSales {
+		fail(c, http.StatusBadRequest, "target is not a sales agent")
+		return
+	}
 	if req.ParentID != nil {
 		if *req.ParentID == id {
 			fail(c, http.StatusBadRequest, "agent cannot be its own parent")
+			return
+		}
+		// The new parent must exist AND be a sales agent — otherwise a bad id
+		// hits the FK (500) or silently roots the subtree under a non-sales
+		// node, breaking the subtree/rebate invariants.
+		if isSales, err := s.isSalesAgent(ctx, *req.ParentID); err != nil {
+			fail(c, http.StatusInternalServerError, "parent lookup failed")
+			return
+		} else if !isSales {
+			fail(c, http.StatusBadRequest, "new parent is not an existing sales agent")
 			return
 		}
 		cyclic, err := s.agentInSubtree(ctx, id, *req.ParentID)
@@ -175,6 +205,14 @@ func (s *Server) handleAdminSetAgentTerms(c *gin.Context) {
 		return
 	}
 	ctx := c.Request.Context()
+	// rebate/credit_limit are only meaningful for agents (role='sales').
+	if isSales, err := s.isSalesAgent(ctx, id); err != nil {
+		fail(c, http.StatusInternalServerError, "target lookup failed")
+		return
+	} else if !isSales {
+		fail(c, http.StatusBadRequest, "target is not a sales agent")
+		return
+	}
 	err = pgx.BeginTxFunc(ctx, s.systemPool(), pgx.TxOptions{}, func(tx pgx.Tx) error {
 		tag, e := tx.Exec(ctx,
 			`UPDATE console_users SET
