@@ -1,0 +1,713 @@
+// 翻译记忆存档 — 摘自 feat/frontend-i18n-theme(2026-07-02,落后 main 263 提交,该分支永不合并)。
+// 仅作 P1b 文案铺开时的中英对照参考;键名结构与现行 lib/i18n/dicts/* 不同,不可直接 import。
+// 注意:该分支基于已废弃的 customer-as-workspace 模型,涉及"用户/客户"称谓的译文需按现行 tenant 模型口径复核。
+
+import type { Locale } from "./i18n";
+
+/** One translatable string in every supported locale.
+ *  Typing every entry as this record makes `tsc`/`next build` FAIL if any
+ *  key is missing a locale — this is our completeness guard. */
+export type Entry = Record<Locale, string>;
+type Namespace = Record<string, Entry>;
+
+export const messages = {
+  common: {
+    save: { zh: "保存", en: "Save" },
+    cancel: { zh: "取消", en: "Cancel" },
+    loading: { zh: "加载中…", en: "Loading…" },
+    serverError: { zh: "无法连接服务器", en: "Cannot reach server" },
+    close: { zh: "关闭", en: "Close" },
+  },
+  nav: {
+    language: { zh: "语言", en: "Language" },
+    theme: { zh: "主题", en: "Theme" },
+    preferences: { zh: "偏好设置", en: "Preferences" },
+    logout: { zh: "退出登录", en: "Log out" },
+    toggleTheme: { zh: "切换主题", en: "Toggle theme" },
+  },
+  auth: {
+    // login
+    welcomeBack: { zh: "欢迎回来", en: "Welcome back" },
+    loginSubtitle: { zh: "登录以访问你的 klws 控制台。", en: "Sign in to access your klws console." },
+    account: { zh: "账号", en: "Account" },
+    accountPlaceholder: { zh: "邮箱或用户名", en: "Email or username" },
+    password: { zh: "密码", en: "Password" },
+    forgotPassword: { zh: "忘记密码？", en: "Forgot password?" },
+    showPassword: { zh: "显示密码", en: "Show password" },
+    hidePassword: { zh: "隐藏密码", en: "Hide password" },
+    capsOn: { zh: "⚠ 大写锁定已开启", en: "⚠ Caps Lock is on" },
+    signIn: { zh: "登录", en: "Sign in" },
+    signingIn: { zh: "登录中…", en: "Signing in…" },
+    noAccount: { zh: "还没有账号？", en: "Don't have an account?" },
+    signUpFree: { zh: "免费注册", en: "Sign up free" },
+    accountRequired: { zh: "请输入账号", en: "Please enter your account" },
+    accountTooShort: { zh: "账号至少 3 个字符", en: "Account must be at least 3 characters" },
+    passwordRequired: { zh: "请输入密码", en: "Please enter your password" },
+    passwordTooShort: { zh: "密码至少 6 位", en: "Password must be at least 6 characters" },
+    captchaRequired: { zh: "请完成人机验证", en: "Please complete the captcha" },
+    loginFailed: { zh: "登录失败", en: "Login failed" },
+
+    // register
+    createAccount: { zh: "创建账号", en: "Create account" },
+    registerSubtitle: {
+      zh: "几分钟开始，无需信用卡。",
+      en: "Get started in minutes, no credit card required.",
+    },
+    email: { zh: "邮箱", en: "Email" },
+    emailPlaceholder: { zh: "you@company.com", en: "you@company.com" },
+    passwordPlaceholder: { zh: "至少 6 位", en: "At least 6 characters" },
+    confirmPassword: { zh: "确认密码", en: "Confirm password" },
+    confirmPasswordPlaceholder: { zh: "再次输入密码", en: "Enter your password again" },
+    registering: { zh: "注册中…", en: "Signing up…" },
+    alreadyHaveAccount: { zh: "已有账号？", en: "Already have an account?" },
+    signInNow: { zh: "直接登录", en: "Sign in" },
+    emailRequired: { zh: "请输入邮箱", en: "Please enter your email" },
+    emailInvalid: { zh: "邮箱格式不正确", en: "Invalid email format" },
+    confirmPasswordRequired: { zh: "请再次输入密码", en: "Please re-enter your password" },
+    passwordMismatch: { zh: "两次密码不一致", en: "Passwords do not match" },
+    registerSuccess: { zh: "注册成功", en: "Registration successful" },
+    enteringConsole: { zh: "正在进入控制台…", en: "Entering the console…" },
+    registerFailed: { zh: "注册失败", en: "Registration failed" },
+
+    // forgot-password
+    recoverPassword: { zh: "找回密码", en: "Recover password" },
+    recoverPasswordSubtitle: {
+      zh: "输入注册邮箱，我们会发送重置链接。",
+      en: "Enter your registered email and we'll send you a reset link.",
+    },
+    checkEmailTitle: { zh: "查收你的邮箱", en: "Check your email" },
+    checkEmailSubtitle: {
+      zh: "重置链接已发送（如果该账号存在）。",
+      en: "A reset link has been sent (if the account exists).",
+    },
+    resetSentPrefix: { zh: "我们已向 ", en: "We've sent a password reset link to " },
+    resetSentSuffix: {
+      zh: " 发送了密码重置链接。请在 30 分钟内点击完成重置。",
+      en: ". Click it within 30 minutes to complete the reset.",
+    },
+    backToLogin: { zh: "返回登录", en: "Back to sign in" },
+    rememberedPassword: { zh: "想起来了？", en: "Remembered it?" },
+    sendResetLink: { zh: "发送重置链接", en: "Send reset link" },
+    sending: { zh: "发送中…", en: "Sending…" },
+
+    // reset-password
+    newPasswordRequired: { zh: "请输入新密码", en: "Please enter a new password" },
+    newPassword: { zh: "新密码", en: "New password" },
+    confirmNewPassword: { zh: "确认新密码", en: "Confirm new password" },
+    confirmNewPasswordPlaceholder: { zh: "再次输入新密码", en: "Enter your new password again" },
+    resetting: { zh: "重置中…", en: "Resetting…" },
+    resetPassword: { zh: "重置密码", en: "Reset password" },
+    resetPasswordSubtitle: { zh: "设置一个新密码以继续。", en: "Set a new password to continue." },
+    passwordResetSuccess: { zh: "密码已重置", en: "Password reset" },
+    useNewPasswordToLogin: {
+      zh: "请用新密码登录。",
+      en: "Please sign in with your new password.",
+    },
+    resetFailed: { zh: "重置失败", en: "Reset failed" },
+    invalidLinkTitle: { zh: "链接无效", en: "Invalid link" },
+    invalidLinkSubtitle: {
+      zh: "重置链接缺失或已失效。",
+      en: "The reset link is missing or has expired.",
+    },
+    requestNewResetLink: { zh: "重新申请重置链接", en: "Request a new reset link" },
+
+    // auth-shell
+    heroTitle: {
+      zh: "把 WhatsApp 变成你的增长引擎",
+      en: "Turn WhatsApp into your growth engine",
+    },
+    heroSubtitle: {
+      zh: "百万级并发触达 · 多租户隔离 · 实时投递回执",
+      en: "Million-scale concurrent reach · multi-tenant isolation · real-time delivery receipts",
+    },
+    backHome: { zh: "返回首页", en: "Back to home" },
+
+    // broadcast-demo (auth panel)
+    demoQueued: { zh: "排队", en: "Queued" },
+    demoSending: { zh: "发送中", en: "Sending" },
+    demoConsoleTitle: { zh: "群发控制台", en: "Broadcast console" },
+    demoSendNow: { zh: "立即群发", en: "Send broadcast now" },
+    demoReached: { zh: "已触达", en: "Reached" },
+    demoDeliveryRate: { zh: "投递率", en: "Delivery rate" },
+    demoConcurrency: { zh: "并发", en: "Concurrency" },
+    demoPromoMessage: {
+      zh: "🎉 双 11 专属 5 折，点此领取…",
+      en: "🎉 Singles' Day exclusive 50% off — tap to claim…",
+    },
+  },
+  dashboard: {
+    overview: { zh: "概览", en: "Overview" },
+    title: { zh: "数据大盘", en: "Dashboard" },
+    sendTrend: { zh: "发送趋势", en: "Send trend" },
+    trendCaption: {
+      zh: "过去 7 天 · 成功 vs 失败 · 示例数据",
+      en: "Last 7 days · success vs failed · sample data",
+    },
+
+    // shared
+    loadFailed: { zh: "加载失败", en: "Load failed" },
+    loadFailedPrefix: { zh: "加载失败:", en: "Load failed: " },
+    status: { zh: "状态", en: "Status" },
+    failed: { zh: "失败", en: "Failed" },
+    chartSuccess: { zh: "成功", en: "Success" },
+
+    // sidebar (customer)
+    navAccounts: { zh: "账号池", en: "Account pool" },
+    navBilling: { zh: "账单流水", en: "Billing" },
+
+    // dashboard-metrics
+    metricsLoadFailedPrefix: { zh: "指标加载失败:", en: "Metrics failed to load: " },
+    availableBalance: { zh: "可用余额", en: "Available balance" },
+    availableBalanceSub: { zh: "可用于发送 · USD", en: "Available to send · USD" },
+    frozenAmount: { zh: "冻结金额", en: "Frozen amount" },
+    frozenAmountSub: { zh: "进行中活动占用", en: "Held by active campaigns" },
+    onlineAccounts: { zh: "在线 WA 账号", en: "Online WA accounts" },
+    unavailableSuffix: { zh: " 个不可用", en: " unavailable" },
+    sentToday: { zh: "今日发送总量", en: "Sent today" },
+    sentTodaySub: { zh: "今日已送达", en: "Delivered today" },
+
+    // customer-campaigns
+    campaigns: { zh: "群发任务", en: "Campaigns" },
+    campaignsSubtitle: {
+      zh: "点击任意任务查看逐号触达明细与转化漏斗。",
+      en: "Click any campaign to see per-recipient delivery detail and the conversion funnel.",
+    },
+    newCampaign: { zh: "新建群发", en: "New campaign" },
+    campaignHeader: { zh: "任务", en: "Campaign" },
+    totalHeader: { zh: "总数", en: "Total" },
+    sentHeader: { zh: "已发", en: "Sent" },
+    createdAt: { zh: "创建时间", en: "Created at" },
+    noCampaigns: {
+      zh: "还没有群发任务。点击右上角「新建群发」开始。",
+      en: "No campaigns yet. Click “New campaign” in the top right to get started.",
+    },
+    statusDraft: { zh: "草稿", en: "Draft" },
+    statusRunning: { zh: "进行中", en: "Running" },
+    statusPaused: { zh: "已暂停", en: "Paused" },
+    statusCompleted: { zh: "已完成", en: "Completed" },
+
+    // recipient status (campaign-detail-sheet), also reused as funnel labels
+    statusQueued: { zh: "排队中", en: "Queued" },
+    statusSent: { zh: "已发送", en: "Sent" },
+    statusDelivered: { zh: "已送达", en: "Delivered" },
+    statusRead: { zh: "已读", en: "Read" },
+    statusSkipped: { zh: "已跳过", en: "Skipped" },
+    phoneNumber: { zh: "手机号", en: "Phone number" },
+    failureReason: { zh: "失败原因", en: "Failure reason" },
+    processedAt: { zh: "处理时间", en: "Processed at" },
+    reasonDeviceBanned: { zh: "设备被封", en: "Device banned" },
+    reasonNumberInvalid: { zh: "号码无效", en: "Invalid number" },
+    reasonBillingError: { zh: "计费失败", en: "Billing failed" },
+    reasonRateLimited: { zh: "限速拦截", en: "Rate limited" },
+    reasonMediaError: { zh: "媒体错误", en: "Media error" },
+    reasonUnknown: { zh: "未知错误", en: "Unknown error" },
+    sheetTitlePrefix: { zh: "任务 #", en: "Campaign #" },
+    sheetTitleSuffix: { zh: " · 触达明细", en: " · delivery detail" },
+    sheetDescription: {
+      zh: "逐号触达穿透。「已发送 → 已送达 → 已读」为递进里程碑；送达 / 已读需节点开启 WhatsApp 回执采集后填充，未开启时这两级保持为 0。",
+      en: "Per-recipient delivery breakdown. “Sent → Delivered → Read” are progressive milestones; delivered/read only populate once WhatsApp receipt collection is enabled on the node — otherwise these two levels stay at 0.",
+    },
+    totalSubmitted: { zh: "提交总数", en: "Total submitted" },
+    noRecipients: {
+      zh: "该任务暂无接收者记录。",
+      en: "No recipients recorded for this campaign yet.",
+    },
+    recordsZero: { zh: "0 条", en: "0 records" },
+    recordsSuffix: { zh: " 条", en: " records" },
+    prevPage: { zh: "上一页", en: "Previous page" },
+    nextPage: { zh: "下一页", en: "Next page" },
+
+    // new-campaign-dialog
+    newCampaignTitle: { zh: "新建群发任务", en: "New campaign" },
+    newCampaignDesc: {
+      zh: "粘贴收件号码并写好文案,提交后将按受控速率分散发送。",
+      en: "Paste recipient numbers and write your copy — it will go out at a controlled, paced rate.",
+    },
+    targetCountry: { zh: "目标国家", en: "Target country" },
+    targetCountryHint: { zh: "ISO-2,用于定价", en: "ISO-2, used for pricing" },
+    recipientNumbers: { zh: "收件号码", en: "Recipient numbers" },
+    countSuffix: { zh: " 个号码", en: " numbers" },
+    phonesPlaceholder: {
+      zh: "每行一个号码,或用逗号分隔\n+8613800000000\n+8613900000000",
+      en: "One number per line, or comma-separated\n+8613800000000\n+8613900000000",
+    },
+    marketingCopy: { zh: "营销文案", en: "Marketing copy" },
+    bodyPlaceholder: {
+      zh: "{Hi|Hello} {{name}}, 限时优惠 {今天|本周} 截止…",
+      en: "{Hi|Hello} {{name}}, limited-time offer ends {today|this week}…",
+    },
+    spintaxHint: {
+      zh: "{a|b} 随机取一 · {{name}} 变量替换 · 按消息做种,重试结果一致",
+      en: "{a|b} picks one at random · {{name}} is variable substitution · seeded per message, so retries are consistent",
+    },
+    campaignQueued: { zh: "群发任务已进入调度队列", en: "Campaign queued for dispatch" },
+    queuedSuffix: {
+      zh: " 个号码已提交,后台将按受控速率发送",
+      en: " numbers submitted — sending will proceed at a controlled, paced rate.",
+    },
+    submitFailed: { zh: "提交失败", en: "Submit failed" },
+    retryLater: { zh: "请稍后重试", en: "Please try again later" },
+    confirmSend: { zh: "确认发送", en: "Confirm send" },
+    submitting: { zh: "提交中…", en: "Submitting…" },
+  },
+  admin: {
+    // admin/nav.ts — group titles
+    navOverview: { zh: "概览", en: "Overview" },
+    navIamBilling: { zh: "IAM 与账单", en: "IAM & billing" },
+    navResourceHall: { zh: "资源大厅", en: "Resource hall" },
+    navPolicyCenter: { zh: "策略中心", en: "Policy center" },
+    navSystemAudit: { zh: "系统审计", en: "System audit" },
+    // admin/nav.ts — item labels
+    navGlobalOverview: { zh: "全局大盘", en: "Global overview" },
+    navTenantsBilling: { zh: "租户与财务", en: "Tenants" },
+    navUserManagement: { zh: "用户管理", en: "Users" },
+    navProxyPool: { zh: "代理网络池", en: "Proxies" },
+    navDevices: { zh: "节点与设备", en: "Devices" },
+    navRiskPolicy: { zh: "风控策略", en: "Risk" },
+    navRiskAudit: { zh: "风控与审计", en: "Audit" },
+
+    // admin-sidebar
+    expandSidebar: { zh: "展开侧边栏", en: "Expand sidebar" },
+    collapseSidebar: { zh: "折叠侧边栏", en: "Collapse sidebar" },
+
+    // admin-header
+    adminConsoleCrumb: { zh: "管理后台", en: "Admin console" },
+    breadcrumbLabel: { zh: "面包屑", en: "Breadcrumb" },
+    searchTenantsDevicesProxies: {
+      zh: "搜索租户、设备、代理…",
+      en: "Search tenants, devices, proxies…",
+    },
+    globalSearch: { zh: "全局搜索", en: "Global search" },
+    notifications: { zh: "通知", en: "Notifications" },
+    accountMenu: { zh: "账户菜单", en: "Account menu" },
+
+    // admin/admin-avatar
+    roleAdmin: { zh: "超级管理员", en: "Super Admin" },
+    roleSales: { zh: "销售", en: "Sales" },
+    roleCustomer: { zh: "客户", en: "Customer" },
+
+    // admin-metrics
+    loadFailedGeneric: { zh: "加载失败", en: "Load failed" },
+    overviewLoadFailedPrefix: { zh: "大盘加载失败:", en: "Overview failed to load: " },
+    totalConsumedRevenue: { zh: "平台总消耗 / 收入", en: "Total consumed / revenue" },
+    cumulativeTopupPrefix: { zh: "累计充值 ", en: "Cumulative top-up " },
+    activeWaAccounts: { zh: "活跃 WA 账号", en: "Active WA accounts" },
+    bannedFlaggedPrefix: { zh: "封禁/标记 ", en: "Banned/flagged " },
+    queueBacklog: { zh: "队列积压任务", en: "Queue backlog" },
+    pendingRecipients: { zh: "待发送收件人", en: "Pending recipients" },
+    banRate: { zh: "风控封号率", en: "Ban rate" },
+    bannedFlaggedOverTotal: { zh: "banned+flagged / 总账号", en: "banned+flagged / total accounts" },
+
+    // admin/pro-data-table
+    searchPlaceholder: { zh: "搜索…", en: "Search…" },
+    loadFailedPrefix: { zh: "加载失败:", en: "Load failed: " },
+    noMatchPrefix: { zh: "没有匹配「", en: "No results matching “" },
+    noMatchSuffix: { zh: "」的结果", en: "”" },
+    noData: { zh: "暂无数据", en: "No data" },
+    prevPage: { zh: "上一页", en: "Previous page" },
+    nextPage: { zh: "下一页", en: "Next page" },
+
+    // app/admin/page.tsx (overview)
+    overviewTitle: { zh: "全局大盘", en: "Global overview" },
+    overviewDesc: {
+      zh: "全平台财务、资源与风控的实时概览。",
+      en: "Real-time overview of platform-wide finance, resources, and risk.",
+    },
+
+    // app/admin/audit/page.tsx
+    auditTitle: { zh: "风控与任务监控", en: "Risk & campaign monitoring" },
+    auditDesc: {
+      zh: "全平台所有租户的群发任务。可强制终止运行中的任务,并恢复被风控自动熔断的任务。",
+      en: "Campaigns across every tenant on the platform. Force-stop running campaigns, or resume ones auto-tripped by risk controls.",
+    },
+
+    // app/admin/devices/page.tsx
+    devicesTitle: { zh: "节点与发信设备", en: "Nodes & sending devices" },
+    devicesDesc: {
+      zh: "全网 WhatsApp 账号状态:在线、离线、被风控封禁。",
+      en: "WhatsApp account status platform-wide: online, offline, or banned by risk controls.",
+    },
+
+    // app/admin/resources/page.tsx
+    resourcesTitle: { zh: "代理网络池", en: "Proxy network pool" },
+    resourcesDesc: {
+      zh: "全平台出口代理及其健康状态。",
+      en: "Platform-wide egress proxies and their health status.",
+    },
+
+    // app/admin/tenants/page.tsx
+    tenantsTitle: { zh: "租户与财务", en: "Tenants & billing" },
+    tenantsDesc: {
+      zh: "所有客户与销售账号一览。对客户行可直接充值或配置发信单价。",
+      en: "Overview of every customer and sales account. Top up balance or set the per-message rate directly from a customer row.",
+    },
+
+    // app/admin/users/page.tsx
+    usersTitle: { zh: "用户管理", en: "User management" },
+    usersDesc: {
+      zh: "全站账号:新建、启用/禁用、重置密码。客户账号绑定到对应租户。",
+      en: "All accounts site-wide: create, enable/disable, reset password. Customer accounts are bound to their tenant.",
+    },
+
+    // app/admin/settings/risk/page.tsx
+    riskSettingsTitle: { zh: "风控策略中心", en: "Risk policy center" },
+    riskSettingsDesc: {
+      zh: "集中管理全局防封策略:发信节奏、设备过载保护与封号率自动熔断阈值。",
+      en: "Centrally manage global anti-ban policy: send pacing, device overload protection, and the ban-rate auto-circuit-breaker threshold.",
+    },
+
+    // shared across admin-devices / admin-campaigns
+    tenantHeader: { zh: "租户", en: "Tenant" },
+    statusHeader: { zh: "状态", en: "Status" },
+    actionsLabel: { zh: "操作", en: "Actions" },
+    pleaseRetry: { zh: "请重试", en: "Please try again" },
+
+    // components/admin-devices.tsx
+    devicesStatusBanned: { zh: "封禁", en: "Banned" },
+    devicesStatusFlagged: { zh: "标记", en: "Flagged" },
+    devicesStatusOnline: { zh: "在线", en: "Online" },
+    devicesStatusLoggedOut: { zh: "已登出", en: "Logged out" },
+    devicesStatusOffline: { zh: "离线", en: "Offline" },
+    jidHeader: { zh: "账号 JID", en: "Account JID" },
+    phoneHeader: { zh: "手机号", en: "Phone number" },
+    tagsHeader: { zh: "标签", en: "Tags" },
+    networkHeader: { zh: "网络环境", en: "Network environment" },
+    notBound: { zh: "未绑定", en: "Not bound" },
+    nodeHeader: { zh: "所属节点", en: "Owner node" },
+    totalDevicesLabel: { zh: "设备总数", en: "Total devices" },
+    totalDevicesSub: { zh: "全网 WA 账号", en: "All WA accounts network-wide" },
+    onlineSub: { zh: "已接管并可发送", en: "Claimed and ready to send" },
+    riskyLabel: { zh: "封禁 / 标记", en: "Banned / flagged" },
+    riskySub: { zh: "被风控命中", en: "Flagged by risk controls" },
+    loggedOutSub: { zh: "需重新扫码接入", en: "Needs QR re-pairing" },
+    devicesSearchPlaceholder: { zh: "搜索 JID / 手机号 / 标签…", en: "Search JID / phone / tags…" },
+    devicesEmptyState: {
+      zh: "设备池为空。可批量录入元数据,或在节点侧扫码接入。",
+      en: "Device pool is empty. Bulk-import metadata, or pair via QR code on the node.",
+    },
+    configNetworkMenuItem: { zh: "配置网络", en: "Configure network" },
+    connectDeviceButton: { zh: "接入新账号", en: "Connect new account" },
+    connectDialogTitle: { zh: "扫码接入 WhatsApp 账号", en: "Pair a WhatsApp account via QR" },
+    connectDialogDesc: {
+      zh: "用 WhatsApp → 已关联的设备 → 关联设备,扫描下方二维码。",
+      en: "In WhatsApp, go to Linked devices → Link a device, then scan the QR code below.",
+    },
+    connectDialogNote: {
+      zh: "实时二维码由发信节点(cmd/wadist)的 whatsmeow 配对流程产生。该集群流式端点尚未对外开放,此处为预留位 —— 不触碰底层防封/集群逻辑。",
+      en: "The live QR code is generated by the sending node's (cmd/wadist) whatsmeow pairing flow. That cluster streaming endpoint isn't exposed yet — this is a placeholder and doesn't touch the underlying anti-ban/cluster logic.",
+    },
+    closeButton: { zh: "关闭", en: "Close" },
+    importDevicesButton: { zh: "批量录入设备", en: "Bulk import devices" },
+    importDevicesDialogTitle: { zh: "批量录入设备元数据", en: "Bulk import device metadata" },
+    importDevicesDescPrefix: { zh: "每行一个,格式", en: "One entry per line, format" },
+    importDevicesDescSuffix: {
+      zh: "。标签段可省略,多个标签用逗号分隔。仅写入元数据,实际登录仍走节点扫码。",
+      en: ". The tag segment is optional — separate multiple tags with commas. This only writes metadata; actual login still happens via QR scan on the node.",
+    },
+    deviceListLabel: { zh: "设备列表", en: "Device list" },
+    parsedPrefix: { zh: "解析到 ", en: "Parsed " },
+    entriesSuffix: { zh: " 条", en: " entries" },
+    importingButton: { zh: "录入中…", en: "Importing…" },
+    confirmImportPrefix: { zh: "确认录入 ", en: "Import " },
+    configNetworkDialogTitle: { zh: "配置网络环境", en: "Configure network environment" },
+    bindDescPrefix: { zh: "为 ", en: "Bind a dedicated static proxy IP for " },
+    bindDescSuffix: {
+      zh: " 绑定独享静态代理 IP,实现账号间网络隔离、防止关联封号。",
+      en: " to isolate network activity between accounts and prevent ban-by-association.",
+    },
+    currentBindingLabel: { zh: "当前绑定", en: "Current binding" },
+    selectProxyLabel: { zh: "选择代理 IP", en: "Select proxy IP" },
+    selectProxyPlaceholder: { zh: "选择一个可用代理…", en: "Select an available proxy…" },
+    noAvailableProxy: { zh: "无可用代理", en: "No available proxy" },
+    unbindButton: { zh: "解绑", en: "Unbind" },
+    submittingButton: { zh: "提交中…", en: "Submitting…" },
+    confirmBindButton: { zh: "确认绑定", en: "Confirm bind" },
+    deviceImportSuccessTitle: { zh: "设备录入完成", en: "Devices imported" },
+    importedPrefix: { zh: "新增 ", en: "Added " },
+    skippedMiddle: { zh: " · 跳过 ", en: " · Skipped " },
+    importFailedTitle: { zh: "录入失败", en: "Import failed" },
+    proxyBoundTitle: { zh: "代理已绑定", en: "Proxy bound" },
+    bindFailedTitle: { zh: "绑定失败", en: "Bind failed" },
+    proxyUnboundTitle: { zh: "已解绑代理", en: "Proxy unbound" },
+    unbindFailedTitle: { zh: "解绑失败", en: "Unbind failed" },
+
+    // components/admin-risk-settings.tsx
+    riskSaveSuccessTitle: { zh: "风控策略已保存", en: "Risk policy saved" },
+    riskSaveSuccessDesc: {
+      zh: "策略已持久化并审计;发信引擎接入将在后续版本生效。",
+      en: "The policy is persisted and audited; engine integration will take effect in a future release.",
+    },
+    riskSaveFailedTitle: { zh: "保存失败", en: "Save failed" },
+    riskNoticePrefix: {
+      zh: "策略将被持久化并审计,作为发信引擎的",
+      en: "The policy will be persisted and audited, serving as the",
+    },
+    riskNoticeStrong: { zh: "单一策略来源", en: "single source of truth" },
+    riskNoticeSuffix: {
+      zh: "。当前发信引擎仍使用其内置默认值,本页修改不会即时改变正在运行的发送行为,引擎接入将在后续版本落地。",
+      en: "for the sending engine. The engine currently still uses its built-in defaults — edits here won't immediately change live send behavior; engine integration lands in a future release.",
+    },
+    sendPacingTitle: { zh: "发信频率控制", en: "Send pacing control" },
+    sendPacingDesc: {
+      zh: "模拟真人发送节奏。系统在最小与最大间隔之间随机抖动,间隔越大越安全、吞吐越低。",
+      en: "Mimics human send cadence. The system jitters randomly between the min and max interval — larger intervals are safer but lower throughput.",
+    },
+    minDelayLabel: { zh: "最小发送间隔", en: "Minimum send interval" },
+    maxDelayLabel: { zh: "最大发送间隔", en: "Maximum send interval" },
+    secondsUnit: { zh: "秒", en: "sec" },
+    maxDelayError: {
+      zh: "最大间隔必须不小于最小间隔。",
+      en: "The maximum interval must not be less than the minimum interval.",
+    },
+    deviceOverloadTitle: { zh: "设备过载保护", en: "Device overload protection" },
+    deviceOverloadDesc: {
+      zh: "单个 WA 账号每日发送上限。达到上限后,调度器将不再向该设备派发新消息。",
+      en: "The daily send cap per WA account. Once reached, the scheduler stops dispatching new messages to that device.",
+    },
+    dailyLimitLabel: { zh: "单设备日发送上限", en: "Daily send cap per device" },
+    perDayUnit: { zh: "条 / 天", en: "per day" },
+    dailyLimitError: { zh: "日上限必须为正整数。", en: "The daily cap must be a positive integer." },
+    circuitBreakerTitle: { zh: "自动熔断策略", en: "Auto circuit breaker policy" },
+    circuitBreakerDesc: {
+      zh: "当批次封号率超过此值,系统将自动挂起该任务。",
+      en: "When a batch's ban rate exceeds this value, the system automatically suspends the campaign.",
+    },
+    banRateLabel: { zh: "封号率熔断阈值", en: "Ban-rate circuit-breaker threshold" },
+    percentUnit: { zh: "%", en: "%" },
+    banRateError: { zh: "阈值需在 0% 到 100% 之间。", en: "The threshold must be between 0% and 100%." },
+    enableBreakerLabel: { zh: "启用自动熔断", en: "Enable auto circuit breaker" },
+    enableBreakerHint: {
+      zh: "关闭时熔断器完全空跑,不会挂起任何任务。",
+      en: "When off, the breaker runs in a no-op mode and never suspends any campaign.",
+    },
+    dryRunLabel: { zh: "观察模式 (Dry-run)", en: "Observation mode (dry run)" },
+    dryRunHint: {
+      zh: "开启后仅记录「将熔断」日志与指标,不真正挂起任务。建议先观察校准阈值。",
+      en: "When on, it only logs \"would trip\" events and metrics without actually suspending campaigns. Recommended for calibrating the threshold first.",
+    },
+    minSampleLabel: { zh: "最小样本数", en: "Minimum sample size" },
+    minSampleHint: {
+      zh: "少于此发送量不评判,防误杀。",
+      en: "Below this send volume, no judgment is made — this avoids false positives.",
+    },
+    evalWindowLabel: { zh: "评估窗口", en: "Evaluation window" },
+    evalWindowHint: {
+      zh: "秒。仅看最近此时段(默认 900=15 分)。",
+      en: "Seconds. Only looks at this recent time span (default 900 = 15 min).",
+    },
+    evalIntervalLabel: { zh: "评估间隔", en: "Evaluation interval" },
+    evalIntervalHint: { zh: "秒。熔断器多久巡检一次。", en: "Seconds. How often the breaker re-checks." },
+    breakerValidationError: {
+      zh: "样本数 / 窗口 / 间隔均须为 ≥ 1 的整数。",
+      en: "Sample size / window / interval must all be integers ≥ 1.",
+    },
+    lastUpdatedPrefix: { zh: "上次更新 ", en: "Last updated " },
+    noPolicySetYet: { zh: "尚未设置过策略", en: "No policy has been set yet" },
+    resetButton: { zh: "重置", en: "Reset" },
+    savePolicyButton: { zh: "保存策略", en: "Save policy" },
+    savingButton: { zh: "保存中…", en: "Saving…" },
+
+    // components/admin-campaigns.tsx
+    pausedToastTitle: { zh: "已强制暂停", en: "Force-paused" },
+    campaignHashPrefix: { zh: "任务 #", en: "Campaign #" },
+    opFailedTitle: { zh: "操作失败", en: "Operation failed" },
+    resumedToastTitle: { zh: "已恢复任务", en: "Campaign resumed" },
+    resumeFailedTitle: { zh: "恢复失败", en: "Resume failed" },
+    taskHeader: { zh: "任务", en: "Campaign" },
+    totalHeader: { zh: "总数", en: "Total" },
+    sentHeader: { zh: "已发", en: "Sent" },
+    failedHeader: { zh: "失败", en: "Failed" },
+    noCampaignsRow: { zh: "当前没有任务。", en: "No campaigns yet." },
+    autoTrippedBadge: { zh: "自动熔断", en: "Auto-tripped" },
+    autoTrippedTooltip: {
+      zh: "风控熔断器因封号率超阈值自动挂起了此任务",
+      en: "The risk circuit breaker auto-suspended this campaign because the ban rate exceeded the threshold",
+    },
+    resumingButton: { zh: "恢复中…", en: "Resuming…" },
+    resumeButton: { zh: "恢复", en: "Resume" },
+    forceStopButton: { zh: "强制终止", en: "Force stop" },
+    killDialogTitle: { zh: "强制终止任务", en: "Force-stop campaign" },
+    killDialogPrefix: { zh: "将任务 #", en: "This sets campaign #" },
+    killDialogMiddle: { zh: "(租户 #", en: " (tenant #" },
+    killDialogSuffix: {
+      zh: ")置为 paused,调度器会立即停止继续发送。此操作不可在界面撤销。",
+      en: ") to paused. The scheduler stops sending immediately. This cannot be undone from the UI.",
+    },
+    processingButton: { zh: "处理中…", en: "Processing…" },
+    confirmStopButton: { zh: "确认终止", en: "Confirm stop" },
+
+    // shared across admin-tenants-table / admin-users-table / admin-proxies
+    accountHeader: { zh: "账号", en: "Account" },
+    roleHeader: { zh: "角色", en: "Role" },
+
+    // components/admin-tenants-table.tsx
+    roleFilterAll: { zh: "全部角色", en: "All roles" },
+    roleFilterCustomer: { zh: "客户 Customer", en: "Customer" },
+    roleFilterSales: { zh: "销售 Sales", en: "Sales" },
+    roleFilterAdmin: { zh: "管理员 Admin", en: "Admin" },
+    availableBalanceHeader: { zh: "可用余额", en: "Available balance" },
+    frozenHeader: { zh: "冻结", en: "Frozen" },
+    customerAccountsLabel: { zh: "客户账号", en: "Customer accounts" },
+    customerAccountsSub: { zh: "customer 角色", en: "customer role" },
+    salesAccountsLabel: { zh: "销售账号", en: "Sales accounts" },
+    salesAccountsSub: { zh: "sales 角色", en: "sales role" },
+    totalAvailableBalanceLabel: { zh: "总可用余额", en: "Total available balance" },
+    totalAvailableBalanceSub: { zh: "所有租户钱包合计", en: "Sum of all tenant wallets" },
+    totalFrozenLabel: { zh: "总冻结金额", en: "Total frozen amount" },
+    totalFrozenSub: { zh: "预扣发送中", en: "Held for in-flight sends" },
+    tenantsSearchPlaceholder: { zh: "搜索账号或租户…", en: "Search accounts or tenants…" },
+    noAccountsEmptyState: { zh: "暂无账号", en: "No accounts yet" },
+    filterByRoleLabel: { zh: "按角色筛选", en: "Filter by role" },
+    topupTitle: { zh: "充值 Top-up", en: "Top-up" },
+    pricingMenuItem: { zh: "设单价 Pricing", en: "Set pricing" },
+    topupSuccessTitle: { zh: "充值成功", en: "Top-up successful" },
+    topupFailedTitle: { zh: "充值失败", en: "Top-up failed" },
+    topupDescPrefix: { zh: "为 ", en: "Manually top up the wallet for " },
+    topupDescSuffix: {
+      zh: " 的钱包手动加款。请再次核对金额。",
+      en: ". Please double-check the amount.",
+    },
+    topupAmountLabel: { zh: "充值金额", en: "Top-up amount" },
+    refLabel: { zh: "流水号", en: "Reference" },
+    refHint: { zh: "幂等键", en: "Idempotency key" },
+    confirmTopupButton: { zh: "确认充值", en: "Confirm top-up" },
+    configPricingTitle: { zh: "配置发信单价", en: "Configure per-message rate" },
+    pricingDescPrefix: { zh: "为 ", en: "Set the per-message rate for " },
+    pricingDescSuffix: { zh: " 设置指定国家的每条单价。", en: " for a specific country." },
+    countryLabel: { zh: "国家", en: "Country" },
+    isoHint: { zh: "ISO-2", en: "ISO-2" },
+    perMessagePriceLabel: { zh: "每条单价", en: "Per-message price" },
+    pricingUpdatedTitle: { zh: "单价已更新", en: "Pricing updated" },
+    perMessageUnitSuffix: { zh: " / 条", en: " / msg" },
+    pricingFailedTitle: { zh: "设置失败", en: "Update failed" },
+    confirmSettingsButton: { zh: "确认设置", en: "Confirm" },
+
+    // components/admin-users-table.tsx
+    userEnabledToastTitle: { zh: "已启用", en: "Enabled" },
+    userDisabledToastTitle: { zh: "已禁用", en: "Disabled" },
+    userDisabledBadge: { zh: "已禁用", en: "Disabled" },
+    userEnabledBadge: { zh: "启用", en: "Enabled" },
+    enableAccountMenuItem: { zh: "启用账号", en: "Enable account" },
+    disableAccountMenuItem: { zh: "禁用账号", en: "Disable account" },
+    resetPasswordTitle: { zh: "重置密码", en: "Reset password" },
+    newUserTitle: { zh: "新建用户", en: "New user" },
+    newUserDesc: {
+      zh: "创建管理员、销售或客户账号。客户须绑定一个租户。",
+      en: "Create an admin, sales, or customer account. Customer accounts must be bound to a tenant.",
+    },
+    emailLabel: { zh: "邮箱", en: "Email" },
+    initialPasswordLabel: { zh: "初始密码", en: "Initial password" },
+    minLength8Hint: { zh: "≥8 位", en: "≥8 characters" },
+    setInitialPasswordPlaceholder: { zh: "设置初始密码", en: "Set the initial password" },
+    bindTenantLabel: { zh: "绑定租户", en: "Bind tenant" },
+    selectTenantPlaceholder: { zh: "选择租户…", en: "Select a tenant…" },
+    creatingButton: { zh: "创建中…", en: "Creating…" },
+    confirmCreateButton: { zh: "确认创建", en: "Confirm create" },
+    userCreatedTitle: { zh: "用户已创建", en: "User created" },
+    creationFailedTitle: { zh: "创建失败", en: "Creation failed" },
+    resetPwDescPrefix: { zh: "为 ", en: "Set a new password for " },
+    resetPwDescSuffix: {
+      zh: " 设置新密码。用户下次用新密码登录。",
+      en: ". They'll sign in with the new password next time.",
+    },
+    newPasswordLabelAdmin: { zh: "新密码", en: "New password" },
+    enterNewPasswordPlaceholder: { zh: "输入新密码", en: "Enter the new password" },
+    confirmResetButton: { zh: "确认重置", en: "Confirm reset" },
+    passwordResetTitleAdmin: { zh: "密码已重置", en: "Password reset" },
+    resetFailedTitleAdmin: { zh: "重置失败", en: "Reset failed" },
+
+    // components/admin-proxies.tsx
+    proxyAddressHeader: { zh: "代理地址", en: "Proxy address" },
+    typeHeader: { zh: "类型", en: "Type" },
+    countryHeader: { zh: "国家", en: "Country" },
+    proxyInvalidStatus: { zh: "失效", en: "Invalid" },
+    bindingsHeader: { zh: "绑定", en: "Bindings" },
+    proxiesTotalLabel: { zh: "代理总数", en: "Total proxies" },
+    proxiesTotalSub: { zh: "全平台出口", en: "Platform-wide egress" },
+    proxiesOnlineLabel: { zh: "在线", en: "Online" },
+    proxiesOnlineSub: { zh: "健康可调度", en: "Healthy and schedulable" },
+    proxiesOfflineLabel: { zh: "离线 / 失效", en: "Offline / invalid" },
+    proxiesOfflineSub: { zh: "需排查或剔除", en: "Needs review or removal" },
+    proxiesFailuresLabel: { zh: "累计失败次数", en: "Cumulative failures" },
+    proxiesFailuresSub: { zh: "连接失败计数合计", en: "Total connection failure count" },
+    proxiesSearchPlaceholder: { zh: "搜索地址或国家…", en: "Search address or country…" },
+    proxiesEmptyState: {
+      zh: "代理池为空,点击右上角批量导入。",
+      en: "The proxy pool is empty. Click bulk import in the top right.",
+    },
+    importProxiesTitle: { zh: "批量导入代理", en: "Bulk import proxies" },
+    importProxiesDescPrefix: { zh: "每行一个,格式 ", en: "One per line, format " },
+    importProxiesDescSuffix: {
+      zh: "(无认证可省略后两段)。",
+      en: " (omit the last two segments if no auth).",
+    },
+    proxyCountryIsoLabel: { zh: "国家 ISO-2", en: "Country ISO-2" },
+    proxyListLabel: { zh: "代理列表", en: "Proxy list" },
+    proxyImportingButton: { zh: "导入中…", en: "Importing…" },
+    confirmImportProxiesPrefix: { zh: "确认导入 ", en: "Import " },
+    proxyImportSuccessTitle: { zh: "代理导入完成", en: "Proxies imported" },
+    proxyImportFailedTitle: { zh: "导入失败", en: "Import failed" },
+  },
+  sales: {
+    // sales-sidebar
+    myCustomers: { zh: "我的客户", en: "Customers" },
+    ownBookOnly: { zh: "仅本人名下客户", en: "Your book only" },
+
+    // sales-header
+    headerCrumb: { zh: "Sales · 名下客户管理", en: "Sales · Customer management" },
+
+    // app/sales/page.tsx
+    myBookEyebrow: { zh: "My Book", en: "My Book" },
+    pageTitle: { zh: "我的客户", en: "My customers" },
+    pageDesc: {
+      zh: "仅显示分配到你名下的客户。可查看余额并为其配置发信单价。",
+      en: "Only customers assigned to you are shown. View their balance and configure their per-message rate.",
+    },
+
+    // sales-console
+    loadFailed: { zh: "加载失败", en: "Load failed" },
+    loadFailedPrefix: { zh: "加载失败:", en: "Load failed: " },
+    customerCountLabel: { zh: "名下客户数", en: "Customers" },
+    customerCountSub: { zh: "我负责的租户", en: "Tenants I own" },
+    totalBalanceLabel: { zh: "名下总余额", en: "Total balance" },
+    totalBalanceSub: { zh: "可用合计 · USD", en: "Total available · USD" },
+    totalFrozenLabel: { zh: "名下总冻结", en: "Total frozen" },
+    totalFrozenSub: { zh: "进行中活动占用", en: "Held by active campaigns" },
+    customerHeader: { zh: "客户", en: "Customer" },
+    statusHeader: { zh: "状态", en: "Status" },
+    availableBalanceHeader: { zh: "可用余额", en: "Available balance" },
+    frozenHeader: { zh: "冻结", en: "Frozen" },
+    actionsHeader: { zh: "操作", en: "Actions" },
+    noCustomers: {
+      zh: "你名下还没有客户。请联系管理员为你分配。",
+      en: "You have no customers yet. Contact an admin to get some assigned.",
+    },
+    setPricingButton: { zh: "设单价", en: "Set pricing" },
+
+    // sales-console — pricing dialog
+    pricingUpdatedTitle: { zh: "单价已更新", en: "Pricing updated" },
+    perMessageUnitSuffix: { zh: " / 条", en: " / msg" },
+    pricingFailedTitle: { zh: "设置失败", en: "Update failed" },
+    pleaseRetry: { zh: "请重试", en: "Please try again" },
+    configPricingTitle: { zh: "配置发信单价", en: "Configure per-message rate" },
+    pricingDescPrefix: { zh: "为名下客户 ", en: "Set the per-message rate for " },
+    pricingDescSuffix: { zh: " 设置指定国家的每条单价。", en: " for a specific country." },
+    countryLabel: { zh: "国家", en: "Country" },
+    perMessagePriceLabel: { zh: "每条单价", en: "Per-message price" },
+    submittingButton: { zh: "提交中…", en: "Submitting…" },
+    confirmSettingsButton: { zh: "确认设置", en: "Confirm" },
+  },
+} satisfies Record<string, Namespace>;
+
+export type MessageNS = keyof typeof messages;
+
+/** Per-namespace key union — reuse this instead of re-declaring a local
+ *  `keyof (typeof messages)[N]` alias in each page/helper. */
+export type NSKey<N extends MessageNS> = keyof (typeof messages)[N];
+
+/** Curried getter: `t(locale)("nav","language")`. Key is type-checked
+ *  against the namespace, so typos fail at compile time. */
+export function t(locale: Locale) {
+  return <N extends MessageNS>(ns: N, key: NSKey<N>): string =>
+    (messages[ns][key] as Entry)[locale];
+}
