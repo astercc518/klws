@@ -9,6 +9,8 @@ import (
 
 	"github.com/gin-gonic/gin"
 
+	"github.com/acme/wadist/internal/audit"
+	"github.com/acme/wadist/internal/billing"
 	"github.com/acme/wadist/internal/console"
 )
 
@@ -322,6 +324,166 @@ func TestAdminSetCostPricing_ExplicitZeroAccepted(t *testing.T) {
 	if cost != 0 {
 		t.Fatalf("explicit zero must persist as 0, got %d", cost)
 	}
+}
+
+// newAgentServer wires a Server for T5's credit-allocation handlers: sysPool
+// (BYPASSRLS) + Deps.Billing (billing.Topup, called AFTER the allocation tx
+// commits — see agent_api.go's handleAgentAllocate) + Deps.Audit. No
+// store.Manager is needed since agent handlers use sysPool directly.
+func newAgentServer(t *testing.T) *Server {
+	t.Helper()
+	pool := testPool(t)
+	return &Server{sysPool: pool, deps: Deps{Billing: billing.NewRepo(pool), Audit: audit.NewAuditWriter(pool)}}
+}
+
+// setCreditLimit sets an agent's console_users.credit_limit directly.
+func setCreditLimit(t *testing.T, ctx context.Context, s *Server, agentID, limit int64) {
+	t.Helper()
+	if _, err := s.systemPool().Exec(ctx,
+		`UPDATE console_users SET credit_limit=$2 WHERE id=$1`, agentID, limit); err != nil {
+		t.Fatalf("set credit limit for agent %d: %v", agentID, err)
+	}
+}
+
+// assertWalletBalance asserts tenant_wallets.balance for tenantID == want. A
+// tenant with no wallet row yet (no topup ever applied) reads as 0.
+func assertWalletBalance(t *testing.T, ctx context.Context, s *Server, tenantID, want int64) {
+	t.Helper()
+	var got int64
+	if err := s.systemPool().QueryRow(ctx,
+		`SELECT COALESCE((SELECT balance FROM tenant_wallets WHERE tenant_id=$1),0)`,
+		tenantID).Scan(&got); err != nil {
+		t.Fatalf("read wallet balance for tenant %d: %v", tenantID, err)
+	}
+	if got != want {
+		t.Fatalf("wallet balance for tenant %d: got %d want %d", tenantID, got, want)
+	}
+}
+
+// seedSettledCharge inserts a 'settled' billing_charges row for tenantID, so
+// tests can exercise the consumption-credits-back term of
+// agentAvailableCredit (settled subtree retail consumption frees up credit
+// previously tied down by an allocation).
+func seedSettledCharge(t *testing.T, ctx context.Context, s *Server, tenantID, amount int64, msgID string) {
+	t.Helper()
+	if _, err := s.systemPool().Exec(ctx,
+		`INSERT INTO billing_charges (tenant_id, account_jid, message_id, country_code, amount, state)
+		 VALUES ($1, 'jid@x', $2, 'US', $3, 'settled')`,
+		tenantID, msgID, amount); err != nil {
+		t.Fatalf("seed settled charge for tenant %d: %v", tenantID, err)
+	}
+}
+
+// doAgentAllocate posts a single-item POST /sales/allocate {items:[{tenant_id,
+// amount}]} as agentID's session and returns the HTTP status code. A
+// single-item request gets the item's own status code back at the top level
+// (200/402/403) rather than the batch per-item report — see
+// handleAgentAllocate's doc comment.
+func doAgentAllocate(t *testing.T, s *Server, agentID, tenantID, amount int64) int {
+	t.Helper()
+	body := `{"items":[{"tenant_id":` + itoa(tenantID) + `,"amount":` + itoa(amount) + `}]}`
+	w := doJSONAgent(t, s, s.handleAgentAllocate, "POST", "/sales/allocate", agentID, "", body)
+	return w.Code
+}
+
+// TestAgentAllocate_CreditGuardAndTopup: allocating within the agent's
+// available credit succeeds (200), credits the tenant's wallet via
+// billing.Topup, and writes an agent_allocations row; a second allocation
+// that would exceed the now-reduced available credit is rejected (402) with
+// NO wallet change and NO new allocation row (proves the locked credit check
+// actually blocks the over-limit write, not just the topup).
+func TestAgentAllocate_CreditGuardAndTopup(t *testing.T) {
+	s := newAgentServer(t)
+	ctx := context.Background()
+	ag := seedAgent(t, ctx, s, "ag-guard@x", nil)
+	setCreditLimit(t, ctx, s, ag, 1000)
+	tn := seedTenantUnderAgent(t, ctx, s, ag)
+
+	if code := doAgentAllocate(t, s, ag, tn, 600); code != http.StatusOK {
+		t.Fatalf("first allocate: got %d", code)
+	}
+	assertWalletBalance(t, ctx, s, tn, 600)
+
+	var n int
+	var sum int64
+	if err := s.systemPool().QueryRow(ctx,
+		`SELECT count(*), COALESCE(sum(amount),0) FROM agent_allocations WHERE agent_id=$1 AND tenant_id=$2`,
+		ag, tn).Scan(&n, &sum); err != nil {
+		t.Fatalf("read agent_allocations: %v", err)
+	}
+	if n != 1 || sum != 600 {
+		t.Fatalf("agent_allocations after first allocate: n=%d sum=%d, want 1/600", n, sum)
+	}
+
+	// available = 1000 - 600 = 400; 600 more must be rejected.
+	if code := doAgentAllocate(t, s, ag, tn, 600); code != http.StatusPaymentRequired {
+		t.Fatalf("over-limit should be 402, got %d", code)
+	}
+	assertWalletBalance(t, ctx, s, tn, 600) // no partial topup
+
+	if err := s.systemPool().QueryRow(ctx,
+		`SELECT count(*), COALESCE(sum(amount),0) FROM agent_allocations WHERE agent_id=$1 AND tenant_id=$2`,
+		ag, tn).Scan(&n, &sum); err != nil {
+		t.Fatalf("read agent_allocations after rejection: %v", err)
+	}
+	if n != 1 || sum != 600 {
+		t.Fatalf("rejected allocate must not write a row: n=%d sum=%d, want 1/600", n, sum)
+	}
+}
+
+// TestAgentAllocate_OutsideSubtree_Forbidden: an agent has enough credit, but
+// the target tenant belongs to an unrelated agent's subtree — the allocation
+// must be rejected (403), not silently applied.
+func TestAgentAllocate_OutsideSubtree_Forbidden(t *testing.T) {
+	s := newAgentServer(t)
+	ctx := context.Background()
+	a := seedAgent(t, ctx, s, "ag-subtree-a@x", nil)
+	c := seedAgent(t, ctx, s, "ag-subtree-c@x", nil)
+	setCreditLimit(t, ctx, s, a, 1000)
+	tOutside := seedTenantUnderAgent(t, ctx, s, c)
+
+	if code := doAgentAllocate(t, s, a, tOutside, 100); code != http.StatusForbidden {
+		t.Fatalf("out-of-subtree allocate: got %d, want 403", code)
+	}
+	assertWalletBalance(t, ctx, s, tOutside, 0)
+
+	var n int
+	if err := s.systemPool().QueryRow(ctx,
+		`SELECT count(*) FROM agent_allocations WHERE agent_id=$1`, a).Scan(&n); err != nil {
+		t.Fatalf("read agent_allocations: %v", err)
+	}
+	if n != 0 {
+		t.Fatalf("out-of-subtree rejection must not write a row, got %d", n)
+	}
+}
+
+// TestAgentAllocate_SettledConsumptionCreditsBackAvailable proves the
+// consumption-credit-back term in agentAvailableCredit: once subtree retail
+// consumption settles, the freed-up amount is added back to available
+// credit, so an allocation that was previously blocked by 402 later
+// succeeds without any change to credit_limit itself.
+func TestAgentAllocate_SettledConsumptionCreditsBackAvailable(t *testing.T) {
+	s := newAgentServer(t)
+	ctx := context.Background()
+	ag := seedAgent(t, ctx, s, "ag-consume@x", nil)
+	setCreditLimit(t, ctx, s, ag, 1000)
+	tn := seedTenantUnderAgent(t, ctx, s, ag)
+
+	if code := doAgentAllocate(t, s, ag, tn, 700); code != http.StatusOK {
+		t.Fatalf("initial allocate: got %d", code)
+	}
+	// available = 1000 - 700 = 300; 800 must be blocked.
+	if code := doAgentAllocate(t, s, ag, tn, 800); code != http.StatusPaymentRequired {
+		t.Fatalf("expected 402 before consumption credit-back, got %d", code)
+	}
+
+	// Settle 600 of subtree retail consumption -> available = 300 + 600 = 900.
+	seedSettledCharge(t, ctx, s, tn, 600, "msg-consume-1")
+
+	if code := doAgentAllocate(t, s, ag, tn, 800); code != http.StatusOK {
+		t.Fatalf("expected 200 after consumption credit-back, got %d", code)
+	}
+	assertWalletBalance(t, ctx, s, tn, 700+800)
 }
 
 func TestAgentSchemaApplies(t *testing.T) {
