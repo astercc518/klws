@@ -128,12 +128,16 @@ export function ProDataTable<T>({
   const [hidden, setHidden] = useState<Set<string>>(new Set());
   useEffect(() => {
     if (!storageKey) return;
+    // Always reset on storageKey change: a key with no stored record (or a
+    // corrupted one) must show all columns, not inherit the previous key's set.
+    let next = new Set<string>();
     try {
       const raw = localStorage.getItem(`pdt:${storageKey}:hidden`);
-      // localStorage is browser-only, so this can't run during render/SSR.
-      // eslint-disable-next-line react-hooks/set-state-in-effect
-      if (raw) setHidden(new Set(JSON.parse(raw) as string[]));
+      if (raw) next = new Set(JSON.parse(raw) as string[]);
     } catch {} // 损坏的存储值静默忽略,等同默认全显
+    // localStorage is browser-only, so this can't run during render/SSR.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    setHidden(next);
   }, [storageKey]);
 
   function toggleColumn(key: string) {
