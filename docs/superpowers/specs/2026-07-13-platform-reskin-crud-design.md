@@ -34,7 +34,8 @@
 
 ### 4.2 双语方案
 - **不用 URL 前缀路由**(`/en/...` 会破坏现有路由与书签)。
-- React Context + 两份 JSON 字典(`zh.json` / `en.json`),locale 存 cookie,服务端 async 根布局经 `getLocale()` 读取(cookie 优先→`Accept-Language`→默认 zh),SSR 首屏即正确语言,无水合闪烁;切换写 cookie + `router.refresh()`。(采纳自 `feat/app-i18n-ssr` 分支已实现机制,原 localStorage 方案有英文浏览器首屏闪烁问题。)登录后应用无 SEO 需求,零路由改动、零新依赖。
+- React Context + TS 字典模块(`frontend/lib/i18n/dicts/*.ts`,zh/en 成对,合并于 dicts/index.ts),locale 存 cookie,服务端 async 根布局经 `getLocale()` 读取(cookie 优先→`Accept-Language`→默认 zh),SSR 首屏即正确语言,无水合闪烁;切换写 cookie + `router.refresh()`。(采纳自 `feat/app-i18n-ssr` 分支已实现机制,原 localStorage 方案有英文浏览器首屏闪烁问题。)登录后应用无 SEO 需求,零路由改动、零新依赖。
+- 已知取舍:根布局 `await getLocale()` 读 cookie 使全站(含 landing 营销页)退出静态预渲染、每请求 SSR;自托管 Node 部署下接受此代价,若未来 landing 需 CDN 缓存,应拆 (marketing)/(app) 双根布局。
 
 ### 4.3 布局壳
 - 统一侧边栏(可折叠,沿用 SP8 OKCC 式分组导航)+ 顶栏(全局搜索、语言切换、主题切换、身份/模拟登录标识)。

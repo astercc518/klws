@@ -355,7 +355,7 @@ export function ProDataTable<T>({
             <TableRow className="hover:bg-transparent">
               <TableCell colSpan={colSpan} className="py-12 text-center text-sm text-muted-foreground">
                 {queryValue.trim()
-                  ? t("table.noMatch").replace("{q}", queryValue.trim())
+                  ? t("table.noMatch").replace("{q}", () => queryValue.trim())
                   : (emptyState ?? t("table.empty"))}
               </TableCell>
             </TableRow>
