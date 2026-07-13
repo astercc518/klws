@@ -15,6 +15,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
+import { useT } from "@/components/locale-provider";
 
 interface AllocateCustomer {
   id: number;
@@ -62,6 +63,7 @@ export function AgentAllocateDialog({
    *  report a running available balance per item). */
   onDone: (available: number | null) => void;
 }) {
+  const t = useT();
   const [amounts, setAmounts] = useState<Record<number, string>>({});
   const [busy, setBusy] = useState(false);
   const [results, setResults] = useState<AllocateResult[] | null>(null);
@@ -88,25 +90,38 @@ export function AgentAllocateDialog({
         setResults(data.results);
         const okCount = data.results.filter((r) => r.status === "ok").length;
         if (okCount === data.results.length) {
-          toast.success("批量划拨完成", { description: `${okCount}/${data.results.length} 笔成功` });
+          toast.success(t("sales.allocate.batchSuccessTitle"), {
+            description: t("sales.allocate.batchSuccessDesc")
+              .replace("{ok}", () => String(okCount))
+              .replace("{total}", () => String(data.results.length)),
+          });
         } else {
-          toast.warning("部分划拨失败", { description: `${okCount}/${data.results.length} 笔成功，详见下方明细` });
+          toast.warning(t("sales.allocate.partialFailTitle"), {
+            description: t("sales.allocate.partialFailDesc")
+              .replace("{ok}", () => String(okCount))
+              .replace("{total}", () => String(data.results.length)),
+          });
         }
         onDone(null);
       } else {
         setResults([{ tenant_id: data.tenant_id, status: "ok", alloc_id: data.alloc_id }]);
-        toast.success("划拨成功", { description: `划拨后可用额度 $${(data.available / 100).toFixed(2)}` });
+        toast.success(t("sales.allocate.singleSuccessTitle"), {
+          description: t("sales.allocate.singleSuccessDesc").replace(
+            "{amount}",
+            () => `$${(data.available / 100).toFixed(2)}`,
+          ),
+        });
         onDone(data.available);
       }
     } catch (e) {
-      const msg = e instanceof ApiError ? e.message : "请重试";
+      const msg = e instanceof ApiError ? e.message : t("sales.allocate.retry");
       // A single-item request that fails (402 over-limit / 403 out-of-subtree)
       // throws instead of returning a {results:[...]} report — surface it the
       // same way so the row still shows an honest per-item outcome.
       if (items.length === 1) {
         setResults([{ tenant_id: items[0].tenant_id, status: "error", error: msg }]);
       }
-      toast.error("划拨失败", { description: msg });
+      toast.error(t("sales.allocate.failTitle"), { description: msg });
       onDone(null);
     } finally {
       setBusy(false);
@@ -117,9 +132,9 @@ export function AgentAllocateDialog({
     <Dialog open={open} onOpenChange={(o) => !o && onClose()}>
       <DialogContent className="sm:max-w-lg">
         <DialogHeader>
-          <DialogTitle>批量划拨额度</DialogTitle>
+          <DialogTitle>{t("sales.allocate.title")}</DialogTitle>
           <DialogDescription>
-            为选中的 {customers.length} 个客户分别填写划拨金额(USD)。每个客户单独结算，允许部分成功、部分失败。
+            {t("sales.allocate.desc").replace("{n}", () => String(customers.length))}
           </DialogDescription>
         </DialogHeader>
         <div className="max-h-80 space-y-3 overflow-y-auto py-1">
@@ -144,7 +159,7 @@ export function AgentAllocateDialog({
                     className="max-w-[9rem] shrink-0 truncate"
                     title={r.status === "ok" ? `alloc #${r.alloc_id}` : r.error}
                   >
-                    {r.status === "ok" ? `#${r.alloc_id}` : (r.error ?? "失败")}
+                    {r.status === "ok" ? `#${r.alloc_id}` : (r.error ?? t("sales.allocate.failedFallback"))}
                   </Badge>
                 )}
               </div>
@@ -152,9 +167,11 @@ export function AgentAllocateDialog({
           })}
         </div>
         <DialogFooter>
-          <DialogClose render={<Button variant="ghost" />}>关闭</DialogClose>
+          <DialogClose render={<Button variant="ghost" />}>{t("sales.allocate.close")}</DialogClose>
           <Button onClick={submit} disabled={!valid}>
-            {busy ? "提交中…" : `确认划拨 (${customers.length})`}
+            {busy
+              ? t("sales.allocate.submitting")
+              : t("sales.allocate.confirmAllocate").replace("{n}", () => String(customers.length))}
           </Button>
         </DialogFooter>
       </DialogContent>

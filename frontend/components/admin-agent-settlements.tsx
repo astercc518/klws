@@ -22,6 +22,7 @@ import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import { Card } from "@/components/ui/card";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import { useT } from "@/components/locale-provider";
 
 /** Mirrors settlementJSON in internal/api/agent_api.go. */
 interface SettlementRow {
@@ -69,6 +70,7 @@ function currentMonth(): string {
 }
 
 export function AdminAgentSettlements() {
+  const t = useT();
   const [month, setMonth] = useState(currentMonth());
   const [data, setData] = useState<OverviewResponse | null>(null);
   const [agents, setAgents] = useState<AgentRow[]>([]);
@@ -90,12 +92,12 @@ export function AdminAgentSettlements() {
       setError(null);
     } catch (e) {
       if (!(e instanceof ApiError && e.status === 401)) {
-        setError(e instanceof ApiError ? e.message : "加载失败");
+        setError(e instanceof ApiError ? e.message : t("admin.agents.settle.loadFailed"));
       }
     } finally {
       setLoading(false);
     }
-  }, [month]);
+  }, [month, t]);
 
   useEffect(() => {
     load();
@@ -108,14 +110,21 @@ export function AdminAgentSettlements() {
       setCloseResult(r);
       const newlyCount = r.closed.filter((c) => c.newly_closed).length;
       if (newlyCount === 0) {
-        toast.info("本月已关账", { description: `${r.period} 此前已关闭,以下为已持久化的结果` });
+        toast.info(t("admin.agents.settle.alreadyClosedToastTitle"), {
+          description: t("admin.agents.settle.alreadyClosedDesc").replace("{period}", () => r.period),
+        });
       } else {
-        toast.success("关账完成", {
-          description: `${r.period} · 新关闭 ${newlyCount}/${r.closed.length} 个代理`,
+        toast.success(t("admin.agents.settle.closeSuccessTitle"), {
+          description: t("admin.agents.settle.closeSuccessDesc")
+            .replace("{period}", () => r.period)
+            .replace("{newly}", () => String(newlyCount))
+            .replace("{total}", () => String(r.closed.length)),
         });
       }
     } catch (e) {
-      toast.error("关账失败", { description: e instanceof ApiError ? e.message : "请重试" });
+      toast.error(t("admin.agents.settle.closeFailedTitle"), {
+        description: e instanceof ApiError ? e.message : t("admin.agents.settle.retry"),
+      });
     } finally {
       setClosing(false);
     }
@@ -127,7 +136,7 @@ export function AdminAgentSettlements() {
     <div className="space-y-6">
       <Card className="flex flex-wrap items-center gap-3 p-4">
         <label htmlFor="settlement-month" className="text-sm font-medium">
-          结算月份
+          {t("admin.agents.settle.monthLabel")}
         </label>
         <Input
           id="settlement-month"
@@ -136,30 +145,36 @@ export function AdminAgentSettlements() {
           onChange={(e) => e.target.value && setMonth(e.target.value)}
           className="w-40 font-mono"
         />
-        {loading && <span className="text-xs text-muted-foreground">加载中…</span>}
+        {loading && <span className="text-xs text-muted-foreground">{t("common.loading")}</span>}
         <Button size="sm" className="ml-auto gap-1.5" disabled={closing} onClick={closeMonth}>
           <Lock className="size-3.5" />
-          {closing ? "关账中…" : "关账"}
+          {closing ? t("admin.agents.settle.closing") : t("admin.agents.settle.closeButton")}
         </Button>
       </Card>
 
-      {error && <Card className="p-5 text-sm text-muted-foreground">加载失败:{error}</Card>}
+      {error && (
+        <Card className="p-5 text-sm text-muted-foreground">
+          {t("table.loadFailed")}
+          {error}
+        </Card>
+      )}
 
       {closeResult && (
         <Card className="p-5">
           <div className="mb-3 flex items-center gap-2 text-sm font-medium">
             <CalendarCheck className="size-4" />
-            {closeResult.period} 关账结果
+            {closeResult.period}
+            {t("admin.agents.settle.closeResultSuffix")}
           </div>
           <Table>
             <TableHeader>
               <TableRow className="bg-muted/40">
-                <TableHead>代理</TableHead>
-                <TableHead>状态</TableHead>
-                <TableHead className="text-right">欠款</TableHead>
-                <TableHead className="text-right">差价</TableHead>
-                <TableHead className="text-right">返佣</TableHead>
-                <TableHead className="text-right">净额</TableHead>
+                <TableHead>{t("admin.agents.settle.col.agent")}</TableHead>
+                <TableHead>{t("admin.agents.settle.col.status")}</TableHead>
+                <TableHead className="text-right">{t("admin.agents.settle.col.debt")}</TableHead>
+                <TableHead className="text-right">{t("admin.agents.settle.col.margin")}</TableHead>
+                <TableHead className="text-right">{t("admin.agents.settle.col.rebate")}</TableHead>
+                <TableHead className="text-right">{t("admin.agents.settle.col.net")}</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
@@ -168,7 +183,9 @@ export function AdminAgentSettlements() {
                   <TableCell className="font-mono text-sm">{emailOf(c.agent_id)}</TableCell>
                   <TableCell>
                     <Badge variant={c.newly_closed ? "secondary" : "outline"}>
-                      {c.newly_closed ? "本次新关闭" : "此前已关闭"}
+                      {c.newly_closed
+                        ? t("admin.agents.settle.newlyClosed")
+                        : t("admin.agents.settle.previouslyClosed")}
                     </Badge>
                   </TableCell>
                   <TableCell className="text-right font-mono tabular-nums">{usd(c.debt)}</TableCell>
@@ -184,28 +201,31 @@ export function AdminAgentSettlements() {
 
       <Card className="overflow-hidden p-0">
         <div className="border-b px-4 py-3 text-sm font-medium">
-          {data?.period ?? month} 结算总览
-          <span className="ml-2 font-mono text-xs font-normal text-muted-foreground">实时计算,非持久化数值</span>
+          {data?.period ?? month}
+          {t("admin.agents.settle.overviewTitleSuffix")}
+          <span className="ml-2 font-mono text-xs font-normal text-muted-foreground">
+            {t("admin.agents.settle.liveNotice")}
+          </span>
         </div>
         <Table>
           <TableHeader>
             <TableRow className="bg-muted/40">
-              <TableHead>代理</TableHead>
-              <TableHead className="text-right">直属零售</TableHead>
-              <TableHead className="text-right">直属成本</TableHead>
-              <TableHead className="text-right">下线零售</TableHead>
-              <TableHead className="text-right">返佣比例</TableHead>
-              <TableHead className="text-right">欠款</TableHead>
-              <TableHead className="text-right">差价</TableHead>
-              <TableHead className="text-right">返佣</TableHead>
-              <TableHead className="text-right">净额</TableHead>
+              <TableHead>{t("admin.agents.settle.col.agent")}</TableHead>
+              <TableHead className="text-right">{t("admin.agents.settle.col.retailDirect")}</TableHead>
+              <TableHead className="text-right">{t("admin.agents.settle.col.costDirect")}</TableHead>
+              <TableHead className="text-right">{t("admin.agents.settle.col.retailSubtree")}</TableHead>
+              <TableHead className="text-right">{t("admin.agents.settle.col.rebateRate")}</TableHead>
+              <TableHead className="text-right">{t("admin.agents.settle.col.debt")}</TableHead>
+              <TableHead className="text-right">{t("admin.agents.settle.col.margin")}</TableHead>
+              <TableHead className="text-right">{t("admin.agents.settle.col.rebate")}</TableHead>
+              <TableHead className="text-right">{t("admin.agents.settle.col.net")}</TableHead>
             </TableRow>
           </TableHeader>
           <TableBody>
             {!data || data.agents.length === 0 ? (
               <TableRow>
                 <TableCell colSpan={9} className="py-10 text-center text-sm text-muted-foreground">
-                  {data ? "本月暂无代理结算数据。" : "加载中…"}
+                  {data ? t("admin.agents.settle.emptyState") : t("common.loading")}
                 </TableCell>
               </TableRow>
             ) : (

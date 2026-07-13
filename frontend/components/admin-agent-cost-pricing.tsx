@@ -24,6 +24,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
+import { useT } from "@/components/locale-provider";
 
 /** Mirrors costPricingRow in internal/api/agent_admin.go. */
 interface CostPricingRow {
@@ -35,6 +36,7 @@ const usd = (cents: number) =>
   new Intl.NumberFormat("en-US", { style: "currency", currency: "USD" }).format(cents / 100);
 
 export function AdminAgentCostPricing() {
+  const t = useT();
   const [rows, setRows] = useState<CostPricingRow[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [editTarget, setEditTarget] = useState<CostPricingRow | null | "new">(null);
@@ -46,16 +48,22 @@ export function AdminAgentCostPricing() {
       setError(null);
     } catch (e) {
       if (!(e instanceof ApiError && e.status === 401)) {
-        setError(e instanceof ApiError ? e.message : "加载失败");
+        setError(e instanceof ApiError ? e.message : t("admin.agents.cost.loadFailed"));
       }
     }
-  }, []);
+  }, [t]);
 
   useEffect(() => {
     load();
   }, [load]);
 
-  if (error) return <Card className="p-5 text-sm text-muted-foreground">加载失败:{error}</Card>;
+  if (error)
+    return (
+      <Card className="p-5 text-sm text-muted-foreground">
+        {t("table.loadFailed")}
+        {error}
+      </Card>
+    );
   if (!rows) return <div className="h-64 animate-pulse rounded-xl bg-muted motion-reduce:animate-none" />;
 
   return (
@@ -63,7 +71,7 @@ export function AdminAgentCostPricing() {
       <div className="flex justify-end">
         <Button className="gap-2" onClick={() => setEditTarget("new")}>
           <Plus className="size-4" />
-          新增成本价
+          {t("admin.agents.cost.addButton")}
         </Button>
       </div>
 
@@ -71,8 +79,8 @@ export function AdminAgentCostPricing() {
         <Table>
           <TableHeader>
             <TableRow className="bg-muted/40">
-              <TableHead>国家</TableHead>
-              <TableHead>平台成本价 / 条</TableHead>
+              <TableHead>{t("admin.agents.cost.col.country")}</TableHead>
+              <TableHead>{t("admin.agents.cost.col.unitCost")}</TableHead>
               <TableHead className="w-12" />
             </TableRow>
           </TableHeader>
@@ -80,7 +88,7 @@ export function AdminAgentCostPricing() {
             {rows.length === 0 ? (
               <TableRow>
                 <TableCell colSpan={3} className="py-10 text-center text-sm text-muted-foreground">
-                  暂无成本价配置。新增一条以便 T5/T6 的差价、返佣计算生效。
+                  {t("admin.agents.cost.emptyState")}
                 </TableCell>
               </TableRow>
             ) : (
@@ -89,7 +97,12 @@ export function AdminAgentCostPricing() {
                   <TableCell className="font-mono text-sm uppercase">{r.country_code}</TableCell>
                   <TableCell className="font-mono text-sm tabular-nums">{usd(r.unit_cost)}</TableCell>
                   <TableCell>
-                    <Button variant="ghost" size="icon-sm" aria-label="编辑" onClick={() => setEditTarget(r)}>
+                    <Button
+                      variant="ghost"
+                      size="icon-sm"
+                      aria-label={t("admin.agents.cost.editAria")}
+                      onClick={() => setEditTarget(r)}
+                    >
                       <Pencil className="size-4" />
                     </Button>
                   </TableCell>
@@ -118,6 +131,7 @@ function CostPricingDialog({
   onClose: () => void;
   onDone: () => void;
 }) {
+  const t = useT();
   const isNew = target === "new";
   const [country, setCountry] = useState("");
   const [price, setPrice] = useState("");
@@ -143,11 +157,15 @@ function CostPricingDialog({
         country_code: country.trim().toUpperCase(),
         unit_cost: cents,
       });
-      toast.success("成本价已更新", { description: `${country.toUpperCase()} → ${usd(cents)} / 条` });
+      toast.success(t("admin.agents.cost.updateSuccessTitle"), {
+        description: `${country.toUpperCase()} → ${usd(cents)}${t("admin.agents.cost.perUnitSuffix")}`,
+      });
       onClose();
       onDone();
     } catch (e) {
-      toast.error("设置失败", { description: e instanceof ApiError ? e.message : "请重试" });
+      toast.error(t("admin.agents.cost.setFailedTitle"), {
+        description: e instanceof ApiError ? e.message : t("admin.agents.cost.retry"),
+      });
     } finally {
       setBusy(false);
     }
@@ -159,16 +177,14 @@ function CostPricingDialog({
         <DialogHeader>
           <DialogTitle>
             <Coins className="mr-1.5 inline size-4 align-[-2px]" />
-            {isNew ? "新增成本价" : "编辑成本价"}
+            {isNew ? t("admin.agents.cost.addTitle") : t("admin.agents.cost.editTitle")}
           </DialogTitle>
-          <DialogDescription>
-            设置指定国家的平台每条成本价(minor units)。该值参与所有代理的差价与返佣计算,0 为合法值。
-          </DialogDescription>
+          <DialogDescription>{t("admin.agents.cost.dialogDesc")}</DialogDescription>
         </DialogHeader>
         <div className="space-y-4 py-1">
           <div className="space-y-2">
             <label htmlFor="cp-country" className="text-sm font-medium">
-              国家 <span className="font-mono text-xs text-muted-foreground">ISO-2</span>
+              {t("admin.agents.cost.col.country")} <span className="font-mono text-xs text-muted-foreground">ISO-2</span>
             </label>
             <Input
               id="cp-country"
@@ -178,11 +194,14 @@ function CostPricingDialog({
               disabled={!isNew}
               className="w-24 font-mono uppercase"
             />
-            {!isNew && <p className="text-xs text-muted-foreground">国家代码是唯一键,编辑时不可更改。</p>}
+            {!isNew && (
+              <p className="text-xs text-muted-foreground">{t("admin.agents.cost.countryImmutableHint")}</p>
+            )}
           </div>
           <div className="space-y-2">
             <label htmlFor="cp-cost" className="text-sm font-medium">
-              成本价 <span className="font-mono text-xs text-muted-foreground">USD · 允许 0</span>
+              {t("admin.agents.cost.priceLabel")}{" "}
+              <span className="font-mono text-xs text-muted-foreground">{t("admin.agents.cost.priceLabelHint")}</span>
             </label>
             <Input
               id="cp-cost"
@@ -197,9 +216,9 @@ function CostPricingDialog({
           </div>
         </div>
         <DialogFooter>
-          <DialogClose render={<Button variant="ghost" />}>取消</DialogClose>
+          <DialogClose render={<Button variant="ghost" />}>{t("admin.agents.cost.cancel")}</DialogClose>
           <Button onClick={submit} disabled={!valid}>
-            {busy ? "提交中…" : "确认保存"}
+            {busy ? t("admin.agents.cost.submitting") : t("admin.agents.cost.confirmSave")}
           </Button>
         </DialogFooter>
       </DialogContent>

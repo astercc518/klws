@@ -33,6 +33,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
+import { useT } from "@/components/locale-provider";
 
 /** Mirrors agentListRow in internal/api/agent_admin.go. */
 interface AgentRow {
@@ -48,6 +49,7 @@ const usd = (cents: number) =>
 const pct = (rate: number) => `${Math.round(rate * 10000) / 100}%`;
 
 export function AdminAgentTree() {
+  const t = useT();
   const [rows, setRows] = useState<AgentRow[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [termsTarget, setTermsTarget] = useState<AgentRow | null>(null);
@@ -60,16 +62,22 @@ export function AdminAgentTree() {
       setError(null);
     } catch (e) {
       if (!(e instanceof ApiError && e.status === 401)) {
-        setError(e instanceof ApiError ? e.message : "加载失败");
+        setError(e instanceof ApiError ? e.message : t("admin.agents.loadFailed"));
       }
     }
-  }, []);
+  }, [t]);
 
   useEffect(() => {
     load();
   }, [load]);
 
-  if (error) return <Card className="p-5 text-sm text-muted-foreground">加载失败:{error}</Card>;
+  if (error)
+    return (
+      <Card className="p-5 text-sm text-muted-foreground">
+        {t("table.loadFailed")}
+        {error}
+      </Card>
+    );
   if (!rows) return <div className="h-64 animate-pulse rounded-xl bg-muted motion-reduce:animate-none" />;
 
   const byId = new Map<number, AgentRow>(rows.map((r) => [r.id, r]));
@@ -80,10 +88,10 @@ export function AdminAgentTree() {
         <Table>
           <TableHeader>
             <TableRow className="bg-muted/40">
-              <TableHead>代理</TableHead>
-              <TableHead>上级</TableHead>
-              <TableHead>信用额度</TableHead>
-              <TableHead>返佣比例</TableHead>
+              <TableHead>{t("admin.agents.col.agent")}</TableHead>
+              <TableHead>{t("admin.agents.col.parent")}</TableHead>
+              <TableHead>{t("admin.agents.creditLimit")}</TableHead>
+              <TableHead>{t("admin.agents.rebateRate")}</TableHead>
               <TableHead className="w-12" />
             </TableRow>
           </TableHeader>
@@ -91,7 +99,7 @@ export function AdminAgentTree() {
             {rows.length === 0 ? (
               <TableRow>
                 <TableCell colSpan={5} className="py-10 text-center text-sm text-muted-foreground">
-                  暂无代理账号。
+                  {t("admin.agents.emptyState")}
                 </TableCell>
               </TableRow>
             ) : (
@@ -104,7 +112,7 @@ export function AdminAgentTree() {
                     </TableCell>
                     <TableCell className="text-sm text-muted-foreground">
                       {r.parent_id == null ? (
-                        <Badge variant="outline">顶层</Badge>
+                        <Badge variant="outline">{t("admin.agents.topLevel")}</Badge>
                       ) : (
                         (parent?.email ?? `#${r.parent_id}`)
                       )}
@@ -115,17 +123,19 @@ export function AdminAgentTree() {
                     </TableCell>
                     <TableCell>
                       <DropdownMenu>
-                        <DropdownMenuTrigger render={<Button variant="ghost" size="icon-sm" aria-label="操作" />}>
+                        <DropdownMenuTrigger
+                          render={<Button variant="ghost" size="icon-sm" aria-label={t("admin.agents.actionsAria")} />}
+                        >
                           <Pencil className="size-4" />
                         </DropdownMenuTrigger>
                         <DropdownMenuContent align="end">
                           <DropdownMenuItem onClick={() => setTermsTarget(r)}>
                             <Pencil className="size-4" />
-                            改条款(额度/返佣)
+                            {t("admin.agents.action.editTerms")}
                           </DropdownMenuItem>
                           <DropdownMenuItem onClick={() => setParentTarget(r)}>
                             <GitBranch className="size-4" />
-                            改上级
+                            {t("admin.agents.action.editParent")}
                           </DropdownMenuItem>
                         </DropdownMenuContent>
                       </DropdownMenu>
@@ -157,6 +167,7 @@ function TermsDialog({
   onClose: () => void;
   onDone: () => void;
 }) {
+  const t = useT();
   const [creditLimit, setCreditLimit] = useState("");
   const [ratePct, setRatePct] = useState("");
   const [busy, setBusy] = useState(false);
@@ -187,11 +198,13 @@ function TermsDialog({
     setBusy(true);
     try {
       await api.post(`/admin/agents/${target.id}/terms`, body);
-      toast.success("条款已更新", { description: target.email });
+      toast.success(t("admin.agents.termsDialog.toastSuccessTitle"), { description: target.email });
       onClose();
       onDone();
     } catch (e) {
-      toast.error("更新失败", { description: e instanceof ApiError ? e.message : "请重试" });
+      toast.error(t("admin.agents.termsDialog.toastErrorTitle"), {
+        description: e instanceof ApiError ? e.message : t("admin.agents.retry"),
+      });
     } finally {
       setBusy(false);
     }
@@ -201,15 +214,17 @@ function TermsDialog({
     <Dialog open={target != null} onOpenChange={(o) => !o && onClose()}>
       <DialogContent className="sm:max-w-md">
         <DialogHeader>
-          <DialogTitle>改条款</DialogTitle>
+          <DialogTitle>{t("admin.agents.termsDialog.title")}</DialogTitle>
           <DialogDescription>
-            为 <span className="font-mono">{target?.email}</span> 设置信用额度与返佣比例。留空表示不修改该项。
+            {t("admin.agents.termsDialog.descPrefix")}
+            <span className="font-mono">{target?.email}</span>
+            {t("admin.agents.termsDialog.descSuffix")}
           </DialogDescription>
         </DialogHeader>
         <div className="space-y-4 py-1">
           <div className="space-y-2">
             <label htmlFor="terms-credit" className="text-sm font-medium">
-              信用额度 <span className="font-mono text-xs text-muted-foreground">USD</span>
+              {t("admin.agents.creditLimit")} <span className="font-mono text-xs text-muted-foreground">USD</span>
             </label>
             <Input
               id="terms-credit"
@@ -224,7 +239,8 @@ function TermsDialog({
           </div>
           <div className="space-y-2">
             <label htmlFor="terms-rate" className="text-sm font-medium">
-              返佣比例(%) <span className="font-mono text-xs text-muted-foreground">0-100</span>
+              {t("admin.agents.rebateRatePercentLabel")}{" "}
+              <span className="font-mono text-xs text-muted-foreground">0-100</span>
             </label>
             <Input
               id="terms-rate"
@@ -234,15 +250,15 @@ function TermsDialog({
               step={0.1}
               value={ratePct}
               onChange={(e) => setRatePct(e.target.value)}
-              placeholder="例如 10"
+              placeholder={t("admin.agents.ratePlaceholderExample")}
               className="font-mono"
             />
           </div>
         </div>
         <DialogFooter>
-          <DialogClose render={<Button variant="ghost" />}>取消</DialogClose>
+          <DialogClose render={<Button variant="ghost" />}>{t("admin.agents.cancel")}</DialogClose>
           <Button onClick={submit} disabled={!valid}>
-            {busy ? "保存中…" : "保存"}
+            {busy ? t("admin.agents.termsDialog.saving") : t("admin.agents.termsDialog.save")}
           </Button>
         </DialogFooter>
       </DialogContent>
@@ -266,6 +282,7 @@ function ParentDialog({
   onClose: () => void;
   onDone: () => void;
 }) {
+  const t = useT();
   const [parentId, setParentId] = useState<string>("");
   const [busy, setBusy] = useState(false);
 
@@ -283,11 +300,13 @@ function ParentDialog({
       await api.post(`/admin/agents/${target.id}/parent`, {
         parent_id: parentId === "" ? null : Number(parentId),
       });
-      toast.success("上级已更新", { description: target.email });
+      toast.success(t("admin.agents.parentDialog.toastSuccessTitle"), { description: target.email });
       onClose();
       onDone();
     } catch (e) {
-      toast.error("改上级失败", { description: e instanceof ApiError ? e.message : "请重试" });
+      toast.error(t("admin.agents.parentDialog.toastErrorTitle"), {
+        description: e instanceof ApiError ? e.message : t("admin.agents.retry"),
+      });
     } finally {
       setBusy(false);
     }
@@ -297,20 +316,24 @@ function ParentDialog({
     <Dialog open={target != null} onOpenChange={(o) => !o && onClose()}>
       <DialogContent className="sm:max-w-md">
         <DialogHeader>
-          <DialogTitle>改上级</DialogTitle>
+          <DialogTitle>{t("admin.agents.parentDialog.title")}</DialogTitle>
           <DialogDescription>
-            为 <span className="font-mono">{target?.email}</span> 选择新的上级代理,或设为顶层。会产生环路或指向非代理账号的请求会被后端拒绝。
+            {t("admin.agents.parentDialog.descPrefix")}
+            <span className="font-mono">{target?.email}</span>
+            {t("admin.agents.parentDialog.descSuffix")}
           </DialogDescription>
         </DialogHeader>
         <div className="space-y-2 py-1">
-          <label htmlFor="parent-select" className="text-sm font-medium">上级代理</label>
+          <label htmlFor="parent-select" className="text-sm font-medium">
+            {t("admin.agents.parentDialog.label")}
+          </label>
           <select
             id="parent-select"
             value={parentId}
             onChange={(e) => setParentId(e.target.value)}
             className="h-9 w-full rounded-lg border bg-transparent px-2.5 text-sm outline-none"
           >
-            <option value="">(设为顶层 · 无上级)</option>
+            <option value="">{t("admin.agents.parentDialog.topLevelOption")}</option>
             {options.map((a) => (
               <option key={a.id} value={String(a.id)}>
                 #{a.id} {a.email}
@@ -319,8 +342,10 @@ function ParentDialog({
           </select>
         </div>
         <DialogFooter>
-          <DialogClose render={<Button variant="ghost" />}>取消</DialogClose>
-          <Button onClick={submit} disabled={!valid}>{busy ? "提交中…" : "确认修改"}</Button>
+          <DialogClose render={<Button variant="ghost" />}>{t("admin.agents.cancel")}</DialogClose>
+          <Button onClick={submit} disabled={!valid}>
+            {busy ? t("admin.agents.parentDialog.submitting") : t("admin.agents.parentDialog.confirm")}
+          </Button>
         </DialogFooter>
       </DialogContent>
     </Dialog>

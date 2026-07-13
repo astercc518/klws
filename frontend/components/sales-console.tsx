@@ -19,6 +19,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
+import { useT } from "@/components/locale-provider";
 
 interface Customer {
   id: number;
@@ -33,6 +34,7 @@ const usd = (smallest: number) =>
 const nf = new Intl.NumberFormat("en-US");
 
 export function SalesConsole() {
+  const t = useT();
   const [rows, setRows] = useState<Customer[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [pricingTarget, setPricingTarget] = useState<Customer | null>(null);
@@ -42,15 +44,21 @@ export function SalesConsole() {
       setRows(await api.get<Customer[]>("/sales/customers"));
     } catch (e) {
       if (!(e instanceof ApiError && e.status === 401)) {
-        setError(e instanceof ApiError ? e.message : "加载失败");
+        setError(e instanceof ApiError ? e.message : t("sales.console.loadFailed"));
       }
     }
-  }, []);
+  }, [t]);
   useEffect(() => {
     load();
   }, [load]);
 
-  if (error) return <Card className="p-5 text-sm text-muted-foreground">加载失败:{error}</Card>;
+  if (error)
+    return (
+      <Card className="p-5 text-sm text-muted-foreground">
+        {t("table.loadFailed")}
+        {error}
+      </Card>
+    );
   if (!rows) return <div className="h-64 animate-pulse rounded-xl bg-muted motion-reduce:animate-none" />;
 
   const totalBalance = rows.reduce((s, r) => s + r.balance, 0);
@@ -59,27 +67,43 @@ export function SalesConsole() {
   return (
     <>
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
-        <MetricCard hero label="名下客户数" value={nf.format(rows.length)} sub="我负责的租户" icon={Users} />
-        <MetricCard label="名下总余额" value={usd(totalBalance)} sub="可用合计 · USD" icon={Wallet} />
-        <MetricCard label="名下总冻结" value={usd(totalFrozen)} sub="进行中活动占用" icon={Snowflake} />
+        <MetricCard
+          hero
+          label={t("sales.console.stat.customerCountLabel")}
+          value={nf.format(rows.length)}
+          sub={t("sales.console.stat.customerCountSub")}
+          icon={Users}
+        />
+        <MetricCard
+          label={t("sales.console.stat.totalBalanceLabel")}
+          value={usd(totalBalance)}
+          sub={t("sales.console.stat.totalBalanceSub")}
+          icon={Wallet}
+        />
+        <MetricCard
+          label={t("sales.console.stat.totalFrozenLabel")}
+          value={usd(totalFrozen)}
+          sub={t("sales.console.stat.totalFrozenSub")}
+          icon={Snowflake}
+        />
       </div>
 
       <Card className="overflow-hidden p-0">
         <Table>
           <TableHeader>
             <TableRow className="bg-muted/40">
-              <TableHead>客户</TableHead>
-              <TableHead>状态</TableHead>
-              <TableHead className="text-right">可用余额</TableHead>
-              <TableHead className="text-right">冻结</TableHead>
-              <TableHead className="text-right">操作</TableHead>
+              <TableHead>{t("sales.console.col.customer")}</TableHead>
+              <TableHead>{t("sales.console.col.status")}</TableHead>
+              <TableHead className="text-right">{t("sales.console.col.balance")}</TableHead>
+              <TableHead className="text-right">{t("sales.console.col.frozen")}</TableHead>
+              <TableHead className="text-right">{t("sales.console.col.actions")}</TableHead>
             </TableRow>
           </TableHeader>
           <TableBody>
             {rows.length === 0 ? (
               <TableRow>
                 <TableCell colSpan={5} className="py-10 text-center text-sm text-muted-foreground">
-                  你名下还没有客户。请联系管理员为你分配。
+                  {t("sales.console.emptyState")}
                 </TableCell>
               </TableRow>
             ) : (
@@ -96,7 +120,7 @@ export function SalesConsole() {
                   <TableCell className="text-right">
                     <Button variant="ghost" size="sm" className="gap-1.5" onClick={() => setPricingTarget(r)}>
                       <Tag className="size-3.5" />
-                      设单价
+                      {t("sales.console.setPriceButton")}
                     </Button>
                   </TableCell>
                 </TableRow>
@@ -120,6 +144,7 @@ function PricingDialog({
   onClose: () => void;
   onDone: () => void;
 }) {
+  const t = useT();
   const [country, setCountry] = useState("US");
   const [price, setPrice] = useState("");
   const [busy, setBusy] = useState(false);
@@ -142,13 +167,15 @@ function PricingDialog({
         country: country.trim().toUpperCase(),
         unit_price: cents,
       });
-      toast.success("单价已更新", {
-        description: `${target.name} · ${country.toUpperCase()} → $${(cents / 100).toFixed(2)} / 条`,
+      toast.success(t("sales.console.priceUpdatedTitle"), {
+        description: `${target.name} · ${country.toUpperCase()} → $${(cents / 100).toFixed(2)}${t("sales.console.perUnitSuffix")}`,
       });
       onClose();
       onDone();
     } catch (e) {
-      toast.error("设置失败", { description: e instanceof ApiError ? e.message : "请重试" });
+      toast.error(t("sales.console.setFailedTitle"), {
+        description: e instanceof ApiError ? e.message : t("sales.console.retry"),
+      });
     } finally {
       setBusy(false);
     }
@@ -158,15 +185,18 @@ function PricingDialog({
     <Dialog open={target != null} onOpenChange={(o) => !o && onClose()}>
       <DialogContent className="sm:max-w-md">
         <DialogHeader>
-          <DialogTitle>配置发信单价</DialogTitle>
+          <DialogTitle>{t("sales.console.pricingDialog.title")}</DialogTitle>
           <DialogDescription>
-            为名下客户 <span className="font-mono">{target?.name}</span> 设置指定国家的每条单价。
+            {t("sales.console.pricingDialog.descPrefix")}
+            <span className="font-mono">{target?.name}</span>
+            {t("sales.console.pricingDialog.descSuffix")}
           </DialogDescription>
         </DialogHeader>
         <div className="space-y-4 py-1">
           <div className="space-y-2">
             <label htmlFor="s-country" className="text-sm font-medium">
-              国家 <span className="font-mono text-xs text-muted-foreground">ISO-2</span>
+              {t("sales.console.pricingDialog.countryLabel")}{" "}
+              <span className="font-mono text-xs text-muted-foreground">ISO-2</span>
             </label>
             <Input
               id="s-country"
@@ -178,7 +208,8 @@ function PricingDialog({
           </div>
           <div className="space-y-2">
             <label htmlFor="s-price" className="text-sm font-medium">
-              每条单价 <span className="font-mono text-xs text-muted-foreground">USD</span>
+              {t("sales.console.pricingDialog.priceLabel")}{" "}
+              <span className="font-mono text-xs text-muted-foreground">USD</span>
             </label>
             <Input
               id="s-price"
@@ -193,9 +224,9 @@ function PricingDialog({
           </div>
         </div>
         <DialogFooter>
-          <DialogClose render={<Button variant="ghost" />}>取消</DialogClose>
+          <DialogClose render={<Button variant="ghost" />}>{t("sales.console.cancel")}</DialogClose>
           <Button onClick={submit} disabled={!valid}>
-            {busy ? "提交中…" : "确认设置"}
+            {busy ? t("sales.console.submitting") : t("sales.console.confirmSet")}
           </Button>
         </DialogFooter>
       </DialogContent>
