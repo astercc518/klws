@@ -1,6 +1,7 @@
 package api
 
 import (
+	"errors"
 	"net/http"
 
 	"github.com/gin-gonic/gin"
@@ -182,18 +183,37 @@ func (s *Server) handleAdminCloseSettlement(c *gin.Context) {
 			return
 		}
 		debt, margin, rebate, net := computeSettlement(in)
+		// newlyClosed distinguishes "this call created the row" from "row already
+		// existed". On a no-op re-close the response MUST reflect the PERSISTED
+		// (frozen, original) figures, not the freshly-recomputed live ones — a
+		// reconciliation/retry caller would otherwise be misled into thinking the
+		// stored settlement moved when it did not.
+		var newlyClosed bool
 		err = pgx.BeginTxFunc(ctx, s.systemPool(), pgx.TxOptions{}, func(tx pgx.Tx) error {
-			tag, e := tx.Exec(ctx,
+			// INSERT ... RETURNING yields a row ONLY on a real insert; a conflict
+			// (DO NOTHING) returns pgx.ErrNoRows, which we treat as "already
+			// closed" and then re-read the frozen persisted row below.
+			e := tx.QueryRow(ctx,
 				`INSERT INTO agent_settlements (agent_id, period, debt, margin, rebate, net)
 				 VALUES ($1,$2,$3,$4,$5,$6)
-				 ON CONFLICT (agent_id, period) DO NOTHING`,
-				agentID, period, debt, margin, rebate, net)
-			if e != nil {
+				 ON CONFLICT (agent_id, period) DO NOTHING
+				 RETURNING debt, margin, rebate, net`,
+				agentID, period, debt, margin, rebate, net).Scan(&debt, &margin, &rebate, &net)
+			switch {
+			case errors.Is(e, pgx.ErrNoRows):
+				// Already closed this month: re-read the frozen persisted values so
+				// the response matches what's actually stored, not the recomputation.
+				if re := tx.QueryRow(ctx,
+					`SELECT debt, margin, rebate, net FROM agent_settlements
+					  WHERE agent_id=$1 AND period=$2`,
+					agentID, period).Scan(&debt, &margin, &rebate, &net); re != nil {
+					return re
+				}
+				return nil // no-op re-close is intentionally NOT re-audited
+			case e != nil:
 				return e
 			}
-			if tag.RowsAffected() == 0 {
-				return nil // already closed this month: idempotent no-op
-			}
+			newlyClosed = true
 			return s.recordAuditTx(ctx, tx, auditEvent{TenantID: 0, ActorID: actor,
 				Action: "agent.settlement_close", ResourceType: "agent_settlement", ResourceID: agentID,
 				Details: map[string]any{"period": period, "debt": debt, "margin": margin, "rebate": rebate, "net": net}})
@@ -203,7 +223,7 @@ func (s *Server) handleAdminCloseSettlement(c *gin.Context) {
 			return
 		}
 		closed = append(closed, gin.H{"agent_id": agentID, "period": period,
-			"debt": debt, "margin": margin, "rebate": rebate, "net": net})
+			"debt": debt, "margin": margin, "rebate": rebate, "net": net, "newly_closed": newlyClosed})
 	}
 	ok(c, gin.H{"period": period, "closed": closed})
 }

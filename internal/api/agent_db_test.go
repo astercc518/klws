@@ -691,6 +691,12 @@ func TestHandleAdminCloseSettlement_Idempotent(t *testing.T) {
 	if w.Code != http.StatusOK {
 		t.Fatalf("close: got %d body=%s", w.Code, w.Body.String())
 	}
+	// First close created the row: response reports the fresh figures + newly_closed:true.
+	firstBody := w.Body.String()
+	if !strings.Contains(firstBody, `"debt":30`) || !strings.Contains(firstBody, `"margin":30`) ||
+		!strings.Contains(firstBody, `"rebate":3`) || !strings.Contains(firstBody, `"newly_closed":true`) {
+		t.Fatalf("first close response: want debt=30 margin=30 rebate=3 newly_closed=true, got %s", firstBody)
+	}
 
 	period := from.Format("2006-01")
 	assertOneSettlement := func(wantDebt, wantMargin, wantRebate, wantNet int64) {
@@ -724,7 +730,20 @@ func TestHandleAdminCloseSettlement_Idempotent(t *testing.T) {
 	if w2.Code != http.StatusOK {
 		t.Fatalf("re-close: got %d body=%s", w2.Code, w2.Body.String())
 	}
-	assertOneSettlement(30, 30, 3, 3) // unchanged despite the new charges
+	assertOneSettlement(30, 30, 3, 3) // (a) persisted row unchanged despite the new charges
+
+	// (b) the re-close RESPONSE must report the PERSISTED (frozen) figures with
+	// newly_closed:false — NOT the new live numbers. After 8 total settled US
+	// charges (retail=160, cost=80) the recomputed live figures would be
+	// debt=80/margin=80/rebate=8; the response must NOT contain those.
+	reBody := w2.Body.String()
+	if !strings.Contains(reBody, `"debt":30`) || !strings.Contains(reBody, `"margin":30`) ||
+		!strings.Contains(reBody, `"rebate":3`) || !strings.Contains(reBody, `"newly_closed":false`) {
+		t.Fatalf("re-close response must report persisted 30/30/3 + newly_closed:false, got %s", reBody)
+	}
+	if strings.Contains(reBody, `"debt":80`) || strings.Contains(reBody, `"margin":80`) {
+		t.Fatalf("re-close response must NOT report the new live figures (80), got %s", reBody)
+	}
 }
 
 func TestAgentSchemaApplies(t *testing.T) {
