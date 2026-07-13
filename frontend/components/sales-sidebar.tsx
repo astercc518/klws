@@ -2,10 +2,15 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { Users } from "lucide-react";
+import { Users, Network, Receipt, UserPlus } from "lucide-react";
 import { cn } from "@/lib/utils";
 
-const NAV = [{ href: "/sales", label: "我的客户", en: "Customers", icon: Users }];
+const NAV = [
+  { href: "/sales", label: "我的客户", en: "Customers", icon: Users },
+  { href: "/sales/downline", label: "下线与额度", en: "Downline", icon: Network },
+  { href: "/sales/statement", label: "月结单", en: "Statement", icon: Receipt },
+  { href: "/sales/sub-agents", label: "发展下级", en: "Sub-Agents", icon: UserPlus },
+];
 
 export function SalesSidebar() {
   const pathname = usePathname();
