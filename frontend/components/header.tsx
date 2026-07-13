@@ -25,8 +25,8 @@ export function Header() {
         <span className="text-sm font-semibold tracking-tight">{MOCK_TENANT.name}</span>
         <span className="inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-xs">
           <span className="relative flex size-1.5">
-            <span className="absolute inline-flex size-full animate-ping rounded-full bg-emerald-500 opacity-75 motion-reduce:animate-none" />
-            <span className="relative inline-flex size-1.5 rounded-full bg-emerald-500" />
+            <span className="absolute inline-flex size-full animate-ping rounded-full bg-brand-500 opacity-75 motion-reduce:animate-none" />
+            <span className="relative inline-flex size-1.5 rounded-full bg-brand-500" />
           </span>
           <span className="font-mono text-[10px] uppercase tracking-[0.15em] text-muted-foreground">
             {MOCK_TENANT.status}

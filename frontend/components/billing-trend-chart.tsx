@@ -28,7 +28,7 @@ export function BillingTrendChart({ daily }: { daily: DailyPoint[] }) {
       data={data}
       index="date"
       categories={["充值", "消耗"]}
-      colors={["emerald", "rose"]}
+      colors={["emerald", "cyan"]}
       valueFormatter={usd}
       showLegend
       showGradient

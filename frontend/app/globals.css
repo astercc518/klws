@@ -6,7 +6,7 @@
    ignores by default) and references some color classes as runtime strings the
    scanner can't see. Pull both in explicitly so charts render with color. */
 @source "../node_modules/@tremor/react/dist/**/*.{js,mjs,cjs}";
-@source inline("{fill,stroke,text}-{emerald,rose,neutral}-{200,300,400,500,600,700}");
+@source inline("{fill,stroke,text}-{emerald,rose,neutral,cyan}-{200,300,400,500,600,700}");
 
 @custom-variant dark (&:is(.dark *));
 
