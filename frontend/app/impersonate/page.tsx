@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import Link from "next/link";
 import { LoaderCircle } from "lucide-react";
 import { setImpersonationToken } from "@/lib/api";
+import { useT } from "@/components/locale-provider";
 
 // /impersonate — landing page for admin "login-as" impersonation links.
 //
@@ -29,6 +30,7 @@ function initialStatus(): Status {
 }
 
 export default function ImpersonatePage() {
+  const t = useT();
   const [status] = useState<Status>(initialStatus);
 
   useEffect(() => {
@@ -49,12 +51,12 @@ export default function ImpersonatePage() {
   if (status === "invalid") {
     return (
       <div className="flex min-h-svh flex-col items-center justify-center gap-3 px-4 text-center">
-        <p className="text-sm font-medium text-destructive">无效的模拟登录链接</p>
+        <p className="text-sm font-medium text-destructive">{t("auth.impersonate.invalidLink")}</p>
         <Link
           href="/login"
           className="text-sm text-brand-600 hover:text-brand-700 dark:text-brand-400"
         >
-          返回登录
+          {t("auth.forgot.backToLogin")}
         </Link>
       </div>
     );
@@ -63,7 +65,7 @@ export default function ImpersonatePage() {
   return (
     <div className="flex min-h-svh flex-col items-center justify-center gap-3 px-4 text-center">
       <LoaderCircle className="size-6 animate-spin text-muted-foreground" />
-      <p className="text-sm text-muted-foreground">正在进入…</p>
+      <p className="text-sm text-muted-foreground">{t("auth.impersonate.entering")}</p>
     </div>
   );
 }

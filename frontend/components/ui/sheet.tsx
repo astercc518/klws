@@ -5,6 +5,7 @@ import { XIcon } from "lucide-react";
 
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
+import { useT } from "@/components/locale-provider";
 
 // A right-side slide-over drawer built on the same @base-ui Dialog primitive as
 // dialog.tsx, just anchored to the edge and full-height. Use for wide detail
@@ -44,6 +45,7 @@ function SheetContent({
   showCloseButton = true,
   ...props
 }: SheetPrimitive.Popup.Props & { showCloseButton?: boolean }) {
+  const t = useT();
   return (
     <SheetPortal>
       <SheetOverlay />
@@ -62,7 +64,7 @@ function SheetContent({
             render={<Button variant="ghost" className="absolute top-4 right-4" size="icon-sm" />}
           >
             <XIcon />
-            <span className="sr-only">关闭</span>
+            <span className="sr-only">{t("common.close")}</span>
           </SheetPrimitive.Close>
         )}
       </SheetPrimitive.Popup>

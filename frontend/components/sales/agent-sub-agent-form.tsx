@@ -8,6 +8,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
+import { useT } from "@/components/locale-provider";
 
 interface CreatedSubAgent {
   id: number;
@@ -20,6 +21,7 @@ interface CreatedSubAgent {
  *  own sub-agents, so this only keeps an honest, session-local log of what
  *  was just created rather than pretending to show the full downline roster. */
 export function AgentSubAgentForm() {
+  const t = useT();
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [busy, setBusy] = useState(false);
@@ -34,12 +36,14 @@ export function AgentSubAgentForm() {
         email: email.trim(),
         password,
       });
-      toast.success("下级代理已创建", { description: `${data.email} · #${data.id}` });
+      toast.success(t("sales.subAgent.createdToastTitle"), { description: `${data.email} · #${data.id}` });
       setCreated((prev) => [{ id: data.id, email: data.email }, ...prev]);
       setEmail("");
       setPassword("");
     } catch (e) {
-      toast.error("创建失败", { description: e instanceof ApiError ? e.message : "请重试" });
+      toast.error(t("sales.subAgent.createFailedToastTitle"), {
+        description: e instanceof ApiError ? e.message : t("sales.subAgent.retry"),
+      });
     } finally {
       setBusy(false);
     }
@@ -50,7 +54,7 @@ export function AgentSubAgentForm() {
       <Card className="max-w-md space-y-4 p-5">
         <div className="space-y-2">
           <label htmlFor="sa-email" className="text-sm font-medium">
-            邮箱
+            {t("sales.subAgent.emailLabel")}
           </label>
           <Input
             id="sa-email"
@@ -62,28 +66,27 @@ export function AgentSubAgentForm() {
         </div>
         <div className="space-y-2">
           <label htmlFor="sa-password" className="text-sm font-medium">
-            初始密码 <span className="font-mono text-xs text-muted-foreground">≥ 8 位</span>
+            {t("sales.subAgent.passwordLabel")}{" "}
+            <span className="font-mono text-xs text-muted-foreground">{t("sales.subAgent.passwordHint")}</span>
           </label>
           <Input
             id="sa-password"
             type="password"
             value={password}
             onChange={(e) => setPassword(e.target.value)}
-            placeholder="至少 8 位"
+            placeholder={t("sales.subAgent.passwordPlaceholder")}
           />
         </div>
         <Button onClick={submit} disabled={!valid} className="gap-1.5">
           <UserPlus className="size-3.5" />
-          {busy ? "创建中…" : "创建下级代理"}
+          {busy ? t("sales.subAgent.creating") : t("sales.subAgent.createButton")}
         </Button>
       </Card>
 
       <Card className="p-5">
-        <div className="mb-3 text-sm font-medium">本次会话新建的下级代理</div>
+        <div className="mb-3 text-sm font-medium">{t("sales.subAgent.sessionCreatedTitle")}</div>
         {created.length === 0 ? (
-          <p className="text-sm text-muted-foreground">
-            尚未创建。暂无接口可列出你已有的下级代理，此处仅记录本次会话内的创建结果。
-          </p>
+          <p className="text-sm text-muted-foreground">{t("sales.subAgent.emptyState")}</p>
         ) : (
           <ul className="space-y-2">
             {created.map((c) => (

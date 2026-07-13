@@ -5,6 +5,7 @@ import type { Locale } from "@/lib/i18n";
 export const common: Record<Locale, Record<string, string>> = {
   zh: {
     "common.loading": "加载中…",
+    "common.close": "关闭",
     "header.brand": "管理后台",
     "header.searchPlaceholder": "搜索租户、设备、代理…",
     "header.searchAria": "全局搜索",
@@ -60,6 +61,7 @@ export const common: Record<Locale, Record<string, string>> = {
   },
   en: {
     "common.loading": "Loading…",
+    "common.close": "Close",
     "header.brand": "Admin",
     "header.searchPlaceholder": "Search tenants, devices, proxies…",
     "header.searchAria": "Global search",

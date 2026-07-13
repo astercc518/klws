@@ -201,6 +201,10 @@ export const dashboard: Record<Locale, Record<string, string>> = {
     "dash.newCampaign.submitting": "提交中…",
     "dash.newCampaign.confirmSubmit": "确认发送",
 
+    // components/send-trend-chart.tsx
+    "dash.trend.success": "成功",
+    "dash.trend.failed": "失败",
+
     // components/dashboard-metrics.tsx
     "dash.metrics.loadFailed": "加载失败",
     "dash.metrics.loadFailedPrefix": "指标加载失败:",
@@ -411,6 +415,10 @@ export const dashboard: Record<Locale, Record<string, string>> = {
     "dash.newCampaign.cancel": "Cancel",
     "dash.newCampaign.submitting": "Submitting…",
     "dash.newCampaign.confirmSubmit": "Send",
+
+    // components/send-trend-chart.tsx
+    "dash.trend.success": "Success",
+    "dash.trend.failed": "Failed",
 
     // components/dashboard-metrics.tsx
     "dash.metrics.loadFailed": "Failed to load",

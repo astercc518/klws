@@ -2,21 +2,25 @@
 
 import { useEffect, useState } from "react";
 import { AreaChart } from "@tremor/react";
+import { useT } from "@/components/locale-provider";
 
-// Mock 7-day send telemetry until /campaigns aggregation is wired.
-const DATA = [
-  { date: "06/20", 成功: 18420, 失败: 240 },
-  { date: "06/21", 成功: 22110, 失败: 310 },
-  { date: "06/22", 成功: 19880, 失败: 195 },
-  { date: "06/23", 成功: 26540, 失败: 420 },
-  { date: "06/24", 成功: 31200, 失败: 380 },
-  { date: "06/25", 成功: 28760, 失败: 290 },
-  { date: "06/26", 成功: 33980, 失败: 510 },
+// Mock 7-day send telemetry until /campaigns aggregation is wired. Keyed by
+// date only; the success/failed series keys are localized at render time
+// below since Tremor's `categories` must match the data object's keys.
+const RAW = [
+  { date: "06/20", success: 18420, failed: 240 },
+  { date: "06/21", success: 22110, failed: 310 },
+  { date: "06/22", success: 19880, failed: 195 },
+  { date: "06/23", success: 26540, failed: 420 },
+  { date: "06/24", success: 31200, failed: 380 },
+  { date: "06/25", success: 28760, failed: 290 },
+  { date: "06/26", success: 33980, failed: 510 },
 ];
 
 const nf = new Intl.NumberFormat("en-US");
 
 export function SendTrendChart() {
+  const t = useT();
   // Recharts measures container width on the client; render after mount so SSR
   // doesn't emit a zero-width chart (and to avoid hydration width warnings).
   const [mounted, setMounted] = useState(false);
@@ -26,12 +30,16 @@ export function SendTrendChart() {
     return <div className="h-72 w-full animate-pulse rounded-md bg-muted motion-reduce:animate-none" />;
   }
 
+  const successLabel = t("dash.trend.success");
+  const failedLabel = t("dash.trend.failed");
+  const data = RAW.map((d) => ({ date: d.date, [successLabel]: d.success, [failedLabel]: d.failed }));
+
   return (
     <AreaChart
       className="h-72"
-      data={DATA}
+      data={data}
       index="date"
-      categories={["成功", "失败"]}
+      categories={[successLabel, failedLabel]}
       colors={["emerald", "rose"]}
       valueFormatter={(v) => nf.format(v)}
       showLegend

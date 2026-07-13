@@ -4,6 +4,9 @@ import type { Locale } from "@/lib/i18n";
  *  filled incrementally as pages migrate off hardcoded Chinese strings. */
 export const sales: Record<Locale, Record<string, string>> = {
   zh: {
+    // components/sales-sidebar.tsx
+    "sales.sidebar.footerNote": "仅本人名下客户",
+
     // components/sales-console.tsx
     "sales.console.loadFailed": "加载失败",
     "sales.console.stat.customerCountLabel": "名下客户数",
@@ -86,8 +89,25 @@ export const sales: Record<Locale, Record<string, string>> = {
     "sales.allocate.close": "关闭",
     "sales.allocate.submitting": "提交中…",
     "sales.allocate.confirmAllocate": "确认划拨 ({n})",
+
+    // components/sales/agent-sub-agent-form.tsx
+    "sales.subAgent.createdToastTitle": "下级代理已创建",
+    "sales.subAgent.createFailedToastTitle": "创建失败",
+    "sales.subAgent.retry": "请重试",
+    "sales.subAgent.emailLabel": "邮箱",
+    "sales.subAgent.passwordLabel": "初始密码",
+    "sales.subAgent.passwordHint": "≥ 8 位",
+    "sales.subAgent.passwordPlaceholder": "至少 8 位",
+    "sales.subAgent.creating": "创建中…",
+    "sales.subAgent.createButton": "创建下级代理",
+    "sales.subAgent.sessionCreatedTitle": "本次会话新建的下级代理",
+    "sales.subAgent.emptyState":
+      "尚未创建。暂无接口可列出你已有的下级代理，此处仅记录本次会话内的创建结果。",
   },
   en: {
+    // components/sales-sidebar.tsx
+    "sales.sidebar.footerNote": "Your customers only",
+
     // components/sales-console.tsx
     "sales.console.loadFailed": "Load failed",
     "sales.console.stat.customerCountLabel": "Managed customers",
@@ -172,5 +192,19 @@ export const sales: Record<Locale, Record<string, string>> = {
     "sales.allocate.close": "Close",
     "sales.allocate.submitting": "Submitting…",
     "sales.allocate.confirmAllocate": "Confirm allocation ({n})",
+
+    // components/sales/agent-sub-agent-form.tsx
+    "sales.subAgent.createdToastTitle": "Sub-agent created",
+    "sales.subAgent.createFailedToastTitle": "Creation failed",
+    "sales.subAgent.retry": "Please try again",
+    "sales.subAgent.emailLabel": "Email",
+    "sales.subAgent.passwordLabel": "Initial password",
+    "sales.subAgent.passwordHint": "≥ 8 characters",
+    "sales.subAgent.passwordPlaceholder": "At least 8 characters",
+    "sales.subAgent.creating": "Creating…",
+    "sales.subAgent.createButton": "Create sub-agent",
+    "sales.subAgent.sessionCreatedTitle": "Sub-agents created this session",
+    "sales.subAgent.emptyState":
+      "None created yet. There's no endpoint to list your existing sub-agents — this only records what you create in this session.",
   },
 };

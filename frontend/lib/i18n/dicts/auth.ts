@@ -90,6 +90,10 @@ export const auth: Record<Locale, Record<string, string>> = {
     "auth.reset.backToLogin": "返回登录",
     "auth.reset.rememberedPassword": "想起来了？",
 
+    // app/impersonate/page.tsx
+    "auth.impersonate.invalidLink": "无效的模拟登录链接",
+    "auth.impersonate.entering": "正在进入…",
+
     // components/auth/auth-shell.tsx
     "auth.shell.heroTitle": "把 WhatsApp 变成你的增长引擎",
     "auth.shell.heroSubtitle": "百万级并发触达 · 多租户隔离 · 实时投递回执",
@@ -194,6 +198,10 @@ export const auth: Record<Locale, Record<string, string>> = {
     "auth.reset.requestNewLink": "Request a new reset link",
     "auth.reset.backToLogin": "Back to sign in",
     "auth.reset.rememberedPassword": "Remembered it?",
+
+    // app/impersonate/page.tsx
+    "auth.impersonate.invalidLink": "Invalid impersonation link",
+    "auth.impersonate.entering": "Entering…",
 
     // components/auth/auth-shell.tsx
     "auth.shell.heroTitle": "Turn WhatsApp into your growth engine",

@@ -4,6 +4,7 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { Users, Network, Receipt, UserPlus } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { useLocale, useT } from "@/components/locale-provider";
 
 const NAV = [
   { href: "/sales", label: "我的客户", en: "Customers", icon: Users },
@@ -14,6 +15,9 @@ const NAV = [
 
 export function SalesSidebar() {
   const pathname = usePathname();
+  const { locale } = useLocale();
+  const t = useT();
+  const en = locale === "en";
 
   return (
     <aside className="flex h-full w-64 shrink-0 flex-col border-r bg-sidebar">
@@ -49,15 +53,17 @@ export function SalesSidebar() {
                   )}
                 >
                   <Icon className="size-4 shrink-0" strokeWidth={active ? 2.25 : 1.75} />
-                  <span className="font-medium">{item.label}</span>
-                  <span
-                    className={cn(
-                      "ml-auto font-mono text-[10px] uppercase tracking-wider",
-                      active ? "text-background/60" : "text-muted-foreground/50",
-                    )}
-                  >
-                    {item.en}
-                  </span>
+                  <span className="font-medium">{en ? item.en : item.label}</span>
+                  {!en && (
+                    <span
+                      className={cn(
+                        "ml-auto font-mono text-[10px] uppercase tracking-wider",
+                        active ? "text-background/60" : "text-muted-foreground/50",
+                      )}
+                    >
+                      {item.en}
+                    </span>
+                  )}
                 </Link>
               </li>
             );
@@ -67,7 +73,7 @@ export function SalesSidebar() {
 
       <div className="border-t px-6 py-4">
         <div className="font-mono text-[10px] uppercase tracking-[0.18em] text-muted-foreground">
-          仅本人名下客户
+          {t("sales.sidebar.footerNote")}
         </div>
       </div>
     </aside>
