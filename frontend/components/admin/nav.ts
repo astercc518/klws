@@ -70,6 +70,7 @@ export const NAV_GROUPS: NavGroup[] = [
   },
   {
     title: "代理分销",
+    en: "Agents",
     items: [
       // Flat sibling routes (not nested under /admin/agents/*): both this
       // file's resolveRoute (first-match wins) and admin-sidebar's per-item
