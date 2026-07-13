@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
-import { Users, Wallet, Layers, HandCoins } from "lucide-react";
+import { Users, Wallet, ShieldCheck, HandCoins } from "lucide-react";
 import { api, ApiError } from "@/lib/api";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -18,40 +18,43 @@ interface Customer {
   frozen: number;
 }
 
-/** Subset of GET /sales/statement's response (see settlementJSON) — only the
- *  fields this rollup card renders. */
-interface StatementSummary {
-  period: string;
-  retail_subtree: number;
+/** One direct sub-agent, from GET /sales/overview's sub_agents (see
+ *  subAgentRow in agent_api.go). */
+interface SubAgent {
+  id: number;
+  email: string;
+  credit_limit: number;
+}
+
+/** Mirrors handleAgentOverview's response shape (agent_api.go). `outstanding`
+ *  is server-derived as credit_limit-available, so the three figures are
+ *  always internally consistent by construction. */
+interface Overview {
+  credit_limit: number;
+  outstanding: number;
+  available: number;
+  sub_agents: SubAgent[];
+  direct_customer_count: number;
 }
 
 const usd = (smallest: number) =>
   new Intl.NumberFormat("en-US", { style: "currency", currency: "USD" }).format(smallest / 100);
 const nf = new Intl.NumberFormat("en-US");
 
-function currentMonth(): string {
-  const d = new Date();
-  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
-}
-
-/** AgentDownline: the agent's own "downline" view. There is no sales-facing
- *  endpoint that lists sub-agents or rolls up the whole subtree's customers
- *  (GET /sales/customers only returns tenants.sales_owner_id = me — see
- *  handleSalesCustomers), so this honestly shows:
- *   - the direct-customer list (also the allocation target picker), and
- *   - the whole-subtree settled consumption for the current month, sourced
- *     from GET /sales/statement's retail_subtree (the one number the backend
- *     does roll up across the full subtree).
- *  Credit limit / outstanding have no dedicated read endpoint either; only
- *  `available` is known, and only right after a successful single-item
- *  allocation (its response includes it) — shown honestly as unknown until then. */
+/** AgentDownline: the agent's own "downline" view. Credit limit / outstanding
+ *  / available and the direct sub-agent list now come from GET /sales/overview
+ *  (see handleAgentOverview) — the direct-customer table below remains
+ *  separately sourced from GET /sales/customers (handleSalesCustomers) since
+ *  overview does not enumerate customers, only counts them. There is still no
+ *  endpoint for the FULL subtree's customers (only direct sub-agents are
+ *  listed), so downline agents beyond one level are not shown here. */
 export function AgentDownline() {
   const [rows, setRows] = useState<Customer[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [selected, setSelected] = useState<Set<number>>(new Set());
   const [allocateOpen, setAllocateOpen] = useState(false);
-  const [subtreeSummary, setSubtreeSummary] = useState<StatementSummary | null>(null);
-  const [lastAvailable, setLastAvailable] = useState<number | null>(null);
+  const [overview, setOverview] = useState<Overview | null>(null);
+  const [overviewError, setOverviewError] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     try {
@@ -63,18 +66,21 @@ export function AgentDownline() {
     }
   }, []);
 
-  const loadSummary = useCallback(async () => {
+  const loadOverview = useCallback(async () => {
     try {
-      setSubtreeSummary(await api.get<StatementSummary>(`/sales/statement?month=${currentMonth()}`));
-    } catch {
-      // Non-fatal: the rollup card just shows "—" if this fails.
+      setOverview(await api.get<Overview>("/sales/overview"));
+      setOverviewError(null);
+    } catch (e) {
+      if (!(e instanceof ApiError && e.status === 401)) {
+        setOverviewError(e instanceof ApiError ? e.message : "加载失败");
+      }
     }
   }, []);
 
   useEffect(() => {
     load();
-    loadSummary();
-  }, [load, loadSummary]);
+    loadOverview();
+  }, [load, loadOverview]);
 
   function toggle(id: number) {
     setSelected((prev) => {
@@ -88,34 +94,62 @@ export function AgentDownline() {
   if (error) return <Card className="p-5 text-sm text-muted-foreground">加载失败:{error}</Card>;
   if (!rows) return <div className="h-64 animate-pulse rounded-xl bg-muted motion-reduce:animate-none" />;
 
-  const totalBalance = rows.reduce((s, r) => s + r.balance, 0);
   const selectedCustomers = rows.filter((r) => selected.has(r.id));
 
   return (
     <>
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
-        <MetricCard hero label="直属客户数" value={nf.format(rows.length)} sub="我负责的租户" icon={Users} />
-        <MetricCard label="直属余额合计" value={usd(totalBalance)} sub="直属客户可用余额" icon={Wallet} />
+        <MetricCard hero label="信用额度" value={overview ? usd(overview.credit_limit) : "—"} sub="平台授予的总额度" icon={ShieldCheck} />
         <MetricCard
-          label="本月下线消费(结算)"
-          value={subtreeSummary ? usd(subtreeSummary.retail_subtree) : "—"}
-          sub={subtreeSummary ? `含整条下线 · ${subtreeSummary.period}` : "统计接口暂不可用"}
-          icon={Layers}
+          label="已用/欠款"
+          value={overview ? usd(overview.outstanding) : "—"}
+          sub="credit_limit − available"
+          icon={HandCoins}
         />
         <MetricCard
           label="可用划拨额度"
-          value={lastAvailable != null ? usd(lastAvailable) : "—"}
-          sub={lastAvailable != null ? "上次划拨返回值" : "需完成一次划拨后才可见"}
-          icon={HandCoins}
+          value={overview ? usd(overview.available) : overviewError ? "加载失败" : "—"}
+          sub="可继续划拨给下线的额度"
+          icon={Wallet}
+        />
+        <MetricCard
+          label="直属客户数"
+          value={overview ? nf.format(overview.direct_customer_count) : nf.format(rows.length)}
+          sub="我负责的租户"
+          icon={Users}
         />
       </div>
+
+      {overview && overview.sub_agents.length > 0 && (
+        <Card className="mt-4 overflow-hidden p-0">
+          <div className="border-b px-4 py-3 text-sm font-medium">下级代理</div>
+          <Table>
+            <TableHeader>
+              <TableRow className="bg-muted/40">
+                <TableHead>代理</TableHead>
+                <TableHead className="text-right">信用额度</TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {overview.sub_agents.map((a) => (
+                <TableRow key={a.id}>
+                  <TableCell className="font-mono text-sm">
+                    #{a.id} {a.email}
+                  </TableCell>
+                  <TableCell className="text-right font-mono tabular-nums">{usd(a.credit_limit)}</TableCell>
+                </TableRow>
+              ))}
+            </TableBody>
+          </Table>
+        </Card>
+      )}
 
       <Card className="mt-4 overflow-hidden p-0">
         <div className="flex flex-wrap items-center justify-between gap-3 border-b px-4 py-3">
           <div>
             <div className="text-sm font-medium">直属客户 · 划拨对象</div>
             <div className="mt-0.5 text-xs text-muted-foreground">
-              勾选一个或多个客户批量划拨额度。下级代理及其名下客户暂无独立查询接口，此处仅展示你直属的客户。
+              勾选一个或多个客户批量划拨额度。下级代理的名下客户暂无独立查询接口，此处仅展示你直属的客户。
             </div>
           </div>
           <Button size="sm" disabled={selected.size === 0} onClick={() => setAllocateOpen(true)} className="gap-1.5">
@@ -171,10 +205,10 @@ export function AgentDownline() {
         open={allocateOpen}
         customers={selectedCustomers}
         onClose={() => setAllocateOpen(false)}
-        onDone={(available) => {
-          if (available != null) setLastAvailable(available);
+        onDone={() => {
           setSelected(new Set());
           load();
+          loadOverview();
         }}
       />
     </>

@@ -10,6 +10,9 @@ import {
   ListChecks,
   PieChart,
   BookUser,
+  Network,
+  Coins,
+  CalendarCheck,
   type LucideIcon,
 } from "lucide-react";
 
@@ -57,6 +60,19 @@ export const NAV_GROUPS: NavGroup[] = [
       { href: "/admin/campaigns", label: "发送任务", en: "Campaigns", icon: Send },
       { href: "/admin/send-records", label: "发送记录", en: "Send Records", icon: ListChecks },
       { href: "/admin/contacts", label: "联系人", en: "Contacts", icon: BookUser },
+    ],
+  },
+  {
+    title: "代理分销",
+    items: [
+      // Flat sibling routes (not nested under /admin/agents/*): both this
+      // file's resolveRoute (first-match wins) and admin-sidebar's per-item
+      // `pathname.startsWith(item.href)` active-highlight would otherwise
+      // treat "/admin/agents/cost-pricing" as also matching "/admin/agents",
+      // double-highlighting two nav items at once.
+      { href: "/admin/agents", label: "代理树", en: "Agent Tree", icon: Network },
+      { href: "/admin/agent-cost-pricing", label: "成本价", en: "Cost Pricing", icon: Coins },
+      { href: "/admin/agent-settlements", label: "结算总览", en: "Settlements", icon: CalendarCheck },
     ],
   },
   {
