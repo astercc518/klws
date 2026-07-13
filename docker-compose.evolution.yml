@@ -1,0 +1,55 @@
+# OPT-IN Evolution data-plane overlay — NOT part of the default stack.
+#
+# ⚠️ 上线前必读 docs/evolution-real-machine-verification-runbook.md。
+# 本 overlay 把 Evolution API(Baileys) 数据面接进生产 klws 栈。Evolution 是切换后
+# wadist 唯一的发送/收信通道(whatsmeow 已删)。**起它 + 重建 wadist 后,所有账号必须
+# 重新扫码**(Badger Signal 态已删,无迁移)。
+#
+# 安全接线(按 runbook V0 高危点):webhook 回调走**内网**(evolution -> backend:8080),
+# 且 WADIST_EVOLUTION_WEBHOOK_SECRET 先**留空**——因为 Evolution v2 原生不发我们假设的
+# 签名头,一旦设了 secret 会把真实回调全 401,回执/状态全断。先靠 compose 网络隔离做信任
+# 边界,真机验证确认 Authorization 头形状后再启用 secret。
+#
+# 起(务必带 prod+adopt,保 postgres 外部卷不被重建):
+#   docker compose -f docker-compose.prod.yml -f docker-compose.adopt.yml \
+#     -f docker-compose.evolution.yml -f docker-compose.worker.yml up -d evolution evolution-redis wadist
+#
+# 停发送(campaign 保持 running):
+#   docker compose ... stop wadist
+services:
+  # Evolution 侧独立 Redis(会话/缓存),与业务 redis 隔离,避免键空间与内存争用。
+  evolution-redis:
+    image: redis:7
+    restart: always
+    command: ["redis-server", "--maxmemory", "2gb", "--maxmemory-policy", "noeviction", "--appendonly", "yes"]
+    volumes:
+      - evo_redis:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  evolution:
+    image: atendai/evolution-api:v2.1.1   # ⚠️ 上线前确认要对的确切版本(与 runbook 一致)
+    restart: always
+    depends_on:
+      evolution-redis: { condition: service_healthy }
+    environment:
+      # ⚠️ 必须与 wadist/backend 的 WADIST_EVOLUTION_APIKEY 一致(在 .env 设同值)。
+      - AUTHENTICATION_API_KEY=${WADIST_EVOLUTION_APIKEY}
+      - DATABASE_ENABLED=false
+      - CACHE_REDIS_ENABLED=true
+      - CACHE_REDIS_URI=redis://evolution-redis:6379/0
+      - CACHE_REDIS_PREFIX_KEY=evo
+      - DEL_INSTANCE=false
+      # 不对外发布端口:仅 compose 内网可达(wadist 调它、它回调 backend)——满足 runbook
+      # "webhook 信任边界=网络隔离"。要 manager UI 调试时再临时映射 8080。
+    expose:
+      - "8080"
+    volumes:
+      - evo_instances:/evolution/instances
+
+volumes:
+  evo_redis:
+  evo_instances:
