@@ -1,9 +1,12 @@
+"use client";
+
 import Link from "next/link";
 import { ArrowLeft } from "lucide-react";
 import { ThemeToggle } from "@/components/theme-toggle";
 import { LanguageToggle } from "@/components/language-toggle";
 import { Logo } from "@/components/landing/logo";
 import { BroadcastDemo } from "@/components/auth/broadcast-demo";
+import { useT } from "@/components/locale-provider";
 
 /**
  * Split-screen auth layout: a branded (WhatsApp-green) panel on the left with a
@@ -19,6 +22,7 @@ export function AuthShell({
   subtitle: string;
   children: React.ReactNode;
 }) {
+  const t = useT();
   return (
     <main className="grid min-h-screen lg:grid-cols-[1.05fr_1fr]">
       {/* ── left: brand + live broadcast demo (desktop only) ── */}
@@ -52,10 +56,10 @@ export function AuthShell({
         <div className="relative flex flex-col items-center text-center">
           <BroadcastDemo />
           <h2 className="mt-8 text-2xl leading-tight font-semibold tracking-tight text-balance text-white">
-            把 WhatsApp 变成你的增长引擎
+            {t("auth.shell.heroTitle")}
           </h2>
           <p className="mt-2.5 max-w-xs text-sm text-emerald-50/80">
-            百万级并发触达 · 多租户隔离 · 实时投递回执
+            {t("auth.shell.heroSubtitle")}
           </p>
         </div>
 
@@ -91,7 +95,7 @@ export function AuthShell({
             className="mt-8 inline-flex items-center gap-1.5 text-sm text-muted-foreground transition-colors hover:text-foreground"
           >
             <ArrowLeft className="size-4" />
-            返回首页
+            {t("auth.shell.backHome")}
           </Link>
         </div>
       </div>

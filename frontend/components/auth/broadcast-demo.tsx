@@ -4,6 +4,7 @@ import { useEffect, useRef, useState } from "react";
 import { Send, CheckCheck, Clock, Loader2 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Mascot } from "@/components/auth/mascot";
+import { useT } from "@/components/locale-provider";
 
 /**
  * Interactive "group broadcast" demo for the auth panel — the product thesis,
@@ -15,19 +16,21 @@ import { Mascot } from "@/components/auth/mascot";
 
 type Status = "queued" | "sending" | "delivered" | "read";
 
-const CONTACTS = [
+const CONCURRENCY = 128;
+
+const CONTACTS: { name?: string; nameKey?: string; phone: string; tint: string }[] = [
   { name: "Wang Lei", phone: "+86 138••••6021", tint: "#f59e0b" },
   { name: "María G.", phone: "+55 11••••7745", tint: "#38bdf8" },
-  { name: "陈晓", phone: "+852 6••••2290", tint: "#a78bfa" },
+  { nameKey: "auth.demo.contactChenXiao", phone: "+852 6••••2290", tint: "#a78bfa" },
   { name: "A. Khan", phone: "+971 5••••0148", tint: "#fb7185" },
   { name: "Tunde O.", phone: "+234 80••••6155", tint: "#34d399" },
 ];
 
-const META: Record<Status, { label: string; cls: string }> = {
-  queued: { label: "排队", cls: "text-white/45" },
-  sending: { label: "发送中", cls: "text-amber-200" },
-  delivered: { label: "已送达", cls: "text-emerald-100" },
-  read: { label: "已读", cls: "text-sky-300" },
+const META: Record<Status, { key: string; cls: string }> = {
+  queued: { key: "auth.demo.statusQueued", cls: "text-white/45" },
+  sending: { key: "auth.demo.statusSending", cls: "text-amber-200" },
+  delivered: { key: "auth.demo.statusDelivered", cls: "text-emerald-100" },
+  read: { key: "auth.demo.statusRead", cls: "text-sky-300" },
 };
 
 function withItem<T>(arr: T[], i: number, v: T): T[] {
@@ -37,6 +40,7 @@ function withItem<T>(arr: T[], i: number, v: T): T[] {
 }
 
 export function BroadcastDemo({ className }: { className?: string }) {
+  const t = useT();
   const [statuses, setStatuses] = useState<Status[]>(() =>
     CONTACTS.map(() => "queued"),
   );
@@ -108,7 +112,7 @@ export function BroadcastDemo({ className }: { className?: string }) {
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-2">
             <Mascot face={{ focus: null, hidden: false }} className="size-7" />
-            <span className="text-sm font-semibold text-white">群发控制台</span>
+            <span className="text-sm font-semibold text-white">{t("auth.demo.consoleTitle")}</span>
           </div>
           <span className="inline-flex items-center gap-1.5 text-[11px] font-medium text-white/80">
             <span className="relative flex size-2">
@@ -122,12 +126,12 @@ export function BroadcastDemo({ className }: { className?: string }) {
         {/* compose row */}
         <div className="mt-4 flex items-center gap-2 rounded-xl bg-black/15 p-2 pl-3">
           <p className="flex-1 truncate text-[13px] text-white/85">
-            🎉 双 11 专属 5 折，点此领取…
+            {t("auth.demo.promoMessage")}
           </p>
           <button
             type="button"
             onClick={() => trigger.current()}
-            aria-label="立即群发"
+            aria-label={t("auth.demo.sendAria")}
             className="inline-flex size-9 shrink-0 items-center justify-center rounded-lg bg-white text-brand-700 shadow transition hover:bg-emerald-50 active:scale-90"
           >
             <Send className="size-4" />
@@ -139,6 +143,7 @@ export function BroadcastDemo({ className }: { className?: string }) {
           {CONTACTS.map((c, i) => {
             const st = statuses[i];
             const m = META[st];
+            const name = c.nameKey ? t(c.nameKey) : (c.name ?? "");
             return (
               <li
                 key={c.phone}
@@ -151,10 +156,10 @@ export function BroadcastDemo({ className }: { className?: string }) {
                   className="grid size-7 shrink-0 place-items-center rounded-full text-[11px] font-semibold text-white ring-1 ring-white/25"
                   style={{ backgroundColor: c.tint }}
                 >
-                  {c.name.slice(0, 1)}
+                  {name.slice(0, 1)}
                 </span>
                 <div className="min-w-0 flex-1">
-                  <div className="truncate text-xs font-medium text-white">{c.name}</div>
+                  <div className="truncate text-xs font-medium text-white">{name}</div>
                   <div className="truncate font-mono text-[10px] text-white/55">
                     {c.phone}
                   </div>
@@ -170,7 +175,7 @@ export function BroadcastDemo({ className }: { className?: string }) {
                   {(st === "delivered" || st === "read") && (
                     <CheckCheck className="size-3.5" />
                   )}
-                  {m.label}
+                  {t(m.key)}
                 </span>
               </li>
             );
@@ -180,7 +185,7 @@ export function BroadcastDemo({ className }: { className?: string }) {
         {/* metrics */}
         <div className="mt-4 flex items-end justify-between border-t border-white/15 pt-3">
           <div>
-            <div className="text-[10px] text-white/55">已触达</div>
+            <div className="text-[10px] text-white/55">{t("auth.demo.reached")}</div>
             <div className="font-mono text-lg font-semibold tabular-nums text-white">
               {reached.toLocaleString()}
             </div>
@@ -195,10 +200,12 @@ export function BroadcastDemo({ className }: { className?: string }) {
                 />
               ))}
             </div>
-            <div className="text-[9px] tracking-wide text-white/40">并发 128</div>
+            <div className="text-[9px] tracking-wide text-white/40">
+              {t("auth.demo.concurrencyLabel").replace("{n}", () => String(CONCURRENCY))}
+            </div>
           </div>
           <div className="text-right">
-            <div className="text-[10px] text-white/55">投递率</div>
+            <div className="text-[10px] text-white/55">{t("auth.demo.deliveryRate")}</div>
             <div className="font-mono text-lg font-semibold tabular-nums text-white">
               99.2%
             </div>

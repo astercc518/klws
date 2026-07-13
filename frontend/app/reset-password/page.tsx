@@ -7,14 +7,10 @@ import { toast } from "sonner";
 import { resetPassword, ApiError } from "@/lib/api";
 import { Input } from "@/components/ui/input";
 import { AuthShell } from "@/components/auth/auth-shell";
-
-function passwordError(v: string): string | undefined {
-  if (!v) return "请输入新密码";
-  if (v.length < 6) return "密码至少 6 位";
-  return undefined;
-}
+import { useT } from "@/components/locale-provider";
 
 function ResetForm() {
+  const t = useT();
   const router = useRouter();
   const token = useSearchParams().get("token") ?? "";
   const [password, setPassword] = useState("");
@@ -23,9 +19,14 @@ function ResetForm() {
   const [attempted, setAttempted] = useState(false);
   const [submitting, setSubmitting] = useState(false);
 
+  function passwordError(v: string): string | undefined {
+    if (!v) return t("auth.reset.newPasswordRequired");
+    if (v.length < 6) return t("auth.reset.passwordTooShort");
+    return undefined;
+  }
   function confirmError(c: string, p: string): string | undefined {
-    if (!c) return "请再次输入密码";
-    if (c !== p) return "两次密码不一致";
+    if (!c) return t("auth.reset.confirmRequired");
+    if (c !== p) return t("auth.reset.passwordMismatch");
     return undefined;
   }
 
@@ -42,11 +43,11 @@ function ResetForm() {
     setSubmitting(true);
     try {
       await resetPassword(token, password);
-      toast.success("密码已重置", { description: "请用新密码登录。" });
+      toast.success(t("auth.reset.successTitle"), { description: t("auth.reset.successDesc") });
       router.push("/login");
     } catch (err) {
-      toast.error("重置失败", {
-        description: err instanceof ApiError ? err.message : "无法连接服务器",
+      toast.error(t("auth.reset.failedTitle"), {
+        description: err instanceof ApiError ? err.message : t("auth.reset.serverUnreachable"),
       });
       setSubmitting(false);
     }
@@ -54,23 +55,23 @@ function ResetForm() {
 
   if (!token) {
     return (
-      <AuthShell title="链接无效" subtitle="重置链接缺失或已失效。">
+      <AuthShell title={t("auth.reset.invalidTitle")} subtitle={t("auth.reset.invalidSubtitle")}>
         <Link
           href="/forgot-password"
           className="mt-7 inline-flex h-11 w-full items-center justify-center rounded-full bg-brand-600 text-sm font-medium text-white shadow-sm shadow-brand-600/25 transition-colors hover:bg-brand-700"
         >
-          重新申请重置链接
+          {t("auth.reset.requestNewLink")}
         </Link>
       </AuthShell>
     );
   }
 
   return (
-    <AuthShell title="重置密码" subtitle="设置一个新密码以继续。">
+    <AuthShell title={t("auth.reset.title")} subtitle={t("auth.reset.subtitle")}>
       <form onSubmit={handleSubmit} noValidate className="mt-7 space-y-4">
         <div>
           <label htmlFor="password" className="text-sm font-medium">
-            新密码
+            {t("auth.reset.newPasswordLabel")}
           </label>
           <Input
             id="password"
@@ -86,7 +87,7 @@ function ResetForm() {
                   confirm: confirmError(confirm, v),
                 }));
             }}
-            placeholder="至少 6 位"
+            placeholder={t("auth.reset.passwordPlaceholder")}
             autoComplete="new-password"
             aria-invalid={!!errors.password}
             aria-describedby="password-error"
@@ -99,7 +100,7 @@ function ResetForm() {
 
         <div>
           <label htmlFor="confirm" className="text-sm font-medium">
-            确认新密码
+            {t("auth.reset.confirmLabel")}
           </label>
           <Input
             id="confirm"
@@ -110,7 +111,7 @@ function ResetForm() {
               setConfirm(v);
               if (attempted) setErrors((p) => ({ ...p, confirm: confirmError(v, password) }));
             }}
-            placeholder="再次输入新密码"
+            placeholder={t("auth.reset.confirmPlaceholder")}
             autoComplete="new-password"
             aria-invalid={!!errors.confirm}
             aria-describedby="confirm-error"
@@ -126,17 +127,17 @@ function ResetForm() {
           disabled={submitting}
           className="inline-flex h-11 w-full items-center justify-center rounded-full bg-brand-600 text-sm font-medium text-white shadow-sm shadow-brand-600/25 transition-colors hover:bg-brand-700 focus-visible:ring-2 focus-visible:ring-brand-500/50 focus-visible:ring-offset-2 focus-visible:ring-offset-background focus-visible:outline-none disabled:opacity-60"
         >
-          {submitting ? "重置中…" : "重置密码"}
+          {submitting ? t("auth.reset.submitting") : t("auth.reset.submit")}
         </button>
       </form>
 
       <p className="mt-6 text-center text-sm text-muted-foreground">
-        想起来了？{" "}
+        {t("auth.reset.rememberedPassword")}{" "}
         <Link
           href="/login"
           className="font-medium text-brand-600 hover:text-brand-700 dark:text-brand-400"
         >
-          返回登录
+          {t("auth.reset.backToLogin")}
         </Link>
       </p>
     </AuthShell>

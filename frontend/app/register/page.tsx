@@ -8,19 +8,10 @@ import { register, ApiError } from "@/lib/api";
 import { Input } from "@/components/ui/input";
 import { AuthShell } from "@/components/auth/auth-shell";
 import { Turnstile } from "@/components/auth/turnstile";
-
-function emailError(v: string): string | undefined {
-  if (!v.trim()) return "请输入账号";
-  if (v.trim().length < 3) return "账号至少 3 位";
-  return undefined;
-}
-function passwordError(v: string): string | undefined {
-  if (!v) return "请输入密码";
-  if (v.length < 6) return "密码至少 6 位";
-  return undefined;
-}
+import { useT } from "@/components/locale-provider";
 
 export default function RegisterPage() {
+  const t = useT();
   const router = useRouter();
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
@@ -35,9 +26,19 @@ export default function RegisterPage() {
   const [attempted, setAttempted] = useState(false);
   const [submitting, setSubmitting] = useState(false);
 
+  function emailError(v: string): string | undefined {
+    if (!v.trim()) return t("auth.register.accountRequired");
+    if (v.trim().length < 3) return t("auth.register.accountTooShort");
+    return undefined;
+  }
+  function passwordError(v: string): string | undefined {
+    if (!v) return t("auth.register.passwordRequired");
+    if (v.length < 6) return t("auth.register.passwordTooShort");
+    return undefined;
+  }
   function confirmError(c: string, p: string): string | undefined {
-    if (!c) return "请再次输入密码";
-    if (c !== p) return "两次密码不一致";
+    if (!c) return t("auth.register.confirmRequired");
+    if (c !== p) return t("auth.register.passwordMismatch");
     return undefined;
   }
 
@@ -48,7 +49,7 @@ export default function RegisterPage() {
       email: emailError(email),
       password: passwordError(password),
       confirm: confirmError(confirm, password),
-      captcha: token ? undefined : "请完成人机验证",
+      captcha: token ? undefined : t("auth.register.captchaRequired"),
     };
     setErrors(next);
     if (next.email || next.password || next.confirm || next.captcha) return;
@@ -56,22 +57,24 @@ export default function RegisterPage() {
     setSubmitting(true);
     try {
       await register({ email: email.trim(), password, turnstileToken: token ?? undefined });
-      toast.success("注册成功", { description: "正在进入控制台…" });
+      toast.success(t("auth.register.successTitle"), {
+        description: t("auth.register.successDesc"),
+      });
       router.push("/dashboard");
     } catch (err) {
-      toast.error("注册失败", {
-        description: err instanceof ApiError ? err.message : "无法连接服务器",
+      toast.error(t("auth.register.failedTitle"), {
+        description: err instanceof ApiError ? err.message : t("auth.register.serverUnreachable"),
       });
       setSubmitting(false);
     }
   }
 
   return (
-    <AuthShell title="创建账号" subtitle="几分钟开始，无需信用卡。">
+    <AuthShell title={t("auth.register.title")} subtitle={t("auth.register.subtitle")}>
       <form onSubmit={handleSubmit} noValidate className="mt-7 space-y-4">
         <div>
           <label htmlFor="email" className="text-sm font-medium">
-            账号
+            {t("auth.register.accountLabel")}
           </label>
           <Input
             id="email"
@@ -82,7 +85,7 @@ export default function RegisterPage() {
               setEmail(v);
               if (attempted) setErrors((p) => ({ ...p, email: emailError(v) }));
             }}
-            placeholder="用户名或邮箱"
+            placeholder={t("auth.register.accountPlaceholder")}
             autoComplete="username"
             aria-invalid={!!errors.email}
             aria-describedby="email-error"
@@ -95,7 +98,7 @@ export default function RegisterPage() {
 
         <div>
           <label htmlFor="password" className="text-sm font-medium">
-            密码
+            {t("auth.register.passwordLabel")}
           </label>
           <Input
             id="password"
@@ -111,7 +114,7 @@ export default function RegisterPage() {
                   confirm: confirmError(confirm, v),
                 }));
             }}
-            placeholder="至少 6 位"
+            placeholder={t("auth.register.passwordPlaceholder")}
             autoComplete="new-password"
             aria-invalid={!!errors.password}
             aria-describedby="password-error"
@@ -124,7 +127,7 @@ export default function RegisterPage() {
 
         <div>
           <label htmlFor="confirm" className="text-sm font-medium">
-            确认密码
+            {t("auth.register.confirmLabel")}
           </label>
           <Input
             id="confirm"
@@ -136,7 +139,7 @@ export default function RegisterPage() {
               if (attempted)
                 setErrors((p) => ({ ...p, confirm: confirmError(v, password) }));
             }}
-            placeholder="再次输入密码"
+            placeholder={t("auth.register.confirmPlaceholder")}
             autoComplete="new-password"
             aria-invalid={!!errors.confirm}
             aria-describedby="confirm-error"
@@ -149,8 +152,8 @@ export default function RegisterPage() {
 
         <div>
           <Turnstile
-            onVerify={(t) => {
-              setTsToken(t);
+            onVerify={(v) => {
+              setTsToken(v);
               setErrors((p) => ({ ...p, captcha: undefined }));
             }}
             onExpire={() => setTsToken(null)}
@@ -163,17 +166,17 @@ export default function RegisterPage() {
           disabled={submitting}
           className="inline-flex h-11 w-full items-center justify-center rounded-full bg-brand-600 text-sm font-medium text-white shadow-sm shadow-brand-600/25 transition-colors hover:bg-brand-700 focus-visible:ring-2 focus-visible:ring-brand-500/50 focus-visible:ring-offset-2 focus-visible:ring-offset-background focus-visible:outline-none disabled:opacity-60"
         >
-          {submitting ? "注册中…" : "免费注册"}
+          {submitting ? t("auth.register.submitting") : t("auth.register.submit")}
         </button>
       </form>
 
       <p className="mt-6 text-center text-sm text-muted-foreground">
-        已有账号？{" "}
+        {t("auth.register.alreadyHaveAccount")}{" "}
         <Link
           href="/login"
           className="font-medium text-brand-600 hover:text-brand-700 dark:text-brand-400"
         >
-          直接登录
+          {t("auth.register.signInNow")}
         </Link>
       </p>
     </AuthShell>

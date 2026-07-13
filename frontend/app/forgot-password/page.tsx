@@ -7,17 +7,19 @@ import { requestPasswordReset } from "@/lib/api";
 import { Input } from "@/components/ui/input";
 import { AuthShell } from "@/components/auth/auth-shell";
 import { Turnstile } from "@/components/auth/turnstile";
+import { useT } from "@/components/locale-provider";
 
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
-function emailError(v: string): string | undefined {
-  if (!v.trim()) return "请输入邮箱";
-  if (!EMAIL_RE.test(v.trim())) return "邮箱格式不正确";
-  return undefined;
-}
-
 export default function ForgotPasswordPage() {
+  const t = useT();
   const [email, setEmail] = useState("");
+
+  function emailError(v: string): string | undefined {
+    if (!v.trim()) return t("auth.forgot.emailRequired");
+    if (!EMAIL_RE.test(v.trim())) return t("auth.forgot.emailInvalid");
+    return undefined;
+  }
   const [token, setTsToken] = useState<string | null>(null);
   const [errors, setErrors] = useState<{ email?: string; captcha?: string }>({});
   const [attempted, setAttempted] = useState(false);
@@ -29,7 +31,7 @@ export default function ForgotPasswordPage() {
     setAttempted(true);
     const next = {
       email: emailError(email),
-      captcha: token ? undefined : "请完成人机验证",
+      captcha: token ? undefined : t("auth.forgot.captchaRequired"),
     };
     setErrors(next);
     if (next.email || next.captcha) return;
@@ -43,32 +45,33 @@ export default function ForgotPasswordPage() {
 
   if (sent) {
     return (
-      <AuthShell title="查收你的邮箱" subtitle="重置链接已发送（如果该账号存在）。">
+      <AuthShell title={t("auth.forgot.sentTitle")} subtitle={t("auth.forgot.sentSubtitle")}>
         <div className="mt-7 flex flex-col items-center text-center">
           <span className="flex size-12 items-center justify-center rounded-2xl bg-brand-500/10 text-brand-600 dark:text-brand-400">
             <MailCheck className="size-6" />
           </span>
           <p className="mt-4 text-sm text-muted-foreground">
-            我们已向 <span className="font-medium text-foreground">{email.trim()}</span>{" "}
-            发送了密码重置链接。请在 30 分钟内点击完成重置。
+            {t("auth.forgot.sentPrefix")}
+            <span className="font-medium text-foreground">{email.trim()}</span>
+            {t("auth.forgot.sentSuffix")}
           </p>
         </div>
         <Link
           href="/login"
           className="mt-7 inline-flex h-11 w-full items-center justify-center rounded-full bg-brand-600 text-sm font-medium text-white shadow-sm shadow-brand-600/25 transition-colors hover:bg-brand-700"
         >
-          返回登录
+          {t("auth.forgot.backToLogin")}
         </Link>
       </AuthShell>
     );
   }
 
   return (
-    <AuthShell title="找回密码" subtitle="输入注册邮箱，我们会发送重置链接。">
+    <AuthShell title={t("auth.forgot.title")} subtitle={t("auth.forgot.subtitle")}>
       <form onSubmit={handleSubmit} noValidate className="mt-7 space-y-4">
         <div>
           <label htmlFor="email" className="text-sm font-medium">
-            邮箱
+            {t("auth.forgot.emailLabel")}
           </label>
           <Input
             id="email"
@@ -92,8 +95,8 @@ export default function ForgotPasswordPage() {
 
         <div>
           <Turnstile
-            onVerify={(t) => {
-              setTsToken(t);
+            onVerify={(v) => {
+              setTsToken(v);
               setErrors((p) => ({ ...p, captcha: undefined }));
             }}
             onExpire={() => setTsToken(null)}
@@ -106,17 +109,17 @@ export default function ForgotPasswordPage() {
           disabled={submitting}
           className="inline-flex h-11 w-full items-center justify-center rounded-full bg-brand-600 text-sm font-medium text-white shadow-sm shadow-brand-600/25 transition-colors hover:bg-brand-700 focus-visible:ring-2 focus-visible:ring-brand-500/50 focus-visible:ring-offset-2 focus-visible:ring-offset-background focus-visible:outline-none disabled:opacity-60"
         >
-          {submitting ? "发送中…" : "发送重置链接"}
+          {submitting ? t("auth.forgot.submitting") : t("auth.forgot.submit")}
         </button>
       </form>
 
       <p className="mt-6 text-center text-sm text-muted-foreground">
-        想起来了？{" "}
+        {t("auth.forgot.rememberedPassword")}{" "}
         <Link
           href="/login"
           className="font-medium text-brand-600 hover:text-brand-700 dark:text-brand-400"
         >
-          返回登录
+          {t("auth.forgot.backToLogin")}
         </Link>
       </p>
     </AuthShell>

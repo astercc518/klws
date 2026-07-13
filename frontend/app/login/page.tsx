@@ -9,20 +9,23 @@ import { login, ApiError } from "@/lib/api";
 import { Input } from "@/components/ui/input";
 import { AuthShell } from "@/components/auth/auth-shell";
 import { Turnstile } from "@/components/auth/turnstile";
-
-function accountError(v: string): string | undefined {
-  if (!v.trim()) return "请输入账号";
-  if (v.trim().length < 3) return "账号至少 3 个字符";
-  return undefined;
-}
-function passwordError(v: string): string | undefined {
-  if (!v) return "请输入密码";
-  if (v.length < 6) return "密码至少 6 位";
-  return undefined;
-}
+import { useT } from "@/components/locale-provider";
 
 export default function LoginPage() {
+  const t = useT();
   const router = useRouter();
+
+  function accountError(v: string): string | undefined {
+    if (!v.trim()) return t("auth.login.accountRequired");
+    if (v.trim().length < 3) return t("auth.login.accountTooShort");
+    return undefined;
+  }
+  function passwordError(v: string): string | undefined {
+    if (!v) return t("auth.login.passwordRequired");
+    if (v.length < 6) return t("auth.login.passwordTooShort");
+    return undefined;
+  }
+
   const [account, setAccount] = useState("");
   const [password, setPassword] = useState("");
   const [show, setShow] = useState(false);
@@ -42,7 +45,7 @@ export default function LoginPage() {
     const next = {
       account: accountError(account),
       password: passwordError(password),
-      captcha: token ? undefined : "请完成人机验证",
+      captcha: token ? undefined : t("auth.login.captchaRequired"),
     };
     setErrors(next);
     if (next.account || next.password || next.captcha) return;
@@ -54,19 +57,19 @@ export default function LoginPage() {
         role === "admin" ? "/admin" : role === "sales" ? "/sales" : "/dashboard",
       );
     } catch (err) {
-      toast.error("登录失败", {
-        description: err instanceof ApiError ? err.message : "无法连接服务器",
+      toast.error(t("auth.login.failedTitle"), {
+        description: err instanceof ApiError ? err.message : t("auth.login.serverUnreachable"),
       });
       setSubmitting(false);
     }
   }
 
   return (
-    <AuthShell title="欢迎回来" subtitle="登录以访问你的 klws 控制台。">
+    <AuthShell title={t("auth.login.title")} subtitle={t("auth.login.subtitle")}>
       <form onSubmit={handleSubmit} noValidate className="mt-7 space-y-4">
         <div>
           <label htmlFor="account" className="text-sm font-medium">
-            账号
+            {t("auth.login.accountLabel")}
           </label>
           <div className="relative mt-2">
             <AtSign className="pointer-events-none absolute top-1/2 left-3 size-4 -translate-y-1/2 text-muted-foreground" />
@@ -79,7 +82,7 @@ export default function LoginPage() {
                 setAccount(v);
                 if (attempted) setErrors((p) => ({ ...p, account: accountError(v) }));
               }}
-              placeholder="邮箱或用户名"
+              placeholder={t("auth.login.accountPlaceholder")}
               autoComplete="username"
               aria-invalid={!!errors.account}
               aria-describedby="account-error"
@@ -94,13 +97,13 @@ export default function LoginPage() {
         <div>
           <div className="flex items-center justify-between">
             <label htmlFor="password" className="text-sm font-medium">
-              密码
+              {t("auth.login.passwordLabel")}
             </label>
             <Link
               href="/forgot-password"
               className="text-xs text-muted-foreground transition-colors hover:text-foreground"
             >
-              忘记密码？
+              {t("auth.login.forgotPassword")}
             </Link>
           </div>
           <div className="relative mt-2">
@@ -125,7 +128,7 @@ export default function LoginPage() {
             <button
               type="button"
               onClick={() => setShow((v) => !v)}
-              aria-label={show ? "隐藏密码" : "显示密码"}
+              aria-label={show ? t("auth.login.hidePassword") : t("auth.login.showPassword")}
               className="absolute top-1/2 right-2 inline-flex size-7 -translate-y-1/2 items-center justify-center rounded-md text-muted-foreground transition-colors hover:text-foreground"
             >
               {show ? <EyeOff className="size-4" /> : <Eye className="size-4" />}
@@ -135,14 +138,14 @@ export default function LoginPage() {
             id="password-error"
             className="mt-1.5 min-h-4 text-xs text-destructive"
           >
-            {errors.password || (capsOn ? "⚠ 大写锁定已开启" : "")}
+            {errors.password || (capsOn ? t("auth.login.capsOn") : "")}
           </p>
         </div>
 
         <div>
           <Turnstile
-            onVerify={(t) => {
-              setTsToken(t);
+            onVerify={(v) => {
+              setTsToken(v);
               setErrors((p) => ({ ...p, captcha: undefined }));
             }}
             onExpire={() => setTsToken(null)}
@@ -156,17 +159,17 @@ export default function LoginPage() {
           className="inline-flex h-12 w-full items-center justify-center gap-2 rounded-full bg-brand-600 text-sm font-medium text-white shadow-sm shadow-brand-600/25 transition-colors hover:bg-brand-700 focus-visible:ring-2 focus-visible:ring-brand-500/50 focus-visible:ring-offset-2 focus-visible:ring-offset-background focus-visible:outline-none disabled:opacity-60"
         >
           {submitting && <LoaderCircle className="size-4 animate-spin" />}
-          {submitting ? "登录中…" : "登录"}
+          {submitting ? t("auth.login.submitting") : t("auth.login.submit")}
         </button>
       </form>
 
       <p className="mt-6 text-center text-sm text-muted-foreground">
-        还没有账号？{" "}
+        {t("auth.login.noAccount")}{" "}
         <Link
           href="/register"
           className="font-medium text-brand-600 hover:text-brand-700 dark:text-brand-400"
         >
-          免费注册
+          {t("auth.login.signUpFree")}
         </Link>
       </p>
     </AuthShell>
