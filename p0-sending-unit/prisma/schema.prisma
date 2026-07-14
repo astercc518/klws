@@ -33,3 +33,15 @@ model TargetNumber {
   status String
   jid    String?
 }
+
+model WarmupProfile {
+  accountId          String  @id
+  lane               String
+  stage              String
+  warmupMessagesSent Int     @default(0)
+  repliesReceived    Int     @default(0)
+  onlineSince        String?
+  maturedAt          String?
+  sentToday          Int     @default(0)
+  sentTodayDate      String?
+}
