@@ -61,6 +61,15 @@
 4. 登出/删除 → 确认路径与幂等。
 全绿后回填 `2026-07-10-evolution-api-migration-design.md` §9、删对应 `TODO(evo-verify)`。**验证结果记 evo-verify runbook 顶部结论表。**
 
+## 6b. 已知实现风险(plan/T3 必须钉死)
+
+**从零接入是系统首个无 jid 创建路径。** worker 的 `SessionFactory` 以 jid 为轴(`AssignNode(...,jid)`/`TenantForJID(jid)`/`UpsertInstance(JID:jid)`),是"已登录账号恢复会话"。P2 创建时无 jid(`account_instances.jid` 允许 NULL,扫码后 webhook `connection.update`→`BindInstanceJIDIfUnset` 回填)。牵出两点必须在 T3 勘查 worker `proxyBinding` 来源后定案:
+
+1. **代理绑定键**:`BindProxy(accountJID, cc)` 以 accountJID 为键记账(proxy_pool 计数 + account_devices)。创建时无 jid → 用 `instance_name` 当键;删除时 `ReleaseProxy(instance_name)` 对称释放。**代理粘性实际落在 Evolution 实例上(`SetProxy` 一次终身),Go 侧键只管池计数/释放**——需确认 worker 恢复路径不会因 jid≠instance_name 而对同一 Evolution 实例二次 `BindProxy(jid)`+`SetProxy` 覆盖粘性。若有此风险,T3 记录并决定:扫码回填时迁移绑定键(instance_name→jid),或统一按 instance_name 记账。
+2. **AssignNode 键**:worker 用 jid,P2 用 instance_name;分片只需一个稳定键,instance_name 满足(PK 唯一),无迁移问题。
+
+T3 先派勘查子任务读全 `SessionFactory`(proxyBinding 来源)+ `redisProxyAllocator.bind`/`releaseBinding` 键语义,再定实现。
+
 ## 7. 分任务(SDD)
 
 - T1 config + console 接线 EvoCluster + `Deps.EvoCluster`(休眠,无端点)
