@@ -21,6 +21,6 @@ export class PrismaMessageRepository implements MessageRepository {
   }
 
   async updateStatus(id: string, status: MessageStatus): Promise<void> {
-    await this.prisma.message.update({ where: { id }, data: { status } });
+    await this.prisma.message.updateMany({ where: { id }, data: { status } });
   }
 }

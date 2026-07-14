@@ -14,4 +14,18 @@ describe('webhook server', () => {
     expect(handleWebhook).toHaveBeenCalledWith(payload);
     await app.close();
   });
+
+  it('returns 200 ok even when handleWebhook throws (idempotent ack)', async () => {
+    const handleWebhook = vi.fn(async () => { throw new Error('illegal transition'); });
+    const app = buildWebhookServer({ handleWebhook } as never);
+    const res = await app.inject({
+      method: 'POST',
+      url: '/hook',
+      payload: { event: 'connection.update', instance: 'x', data: { state: 'open' } },
+    });
+    expect(res.statusCode).toBe(200);
+    expect(JSON.parse(res.body)).toEqual({ ok: true });
+    expect(handleWebhook).toHaveBeenCalledOnce();
+    await app.close();
+  });
 });

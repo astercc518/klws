@@ -1,11 +1,12 @@
 import { PrismaClient } from '@prisma/client';
+import { randomUUID } from 'node:crypto';
 import { loadConfig } from './config.js';
 import { EvolutionClient } from './evolution/evolution-client.js';
 import { PrismaAccountRepository } from './adapters/prisma-account-repository.js';
 import { PrismaMessageRepository } from './adapters/prisma-message-repository.js';
 import { AccountService } from './pool/account-service.js';
 import { buildWebhookServer } from './webhook/webhook-server.js';
-import { randomUUID } from 'node:crypto';
+import type { Proxy } from './domain/account.js';
 
 const cfg = loadConfig(process.env);
 const prisma = new PrismaClient();
@@ -19,10 +20,45 @@ const service = new AccountService({
   ids: { next: () => randomUUID() },
 });
 
-const app = buildWebhookServer(service);
-app.listen({ port: cfg.webhookPort, host: '0.0.0.0' })
-  .then((addr) => console.log(`webhook listening on ${addr}`))
-  .catch((e) => { console.error(e); process.exit(1); });
+async function serve(): Promise<void> {
+  const app = buildWebhookServer(service);
+  const addr = await app.listen({ port: cfg.webhookPort, host: '0.0.0.0' });
+  console.log(`webhook listening on ${addr}`);
+}
 
-// CLI 冒烟：node dist/index.js import <phone> | online <id> <proxyHost> <proxyPort> | send <id> <to> <text>
+// One-shot CLI to drive the lifecycle during E2E (does NOT start the server):
+//   node dist/index.js import <phone>
+//   node dist/index.js online <id> <proxyHost> <proxyPort> [username] [password]
+//   node dist/index.js send <id> <to> <text...>
+//   node dist/index.js serve            (or no args) -> start webhook server
+async function runCli(cmd: string, rest: string[]): Promise<void> {
+  try {
+    if (cmd === 'import') {
+      const phone = rest[0];
+      if (!phone) throw new Error('usage: import <phone>');
+      console.log(JSON.stringify(await service.importAccount(phone)));
+    } else if (cmd === 'online') {
+      const [id, host, port, username, password] = rest;
+      if (!id || !host || !port) throw new Error('usage: online <id> <proxyHost> <proxyPort> [user] [pass]');
+      const proxy: Proxy = { host, port: Number(port), protocol: 'http', username, password };
+      console.log(JSON.stringify(await service.bringOnline(id, proxy)));
+    } else if (cmd === 'send') {
+      const [id, to, ...text] = rest;
+      if (!id || !to || text.length === 0) throw new Error('usage: send <id> <to> <text...>');
+      console.log(JSON.stringify(await service.sendMessage(id, to, text.join(' '))));
+    } else {
+      throw new Error(`unknown command: ${cmd}`);
+    }
+  } finally {
+    await prisma.$disconnect();
+  }
+}
+
+const [cmd, ...rest] = process.argv.slice(2);
+const main = !cmd || cmd === 'serve' ? serve() : runCli(cmd, rest);
+main.catch((e) => {
+  console.error(e);
+  process.exit(1);
+});
+
 export { service };
