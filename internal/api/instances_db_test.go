@@ -497,3 +497,120 @@ func TestInstanceLifecycle_NotFound(t *testing.T) {
 	}
 }
 
+// ---------------------------------------------------------------------------
+// T5: GET /admin/nodes — per-node capacity view
+// ---------------------------------------------------------------------------
+
+// callListNodes invokes handleAdminListNodes directly and decodes the
+// {code,data,message} envelope's data as a []any (the endpoint returns a
+// JSON array, not an object).
+func callListNodes(s *Server) (int, []any) {
+	w := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(w)
+	c.Request = httptest.NewRequest(http.MethodGet, "/admin/nodes", nil)
+	s.handleAdminListNodes(c)
+	var env struct {
+		Data []any `json:"data"`
+	}
+	_ = json.Unmarshal(w.Body.Bytes(), &env)
+	return w.Code, env.Data
+}
+
+// TestListNodes_AggregatesCountsAndComputesPct seeds instances across three
+// nodes, injects a cap via Deps.EvoCapPerNode, and checks the handler
+// aggregates per-node counts (via store.NodeCounts), attaches the shared cap,
+// computes pct = count/cap*100, and returns rows sorted by node name.
+func TestListNodes_AggregatesCountsAndComputesPct(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	ctx := context.Background()
+	s, mgr := newAdminInstanceServer(t)
+	s.deps.EvoCapPerNode = 10
+
+	tid, _ := seedTenantUser(t, ctx, s, "nodes-admin@acme.test")
+	// node-a: 3 instances, node-b: 1, node-c: 2.
+	seedInstance(t, ctx, mgr, "n-a1", "", tid, "node-a", "connected")
+	seedInstance(t, ctx, mgr, "n-a2", "", tid, "node-a", "connected")
+	seedInstance(t, ctx, mgr, "n-a3", "", tid, "node-a", "qr")
+	seedInstance(t, ctx, mgr, "n-b1", "", tid, "node-b", "connected")
+	seedInstance(t, ctx, mgr, "n-c1", "", tid, "node-c", "connected")
+	seedInstance(t, ctx, mgr, "n-c2", "", tid, "node-c", "created")
+
+	code, rows := callListNodes(s)
+	if code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", code)
+	}
+	if len(rows) != 3 {
+		t.Fatalf("rows len = %d, want 3: %v", len(rows), rows)
+	}
+
+	want := []struct {
+		node  string
+		count float64
+		pct   float64
+	}{
+		{"node-a", 3, 30},
+		{"node-b", 1, 10},
+		{"node-c", 2, 20},
+	}
+	for i, w := range want {
+		r := rows[i].(map[string]any)
+		if r["node"] != w.node {
+			t.Errorf("rows[%d].node = %v, want %v (sort order wrong?)", i, r["node"], w.node)
+		}
+		if r["count"].(float64) != w.count {
+			t.Errorf("rows[%d].count = %v, want %v", i, r["count"], w.count)
+		}
+		if r["cap"].(float64) != 10 {
+			t.Errorf("rows[%d].cap = %v, want 10", i, r["cap"])
+		}
+		if r["pct"].(float64) != w.pct {
+			t.Errorf("rows[%d].pct = %v, want %v", i, r["pct"], w.pct)
+		}
+	}
+}
+
+// TestListNodes_ZeroCap_NoPanicPctZero: cap=0 (unconfigured) must not divide
+// by zero — pct is 0, not NaN/Inf/a panic.
+func TestListNodes_ZeroCap_NoPanicPctZero(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	ctx := context.Background()
+	s, mgr := newAdminInstanceServer(t)
+	s.deps.EvoCapPerNode = 0
+
+	tid, _ := seedTenantUser(t, ctx, s, "nodes-admin-zerocap@acme.test")
+	seedInstance(t, ctx, mgr, "n-z1", "", tid, "node-z", "connected")
+
+	code, rows := callListNodes(s)
+	if code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", code)
+	}
+	if len(rows) != 1 {
+		t.Fatalf("rows len = %d, want 1: %v", len(rows), rows)
+	}
+	r := rows[0].(map[string]any)
+	if r["cap"].(float64) != 0 {
+		t.Errorf("cap = %v, want 0", r["cap"])
+	}
+	if r["pct"].(float64) != 0 {
+		t.Errorf("pct = %v, want 0 (cap=0 must not panic/divide by zero)", r["pct"])
+	}
+}
+
+// TestListNodes_Empty: no seeded instances → empty (non-nil) array, not null.
+func TestListNodes_Empty(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	s, _ := newAdminInstanceServer(t)
+	s.deps.EvoCapPerNode = 10
+
+	code, rows := callListNodes(s)
+	if code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", code)
+	}
+	if rows == nil {
+		t.Errorf("rows = nil, want empty non-nil array")
+	}
+	if len(rows) != 0 {
+		t.Errorf("rows len = %d, want 0", len(rows))
+	}
+}
+

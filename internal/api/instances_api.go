@@ -7,7 +7,9 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"math"
 	"net/http"
+	"sort"
 	"strconv"
 	"time"
 
@@ -441,4 +443,54 @@ func (s *Server) handleAdminInstanceDelete(c *gin.Context) {
 		Details:      gin.H{"instance_name": row.InstanceName, "evo_node": row.EvoNode, "proxy_id": row.ProxyID},
 	})
 	ok(c, gin.H{"instance_name": row.InstanceName, "deleted": true})
+}
+
+// ---------------------------------------------------------------------------
+// GET /admin/nodes — per-node Evolution capacity view (read-only, admin god
+// view). Never touches the Evolution cluster or any of the five engines —
+// purely a JSON view over store.NodeCounts (account_instances GROUP BY
+// evo_node) plus the fleet-wide cap already threaded into Deps by T1
+// (Deps.EvoCapPerNode = cfg.EvolutionCapPerNode).
+// ---------------------------------------------------------------------------
+
+// adminNodeRow is the JSON view of one node's capacity: how many instances
+// are pinned to it, the shared per-node cap, and the resulting utilization
+// percentage.
+type adminNodeRow struct {
+	Node  string  `json:"node"`
+	Count int     `json:"count"`
+	Cap   int     `json:"cap"`
+	Pct   float64 `json:"pct"`
+}
+
+// nodePct computes count/cap*100 rounded to one decimal place. cap<=0 (unset
+// or misconfigured) returns 0 rather than dividing by zero — nodering.AssignNode
+// treats cap<=0 the same way (capacity-unlimited-is-not-the-default; an
+// unconfigured cap must never look like 0% headroom via a NaN/Inf render).
+func nodePct(count, capacity int) float64 {
+	if capacity <= 0 {
+		return 0
+	}
+	return math.Round(float64(count)/float64(capacity)*1000) / 10
+}
+
+// handleAdminListNodes: GET /admin/nodes → [{node, count, cap, pct}], sorted
+// by node name for a stable/testable ordering. Read-only: store.NodeCounts is
+// a plain GROUP BY over account_instances (SystemPool, fleet-wide — no tenant
+// scoping, same as the sharding path it also backs in
+// handleAdminCreateInstance).
+func (s *Server) handleAdminListNodes(c *gin.Context) {
+	ctx := c.Request.Context()
+	counts, err := s.deps.Mgr.NodeCounts(ctx)
+	if err != nil {
+		fail(c, http.StatusInternalServerError, "load node counts")
+		return
+	}
+	nodeCap := s.deps.EvoCapPerNode
+	out := make([]adminNodeRow, 0, len(counts))
+	for node, count := range counts {
+		out = append(out, adminNodeRow{Node: node, Count: count, Cap: nodeCap, Pct: nodePct(count, nodeCap)})
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Node < out[j].Node })
+	ok(c, out)
 }
