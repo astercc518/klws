@@ -108,6 +108,9 @@ type Config struct {
 	EvoBreakerThreshold  int
 	EvoBreakerCooloffSec int
 	EvoRetryAttempts     int
+	// Metrics sampler (P3): periodic DB-aggregate → metric_snapshots.
+	MetricsSampleInterval time.Duration // WADIST_METRICS_SAMPLE_INTERVAL default 15m
+	MetricsRetentionDays  int           // WADIST_METRICS_RETENTION_DAYS default 90
 }
 
 // Load reads configuration from the environment. PostgresDSN is required;
@@ -226,6 +229,14 @@ func Load() (*Config, error) {
 	cfg.EvoBreakerThreshold = intEnv("WADIST_EVO_BREAKER_THRESHOLD", 5)
 	cfg.EvoBreakerCooloffSec = intEnv("WADIST_EVO_BREAKER_COOLOFF_SEC", 30)
 	cfg.EvoRetryAttempts = intEnv("WADIST_EVO_RETRY_ATTEMPTS", 4)
+
+	cfg.MetricsSampleInterval = 15 * time.Minute
+	if v := getenv("WADIST_METRICS_SAMPLE_INTERVAL", ""); v != "" {
+		if d, err := time.ParseDuration(v); err == nil && d > 0 {
+			cfg.MetricsSampleInterval = d
+		}
+	}
+	cfg.MetricsRetentionDays = intEnv("WADIST_METRICS_RETENTION_DAYS", 90)
 
 	mk, err := decodeKey32("WADIST_MASTER_KEY")
 	if err != nil {

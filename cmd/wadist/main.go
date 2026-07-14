@@ -518,6 +518,20 @@ func run(ctx context.Context, cfg *config.Config) (*metrics.Server, func(), erro
 		return breaker.Run(lctx)
 	})
 
+	// Metrics sampler (P3): periodic DB-aggregate snapshot → metric_snapshots,
+	// for the risk dashboard/reports console. SystemPool (BYPASSRLS) — same
+	// reasoning as breaker/gov above: campaign_recipients/account_devices have
+	// FORCE ROW LEVEL SECURITY, so a fleet-wide aggregate needs app_system.
+	// Sampling failures are logged only (Sampler.RunLoop never returns a
+	// per-sample error); it only SELECTs existing tables + writes
+	// metric_snapshots, never touches engine business logic.
+	metricsStore := metrics.NewStore(mgr.SystemPool())
+	sampler := metrics.NewSampler(metricsStore, mgr.SystemPool(), cfg.MetricsSampleInterval, cfg.MetricsRetentionDays)
+	sup.Go(func(lctx context.Context) error {
+		return sampler.RunLoop(lctx)
+	})
+	log.Printf("metrics sampler on (interval=%s retentionDays=%d)", cfg.MetricsSampleInterval, cfg.MetricsRetentionDays)
+
 	sup.Go(func(lctx context.Context) error {
 		return orch.RunHeartbeat(lctx, cfg.HeartbeatInterval)
 	})
