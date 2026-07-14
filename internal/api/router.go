@@ -220,6 +220,8 @@ func (s *Server) Router() *gin.Engine {
 		admin.PUT("/resources/devices/:id", s.handleAdminUpdateDevice)
 		admin.DELETE("/resources/devices/:id", s.handleAdminDeleteDevice)
 
+		admin.GET("/instances", s.handleAdminListInstances)
+
 		admin.GET("/settings/risk", s.handleAdminGetRiskConfig)
 		admin.PUT("/settings/risk", s.handleAdminUpdateRiskConfig)
 

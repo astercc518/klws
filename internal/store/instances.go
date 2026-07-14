@@ -4,6 +4,9 @@ package store
 import (
 	"context"
 	"errors"
+	"fmt"
+	"strings"
+	"time"
 
 	"github.com/jackc/pgx/v5"
 )
@@ -89,4 +92,130 @@ func (m *Manager) InstanceForJID(ctx context.Context, jid string) (string, bool,
 		return "", false, err
 	}
 	return name, true, nil
+}
+
+// ---------------------------------------------------------------------------
+// Admin cross-tenant instance list (god view, read-only)
+// ---------------------------------------------------------------------------
+
+// InstanceListRow is one row of the admin cross-tenant instance list,
+// account_instances joined to tenants for the display name. JID and ProxyID
+// are nullable columns (an unpaired instance has no jid yet; a proxy binding
+// is optional).
+type InstanceListRow struct {
+	InstanceName string
+	JID          *string
+	TenantID     int64
+	TenantName   string
+	EvoNode      string
+	ProxyID      *int64
+	State        string
+	UpdatedAt    time.Time
+}
+
+// InstanceFilter is the parsed query for the admin cross-tenant instance list.
+type InstanceFilter struct {
+	State    string
+	Node     string
+	Q        string
+	TenantID int64
+	Limit    int
+	Offset   int
+}
+
+// buildInstanceWhere returns the " WHERE ..." clause (or "") and positional
+// args for account_instances aliased "ai". State/Node/TenantID are exact
+// matches; Q is an ILIKE substring match against instance_name or jid.
+func buildInstanceWhere(f InstanceFilter) (string, []any) {
+	var conds []string
+	var args []any
+	add := func(tmpl string, val any) {
+		args = append(args, val)
+		conds = append(conds, fmt.Sprintf(tmpl, len(args)))
+	}
+	if f.State != "" {
+		add("ai.state = $%d", f.State)
+	}
+	if f.Node != "" {
+		add("ai.evo_node = $%d", f.Node)
+	}
+	if f.TenantID != 0 {
+		add("ai.tenant_id = $%d", f.TenantID)
+	}
+	if f.Q != "" {
+		args = append(args, "%"+f.Q+"%")
+		n := len(args)
+		conds = append(conds, fmt.Sprintf("(ai.instance_name ILIKE $%d OR ai.jid ILIKE $%d)", n, n))
+	}
+	if len(conds) == 0 {
+		return "", args
+	}
+	return " WHERE " + strings.Join(conds, " AND "), args
+}
+
+// ListInstances returns a page of account_instances across ALL tenants (admin
+// god view), joined to tenants for the display name, the total row count
+// matching the filter, and a global (unfiltered) state → count breakdown.
+// Uses the SystemPool (BYPASSRLS): this is a cross-tenant admin read with no
+// tenant request-context, not a tenant-scoped one. Read-only — it never
+// touches account_instances beyond SELECT, and never reaches the Evolution
+// cluster.
+func (m *Manager) ListInstances(ctx context.Context, f InstanceFilter) ([]InstanceListRow, int, map[string]int, error) {
+	pool := m.SystemPool()
+	where, args := buildInstanceWhere(f)
+
+	limit := f.Limit
+	if limit <= 0 {
+		limit = 20
+	} else if limit > 200 {
+		limit = 200
+	}
+	listArgs := append(append([]any{}, args...), limit, f.Offset)
+	list := `
+SELECT ai.instance_name, ai.jid, ai.tenant_id, COALESCE(t.name, ''), ai.evo_node, ai.proxy_id, ai.state, ai.updated_at
+  FROM account_instances ai
+  LEFT JOIN tenants t ON t.id = ai.tenant_id` + where +
+		fmt.Sprintf(" ORDER BY ai.updated_at DESC LIMIT $%d OFFSET $%d", len(args)+1, len(args)+2)
+	rows, err := pool.Query(ctx, list, listArgs...)
+	if err != nil {
+		return nil, 0, nil, fmt.Errorf("list instances: %w", err)
+	}
+	defer rows.Close()
+	out := make([]InstanceListRow, 0)
+	for rows.Next() {
+		var r InstanceListRow
+		if err := rows.Scan(&r.InstanceName, &r.JID, &r.TenantID, &r.TenantName, &r.EvoNode, &r.ProxyID, &r.State, &r.UpdatedAt); err != nil {
+			return nil, 0, nil, fmt.Errorf("scan instance: %w", err)
+		}
+		out = append(out, r)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, 0, nil, fmt.Errorf("iterate instances: %w", err)
+	}
+
+	var total int
+	if err := pool.QueryRow(ctx,
+		`SELECT count(*) FROM account_instances ai`+where, args...).Scan(&total); err != nil {
+		return nil, 0, nil, fmt.Errorf("count instances: %w", err)
+	}
+
+	stats := make(map[string]int)
+	srows, err := pool.Query(ctx, `SELECT state, count(*) FROM account_instances GROUP BY state`)
+	if err != nil {
+		return nil, 0, nil, fmt.Errorf("instance state stats: %w", err)
+	}
+	defer srows.Close()
+	for srows.Next() {
+		var st string
+		var n int
+		if err := srows.Scan(&st, &n); err != nil {
+			return nil, 0, nil, fmt.Errorf("scan instance stats: %w", err)
+		}
+		stats[st] = n
+	}
+	if err := srows.Err(); err != nil {
+		return nil, 0, nil, fmt.Errorf("iterate instance stats: %w", err)
+	}
+
+	return out, total, stats, nil
 }
