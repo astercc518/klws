@@ -422,6 +422,45 @@ func TestInstanceLifecycle_Delete_ReleasesProxyRemovesRowAndAudits(t *testing.T)
 	}
 }
 
+// TestInstanceLifecycle_Delete_Evo404_TreatedAsSuccess: Evolution returning
+// 404 (instance already gone upstream) must NOT 500 — the delete completes,
+// releasing the proxy, removing the row, and auditing, same as the
+// Evolution-succeeded happy path.
+func TestInstanceLifecycle_Delete_Evo404_TreatedAsSuccess(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	ctx := context.Background()
+	fake := &fakeInstanceEvo{failDeleteWith404: true}
+	var proxyID int64
+	s, mgr, pool := newInstanceLifecycleServer(t, fake, func(pool *pgxpool.Pool) {
+		if err := pool.QueryRow(ctx,
+			`INSERT INTO proxy_pool (proxy_url, proxy_type, country_code, max_bindings, current_bindings)
+			 VALUES ('socks5://u:p@h3:1080','socks5','US',1,1) RETURNING id`).Scan(&proxyID); err != nil {
+			t.Fatalf("seed proxy: %v", err)
+		}
+	})
+	tid, _ := seedTenantUser(t, ctx, s, "lifecycle-delete-404@acme.test")
+	if err := mgr.UpsertInstance(ctx, store.InstanceRow{
+		InstanceName: "inst-del3", TenantID: tid, EvoNode: "node-a", ProxyID: proxyID, State: "connected",
+	}); err != nil {
+		t.Fatalf("seed instance with proxy: %v", err)
+	}
+
+	code, data := callInstanceLifecycle(s.handleAdminInstanceDelete, http.MethodDelete, "inst-del3")
+	if code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (Evo 404 treated as success); data=%v", code, data)
+	}
+
+	if instanceRowExists(t, ctx, pool, "inst-del3") {
+		t.Errorf("account_instances row for inst-del3 still exists after delete")
+	}
+	if cur := proxyCurrentBindings(t, ctx, pool, proxyID); cur != 0 {
+		t.Errorf("proxy_pool.current_bindings = %d, want 0 (released)", cur)
+	}
+	if n := auditCount(t, ctx, pool, "instance.delete", "inst-del3"); n != 1 {
+		t.Errorf("instance.delete audit rows = %d, want 1", n)
+	}
+}
+
 // TestInstanceLifecycle_Delete_EvoFails_NoRowRemovedNoProxyReleased: when
 // Evolution's DeleteInstance fails, the endpoint must 500 WITHOUT deleting
 // the account_instances row or releasing the proxy — an Evolution-side

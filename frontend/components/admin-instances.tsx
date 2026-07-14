@@ -187,7 +187,7 @@ export function AdminInstances() {
       header: t("admin.instances.col.number"),
       cell: (r) => (
         <div className="flex items-center gap-2.5">
-          <RowAvatar icon={Smartphone} accent={STATE_ACCENT[r.state]} />
+          <RowAvatar icon={Smartphone} accent={STATE_ACCENT[r.state] ?? "neutral"} />
           <div className="flex flex-col">
             <span className="font-mono text-xs">{r.jid ?? "—"}</span>
             <span className="font-mono text-[10px] text-muted-foreground">{r.instance_name}</span>
@@ -215,7 +215,15 @@ export function AdminInstances() {
     {
       key: "state",
       header: t("admin.instances.col.state"),
-      cell: (r) => <StatusBadge tone={STATE_TONE[r.state]}>{t(STATE_LABEL_KEY[r.state])}</StatusBadge>,
+      cell: (r) => {
+        // r.state comes straight off the webhook and may be a raw Evolution
+        // state (open/close/refused/connecting…) that never got mapped into
+        // our 5 canonical app states — fall back instead of throwing/blank.
+        const labelKey = STATE_LABEL_KEY[r.state];
+        return (
+          <StatusBadge tone={STATE_TONE[r.state] ?? "neutral"}>{labelKey ? t(labelKey) : r.state}</StatusBadge>
+        );
+      },
     },
     {
       key: "updated_at",

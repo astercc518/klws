@@ -413,6 +413,12 @@ func (s *Server) handleAdminInstanceLogout(c *gin.Context) {
 // Evolution call aborts here (500) and leaves the row + proxy binding
 // intact, so a retry is always possible and no Evolution-side instance is
 // ever orphaned (deleted from our routing table while still live upstream).
+//
+// Exception: Evolution returning 404 means the instance is already gone
+// upstream (a prior delete succeeded there but our row survived, or it was
+// cleaned up manually) — that is the terminal state a delete is trying to
+// reach, so it's treated as success and we fall through to release the
+// proxy + remove our row, instead of leaving an un-deletable row forever.
 func (s *Server) handleAdminInstanceDelete(c *gin.Context) {
 	ctx := c.Request.Context()
 	row, ok1 := s.getInstanceRow(c, c.Param("name"))
@@ -424,8 +430,11 @@ func (s *Server) handleAdminInstanceDelete(c *gin.Context) {
 		return
 	}
 	if err := client.DeleteInstance(ctx, row.InstanceName); err != nil {
-		fail(c, http.StatusInternalServerError, "evolution delete instance failed, refusing to remove routing row")
-		return
+		var he *cluster.EvoHTTPError
+		if !(errors.As(err, &he) && he.StatusCode == http.StatusNotFound) {
+			fail(c, http.StatusInternalServerError, "evolution delete instance failed, refusing to remove routing row")
+			return
+		}
 	}
 	if err := s.deps.Mgr.ReleaseInstanceProxyByID(ctx, row.ProxyID); err != nil {
 		fail(c, http.StatusInternalServerError, "release instance proxy")

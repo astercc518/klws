@@ -17,6 +17,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/acme/wadist/internal/audit"
+	"github.com/acme/wadist/internal/cluster"
 	"github.com/acme/wadist/internal/console"
 	wlog "github.com/acme/wadist/internal/log"
 	"github.com/acme/wadist/internal/store"
@@ -52,6 +53,11 @@ type fakeInstanceEvo struct {
 	// Evo-fails-so-don't-touch-the-DB path); deleted is still NOT appended
 	// to on failure, mirroring a real client that didn't complete the call.
 	failDelete bool
+
+	// failDeleteWith404 makes DeleteInstance return a *cluster.EvoHTTPError
+	// with StatusCode 404 (Evolution's "already deleted upstream" response),
+	// exercising the delete endpoint's 404-is-success path.
+	failDeleteWith404 bool
 }
 
 func (f *fakeInstanceEvo) CreateInstance(ctx context.Context, instanceName, webhookURL string) error {
@@ -74,6 +80,9 @@ func (f *fakeInstanceEvo) SetProxy(ctx context.Context, instanceName string, pro
 func (f *fakeInstanceEvo) DeleteInstance(ctx context.Context, instanceName string) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	if f.failDeleteWith404 {
+		return &cluster.EvoHTTPError{StatusCode: http.StatusNotFound, Method: "DELETE", Path: "/instance/delete/" + instanceName, Body: "Not Found"}
+	}
 	if f.failDelete {
 		return errors.New("evolution: deleteInstance boom")
 	}
