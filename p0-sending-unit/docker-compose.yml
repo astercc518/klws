@@ -1,0 +1,18 @@
+services:
+  postgres:
+    image: postgres:16
+    environment:
+      POSTGRES_USER: klws
+      POSTGRES_PASSWORD: klws
+      POSTGRES_DB: klws
+    ports: ["5432:5432"]
+  evolution:
+    image: atendai/evolution-api:v2.1.1
+    depends_on: [postgres]
+    environment:
+      AUTHENTICATION_API_KEY: dev-evolution-key
+      DATABASE_ENABLED: "true"
+      DATABASE_PROVIDER: postgresql
+      DATABASE_CONNECTION_URI: postgresql://klws:klws@postgres:5432/evolution
+      WEBHOOK_GLOBAL_ENABLED: "false"
+    ports: ["8080:8080"]
