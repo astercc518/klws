@@ -34,19 +34,21 @@ export class AccountService {
 
   async bringOnline(accountId: string, proxy: Proxy): Promise<{ pairingCode: string | null }> {
     const account = await this.require(accountId);
-    const bound: Account = { ...account, proxy, state: transition(account.state, { type: 'BIND_PROXY' }) };
-    await this.deps.accounts.save(bound);
+    // Validate both transitions up front, but do NOT persist until Evolution accepts the
+    // instance — a failed create/connect then leaves the account in its prior state (retryable),
+    // instead of stranding it in PROXY_BOUND with no valid transition back.
+    const proxyBound = transition(account.state, { type: 'BIND_PROXY' });
+    const connecting = transition(proxyBound, { type: 'CONNECT' });
 
     await this.deps.evolution.createInstance({
-      instanceName: bound.instanceName,
-      number: bound.phoneNumber,
+      instanceName: account.instanceName,
+      number: account.phoneNumber,
       proxy,
       webhookUrl: this.deps.webhookUrl,
     });
-    const connectResult = await this.deps.evolution.connect(bound.instanceName);
+    const connectResult = await this.deps.evolution.connect(account.instanceName);
 
-    const connecting: Account = { ...bound, state: transition(bound.state, { type: 'CONNECT' }) };
-    await this.deps.accounts.save(connecting);
+    await this.deps.accounts.save({ ...account, proxy, state: connecting });
     return connectResult;
   }
 

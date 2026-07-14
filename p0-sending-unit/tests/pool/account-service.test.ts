@@ -94,4 +94,29 @@ describe('AccountService', () => {
     expect(saved!.proxy).toBeNull();
     expect(saved!.deadReason).toBe('LOGGED_OUT');
   });
+
+  it('bringOnline leaves account IMPORTED (retryable) when Evolution createInstance fails', async () => {
+    const accounts = new InMemoryAccountRepository();
+    const messages = new InMemoryMessageRepository();
+    const evolution = {
+      createInstance: vi.fn(async () => { throw new Error('evolution down'); }),
+      connect: vi.fn(async () => ({ pairingCode: 'x' })),
+      sendText: vi.fn(async () => ({ providerMessageId: 'x' })),
+    };
+    const svc = new AccountService({
+      accounts, messages, evolution: evolution as never, webhookUrl: 'http://w/hook', ids: makeIds(),
+    });
+    const a = await svc.importAccount('5511999999999');
+    await expect(svc.bringOnline(a.id, proxy)).rejects.toThrow(/evolution down/);
+    const saved = await accounts.findById(a.id);
+    expect(saved!.state).toBe('IMPORTED');
+    expect(saved!.proxy).toBeNull();
+  });
+
+  it('handleWebhook with unknown instanceName is a no-op', async () => {
+    const { svc } = makeService();
+    await expect(
+      svc.handleWebhook({ event: 'connection.update', instance: 'acct-unknown', data: { state: 'open' } }),
+    ).resolves.toBeUndefined();
+  });
 });
