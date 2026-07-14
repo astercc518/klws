@@ -11,6 +11,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/gin-gonic/gin"
@@ -489,5 +490,158 @@ func TestReportsTenantConsumption_RankingAndPagination(t *testing.T) {
 	}
 	if len(envp2.Data.Rows) != 1 || envp2.Data.Total != 3 {
 		t.Errorf("offset paging: rows=%d total=%d", len(envp2.Data.Rows), envp2.Data.Total)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// P3 task-5: GET /admin/reports/trend.csv + GET
+// /admin/reports/tenant-consumption.csv — CSV exports reusing SP4's
+// writeCSV/csvSanitize (csv.go) verbatim, same pattern as
+// TestHandleAdminLedgerExport / TestHandleAdminFinanceBillExport in
+// finance_db_test.go.
+// ---------------------------------------------------------------------------
+
+// TestReportsCSV_TrendHeaderAndRows mirrors TestReportsTrend_DayBucketAggregation
+// but through the .csv endpoint: asserts the "bucket,value" header, one CSV
+// line per day bucket, and that the export is audited as reports.trend_export.
+func TestReportsCSV_TrendHeaderAndRows(t *testing.T) {
+	s, ctx := newFinanceServer(t)
+	seedMetricSnapshot(t, ctx, s, "2026-07-10T01:00:00Z", 10)
+	seedMetricSnapshot(t, ctx, s, "2026-07-10T09:00:00Z", 20)
+	seedMetricSnapshot(t, ctx, s, "2026-07-11T01:00:00Z", 40)
+	seedMetricSnapshot(t, ctx, s, "2026-07-11T09:00:00Z", 60)
+
+	w := doGET(t, s, s.handleAdminReportsTrendCSV,
+		"/admin/reports/trend.csv?metric=accounts_active&bucket=day&from=2026-07-09T00:00:00Z&to=2026-07-12T00:00:00Z")
+	if w.Code != http.StatusOK {
+		t.Fatalf("status %d body %s", w.Code, w.Body.String())
+	}
+	if ct := w.Header().Get("Content-Type"); ct != "text/csv; charset=utf-8" {
+		t.Errorf("content-type %q", ct)
+	}
+	if cd := w.Header().Get("Content-Disposition"); !strings.Contains(cd, "attachment") || !strings.Contains(cd, "trend.csv") {
+		t.Errorf("content-disposition %q", cd)
+	}
+	body := w.Body.String()
+	if !strings.HasPrefix(body, "bucket,value\n") {
+		t.Errorf("bad header: %q", body)
+	}
+	// header + 2 day-bucket rows + trailing newline = 3 \n
+	if lines := strings.Count(body, "\n"); lines != 3 {
+		t.Errorf("want 3 newlines, got %d body=%q", lines, body)
+	}
+	if !strings.Contains(body, ",15\n") || !strings.Contains(body, ",50\n") {
+		t.Errorf("want day averages 15 and 50 in body: %q", body)
+	}
+
+	var n int
+	s.systemPool().QueryRow(ctx, `SELECT count(*) FROM audit_log WHERE action='reports.trend_export'`).Scan(&n)
+	if n != 1 {
+		t.Errorf("want 1 trend_export audit row, got %d", n)
+	}
+}
+
+// TestReportsCSV_TrendBadMetricAndBucket asserts the same handler-layer
+// metric/bucket whitelist as the JSON endpoint (T4's ValidMetric pattern)
+// applies to the CSV endpoint too — bad input never reaches the DB or writes
+// a CSV/audit row.
+func TestReportsCSV_TrendBadMetricAndBucket(t *testing.T) {
+	s, ctx := newFinanceServer(t)
+
+	wm := doGET(t, s, s.handleAdminReportsTrendCSV, "/admin/reports/trend.csv?metric=not_a_metric&bucket=day")
+	if wm.Code != http.StatusBadRequest {
+		t.Fatalf("bad metric: status %d body %s, want 400", wm.Code, wm.Body.String())
+	}
+	wb := doGET(t, s, s.handleAdminReportsTrendCSV, "/admin/reports/trend.csv?metric=accounts_active&bucket=month")
+	if wb.Code != http.StatusBadRequest {
+		t.Fatalf("bad bucket: status %d body %s, want 400", wb.Code, wb.Body.String())
+	}
+
+	var n int
+	s.systemPool().QueryRow(ctx, `SELECT count(*) FROM audit_log WHERE action='reports.trend_export'`).Scan(&n)
+	if n != 0 {
+		t.Errorf("bad requests must not audit, got %d", n)
+	}
+}
+
+// TestReportsCSV_TenantConsumptionHeaderAndRows mirrors
+// TestReportsTenantConsumption_RankingAndPagination through the .csv endpoint:
+// asserts header, descending ranking, full (unpaginated) export, and the
+// reports.consumption_export audit row.
+func TestReportsCSV_TenantConsumptionHeaderAndRows(t *testing.T) {
+	s, ctx := newFinanceServer(t)
+	t1, _ := seedTenantUser(t, ctx, s, "csvrc1@acme.test")
+	t2, _ := seedTenantUser(t, ctx, s, "csvrc2@acme.test")
+
+	seedLedger(t, ctx, s, t1, "settle", -500, 0, 500, 0, "2026-07-05T10:00:00+08:00", "csv-rc-t1")
+	seedLedger(t, ctx, s, t2, "settle", -300, 0, 700, 0, "2026-07-05T11:00:00+08:00", "csv-rc-t2")
+
+	w := doGET(t, s, s.handleAdminReportsTenantConsumptionCSV,
+		"/admin/reports/tenant-consumption.csv?from=2026-07-05&to=2026-07-05")
+	if w.Code != http.StatusOK {
+		t.Fatalf("status %d body %s", w.Code, w.Body.String())
+	}
+	body := w.Body.String()
+	if !strings.HasPrefix(body, "tenant_id,tenant_name,consumption\n") {
+		t.Errorf("bad header: %q", body)
+	}
+	lines := strings.Split(strings.TrimRight(body, "\n"), "\n")
+	if len(lines) != 3 { // header + 2 rows
+		t.Fatalf("want 3 lines (header+2), got %d: %q", len(lines), body)
+	}
+	if !strings.Contains(lines[1], "500") {
+		t.Errorf("row[1] should be the higher-consumption tenant (500): %q", lines[1])
+	}
+
+	var n int
+	s.systemPool().QueryRow(ctx, `SELECT count(*) FROM audit_log WHERE action='reports.consumption_export'`).Scan(&n)
+	if n != 1 {
+		t.Errorf("want 1 consumption_export audit row, got %d", n)
+	}
+}
+
+// TestReportsCSV_TenantConsumptionFormulaInjectionSanitized is the
+// csvSanitize load-bearing test: a tenant whose name starts with a
+// spreadsheet-formula trigger character must come back with a leading
+// apostrophe in the CSV cell, neutralizing Excel/Sheets formula execution on
+// open (see csv.go's csvSanitize doc comment).
+func TestReportsCSV_TenantConsumptionFormulaInjectionSanitized(t *testing.T) {
+	s, ctx := newFinanceServer(t)
+
+	var tid int64
+	if err := s.systemPool().QueryRow(ctx,
+		`INSERT INTO tenants (name, status) VALUES ('=cmd|"/c calc"!A1','active') RETURNING id`).Scan(&tid); err != nil {
+		t.Fatalf("seed tenant: %v", err)
+	}
+	seedLedger(t, ctx, s, tid, "settle", -100, 0, 100, 0, "2026-07-05T10:00:00+08:00", "inj-eq")
+
+	var tid2 int64
+	if err := s.systemPool().QueryRow(ctx,
+		`INSERT INTO tenants (name, status) VALUES ('@SUM(1+1)','active') RETURNING id`).Scan(&tid2); err != nil {
+		t.Fatalf("seed tenant2: %v", err)
+	}
+	seedLedger(t, ctx, s, tid2, "settle", -50, 0, 50, 0, "2026-07-05T10:05:00+08:00", "inj-at")
+
+	w := doGET(t, s, s.handleAdminReportsTenantConsumptionCSV,
+		"/admin/reports/tenant-consumption.csv?from=2026-07-05&to=2026-07-05")
+	if w.Code != http.StatusOK {
+		t.Fatalf("status %d body %s", w.Code, w.Body.String())
+	}
+	body := w.Body.String()
+	// encoding/csv quotes a cell containing embedded quotes (the '=cmd' name
+	// has literal `"` chars), so the sanitized cell shows up as `"'=cmd|...`
+	// rather than bare `,'=cmd|` — assert on the apostrophe-prefixed payload
+	// itself, and that the RAW (un-neutralized) formula prefix never appears.
+	if strings.Contains(body, `"=cmd|`) {
+		t.Errorf("raw formula-triggering name leaked unsanitized (no leading apostrophe) into CSV: %q", body)
+	}
+	if !strings.Contains(body, `'=cmd|`) {
+		t.Errorf("expected leading apostrophe neutralizing '=' name, got: %q", body)
+	}
+	if strings.Contains(body, ",@SUM(") {
+		t.Errorf("raw '@'-prefixed name leaked unsanitized into CSV: %q", body)
+	}
+	if !strings.Contains(body, `,'@SUM(`) {
+		t.Errorf("expected leading apostrophe neutralizing '@' name, got: %q", body)
 	}
 }

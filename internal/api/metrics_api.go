@@ -462,3 +462,109 @@ SELECT count(*) FROM (
 
 	ok(c, gin.H{"rows": out, "total": total})
 }
+
+// ---------------------------------------------------------------------------
+// GET /admin/reports/trend.csv + GET /admin/reports/tenant-consumption.csv —
+// P3 task-5. CSV twins of the two JSON endpoints above: same query logic and
+// handler-layer metric/bucket whitelist, output routed through SP4's shared
+// writeCSV/csvSanitize (internal/api/csv.go — the finance ledger/bill export
+// helper, reused verbatim here rather than re-implemented) so every cell is
+// defended against spreadsheet formula injection, and audited like every
+// other export endpoint (finance.ledger_export, finance.bill_export).
+// ---------------------------------------------------------------------------
+
+// handleAdminReportsTrendCSV: GET
+// /admin/reports/trend.csv?metric=&bucket=hour|day|week&from=&to= — same
+// metric/bucket whitelist + range parsing + metrics.Store.Trend query as
+// handleAdminReportsTrend, streamed as CSV instead of JSON.
+func (s *Server) handleAdminReportsTrendCSV(c *gin.Context) {
+	metric := c.Query("metric")
+	if !metrics.ValidMetric(metric) {
+		fail(c, http.StatusBadRequest, "bad metric")
+		return
+	}
+	bucket := c.DefaultQuery("bucket", "day")
+	if !reportsBucketWhitelist[bucket] {
+		fail(c, http.StatusBadRequest, "bad bucket (want hour|day|week)")
+		return
+	}
+	from, to, err := parseReportTrendRange(c.Query("from"), c.Query("to"))
+	if err != nil {
+		fail(c, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	ctx := c.Request.Context()
+	store := metrics.NewStore(s.systemPool())
+	points, err := store.Trend(ctx, metric, bucket, from, to)
+	if err != nil {
+		// metric + bucket are already whitelisted above, same reasoning as
+		// handleAdminReportsTrend — any error here is a real backend failure.
+		fail(c, http.StatusInternalServerError, "trend query")
+		return
+	}
+
+	out := make([][]string, 0, len(points))
+	for _, p := range points {
+		out = append(out, []string{
+			p.Bucket.Format(time.RFC3339),
+			strconv.FormatFloat(p.Value, 'f', -1, 64),
+		})
+	}
+	s.recordAudit(ctx, auditEvent{
+		ActorID: actorID(c), Action: "reports.trend_export", ResourceType: "report",
+		Details: gin.H{"metric": metric, "bucket": bucket, "rows": len(out), "from": c.Query("from"), "to": c.Query("to")},
+	})
+	writeCSV(c, "trend.csv", []string{"bucket", "value"}, out)
+}
+
+// handleAdminReportsTenantConsumptionCSV: GET
+// /admin/reports/tenant-consumption.csv?from=&to= — same 消耗 query/ranking as
+// handleAdminReportsTenantConsumption but unpaginated (full filtered export,
+// same "no limit/offset" convention as handleAdminLedgerExport), streamed as
+// CSV.
+func (s *Server) handleAdminReportsTenantConsumptionCSV(c *gin.Context) {
+	ctx := c.Request.Context()
+	from, to, err := parseReportTrendRange(c.Query("from"), c.Query("to"))
+	if err != nil {
+		fail(c, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	pool := s.systemPool()
+	rows, err := pool.Query(ctx, `
+SELECT l.tenant_id, COALESCE(t.name, ''),
+       COALESCE(-SUM(`+netExpr+`) FILTER (WHERE l.kind='settle'), 0) AS consumption
+  FROM wallet_ledger l
+  LEFT JOIN tenants t ON t.id = l.tenant_id
+ WHERE l.created_at >= $1 AND l.created_at < $2
+ GROUP BY l.tenant_id, t.name
+ ORDER BY consumption DESC, l.tenant_id`, from, to)
+	if err != nil {
+		fail(c, http.StatusInternalServerError, "tenant consumption export query")
+		return
+	}
+	defer rows.Close()
+	out := [][]string{}
+	for rows.Next() {
+		var tenantID, consumption int64
+		var name string
+		if err := rows.Scan(&tenantID, &name, &consumption); err != nil {
+			fail(c, http.StatusInternalServerError, "scan tenant consumption export")
+			return
+		}
+		out = append(out, []string{
+			strconv.FormatInt(tenantID, 10), name, strconv.FormatInt(consumption, 10),
+		})
+	}
+	if err := rows.Err(); err != nil {
+		fail(c, http.StatusInternalServerError, "iterate tenant consumption export")
+		return
+	}
+
+	s.recordAudit(ctx, auditEvent{
+		ActorID: actorID(c), Action: "reports.consumption_export", ResourceType: "report",
+		Details: gin.H{"rows": len(out), "from": c.Query("from"), "to": c.Query("to")},
+	})
+	writeCSV(c, "tenant-consumption.csv", []string{"tenant_id", "tenant_name", "consumption"}, out)
+}
