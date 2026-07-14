@@ -89,6 +89,9 @@ type instanceEvoAPI interface {
 	CreateInstance(ctx context.Context, instanceName, webhookURL string) error
 	SetProxy(ctx context.Context, instanceName string, proxy *store.ProxyBinding) error
 	DeleteInstance(ctx context.Context, instanceName string) error
+	ConnectInstance(ctx context.Context, instanceName string) (string, error)
+	FetchState(ctx context.Context, instanceName string) (string, error)
+	LogoutInstance(ctx context.Context, instanceName string) error
 }
 
 // *cluster.EvoClient must satisfy instanceEvoAPI so production wiring
@@ -259,4 +262,183 @@ func (s *Server) handleAdminCreateInstance(c *gin.Context) {
 		"proxy_id":      binding.ProxyID,
 		"state":         "created",
 	})
+}
+
+// ---------------------------------------------------------------------------
+// Instance lifecycle: qr / state / reconnect / logout / delete
+// ---------------------------------------------------------------------------
+
+// getInstanceRow looks up account_instances by :name and writes a 404 when
+// absent (or a 500 on a store error), returning ok=false either way so
+// callers can `return` immediately. Shared 404 guard for all five lifecycle
+// endpoints below.
+func (s *Server) getInstanceRow(c *gin.Context, name string) (store.InstanceRow, bool) {
+	row, found, err := s.deps.Mgr.GetInstance(c.Request.Context(), name)
+	if err != nil {
+		fail(c, http.StatusInternalServerError, "load instance")
+		return store.InstanceRow{}, false
+	}
+	if !found {
+		fail(c, http.StatusNotFound, "instance not found")
+		return store.InstanceRow{}, false
+	}
+	return row, true
+}
+
+// evoClientForRow resolves row.EvoNode to an instanceEvoAPI, writing a 503
+// when no client is configured for that node. Shared by all five lifecycle
+// endpoints after the getInstanceRow 404 guard.
+func (s *Server) evoClientForRow(c *gin.Context, row store.InstanceRow) (instanceEvoAPI, bool) {
+	client, found := s.evoClientFor(row.EvoNode)
+	if !found {
+		fail(c, http.StatusServiceUnavailable, "no Evolution client configured for node "+row.EvoNode)
+		return nil, false
+	}
+	return client, true
+}
+
+// handleAdminInstanceQR: GET /admin/instances/:name/qr → {base64}. Read-only
+// (no audit): triggers/re-reads pairing via Evolution's connect endpoint,
+// which itself mutates no wadist-owned state.
+func (s *Server) handleAdminInstanceQR(c *gin.Context) {
+	ctx := c.Request.Context()
+	row, ok1 := s.getInstanceRow(c, c.Param("name"))
+	if !ok1 {
+		return
+	}
+	client, ok2 := s.evoClientForRow(c, row)
+	if !ok2 {
+		return
+	}
+	b64, err := client.ConnectInstance(ctx, row.InstanceName)
+	if err != nil {
+		fail(c, http.StatusBadGateway, "evolution connect instance failed")
+		return
+	}
+	ok(c, gin.H{"base64": b64})
+}
+
+// handleAdminInstanceState: GET /admin/instances/:name/state → {state}.
+// Read-only passthrough of Evolution's live connection state (no audit).
+func (s *Server) handleAdminInstanceState(c *gin.Context) {
+	ctx := c.Request.Context()
+	row, ok1 := s.getInstanceRow(c, c.Param("name"))
+	if !ok1 {
+		return
+	}
+	client, ok2 := s.evoClientForRow(c, row)
+	if !ok2 {
+		return
+	}
+	state, err := client.FetchState(ctx, row.InstanceName)
+	if err != nil {
+		fail(c, http.StatusBadGateway, "evolution fetch state failed")
+		return
+	}
+	ok(c, gin.H{"state": state})
+}
+
+// handleAdminInstanceReconnect: POST /admin/instances/:name/reconnect →
+// {base64}. Re-triggers pairing (same Evolution call as QR) — audited because,
+// unlike the read-only QR fetch, this is an explicit admin action to force a
+// reconnect attempt on a possibly-connected instance.
+func (s *Server) handleAdminInstanceReconnect(c *gin.Context) {
+	ctx := c.Request.Context()
+	row, ok1 := s.getInstanceRow(c, c.Param("name"))
+	if !ok1 {
+		return
+	}
+	client, ok2 := s.evoClientForRow(c, row)
+	if !ok2 {
+		return
+	}
+	b64, err := client.ConnectInstance(ctx, row.InstanceName)
+	if err != nil {
+		fail(c, http.StatusBadGateway, "evolution connect instance failed")
+		return
+	}
+	s.recordAudit(ctx, auditEvent{
+		TenantID:     row.TenantID,
+		ActorID:      actorID(c),
+		Action:       "instance.reconnect",
+		ResourceType: "account_instance",
+		Details:      gin.H{"instance_name": row.InstanceName, "evo_node": row.EvoNode},
+	})
+	ok(c, gin.H{"base64": b64})
+}
+
+// handleAdminInstanceLogout: POST /admin/instances/:name/logout. Ends the WA
+// session via Evolution (terminal), then marks the routing row loggedOut via
+// UpsertInstance (mirrors handleAdminCreateInstance's write path) and audits.
+func (s *Server) handleAdminInstanceLogout(c *gin.Context) {
+	ctx := c.Request.Context()
+	row, ok1 := s.getInstanceRow(c, c.Param("name"))
+	if !ok1 {
+		return
+	}
+	client, ok2 := s.evoClientForRow(c, row)
+	if !ok2 {
+		return
+	}
+	if err := client.LogoutInstance(ctx, row.InstanceName); err != nil {
+		fail(c, http.StatusBadGateway, "evolution logout instance failed")
+		return
+	}
+	if err := s.deps.Mgr.UpsertInstance(ctx, store.InstanceRow{
+		InstanceName: row.InstanceName,
+		JID:          row.JID,
+		TenantID:     row.TenantID,
+		EvoNode:      row.EvoNode,
+		ProxyID:      row.ProxyID,
+		State:        "loggedOut",
+	}); err != nil {
+		fail(c, http.StatusInternalServerError, "persist logged-out state")
+		return
+	}
+	s.recordAudit(ctx, auditEvent{
+		TenantID:     row.TenantID,
+		ActorID:      actorID(c),
+		Action:       "instance.logout",
+		ResourceType: "account_instance",
+		Details:      gin.H{"instance_name": row.InstanceName, "evo_node": row.EvoNode},
+	})
+	ok(c, gin.H{"instance_name": row.InstanceName, "state": "loggedOut"})
+}
+
+// handleAdminInstanceDelete: DELETE /admin/instances/:name. Ordering is
+// load-bearing: Evolution DeleteInstance MUST succeed before the
+// account_instances row is removed or the proxy released — a failed
+// Evolution call aborts here (500) and leaves the row + proxy binding
+// intact, so a retry is always possible and no Evolution-side instance is
+// ever orphaned (deleted from our routing table while still live upstream).
+func (s *Server) handleAdminInstanceDelete(c *gin.Context) {
+	ctx := c.Request.Context()
+	row, ok1 := s.getInstanceRow(c, c.Param("name"))
+	if !ok1 {
+		return
+	}
+	client, ok2 := s.evoClientForRow(c, row)
+	if !ok2 {
+		return
+	}
+	if err := client.DeleteInstance(ctx, row.InstanceName); err != nil {
+		fail(c, http.StatusInternalServerError, "evolution delete instance failed, refusing to remove routing row")
+		return
+	}
+	if err := s.deps.Mgr.ReleaseInstanceProxyByID(ctx, row.ProxyID); err != nil {
+		fail(c, http.StatusInternalServerError, "release instance proxy")
+		return
+	}
+	if err := s.deps.Mgr.DeleteInstanceRow(ctx, row.InstanceName); err != nil {
+		fail(c, http.StatusInternalServerError, "delete instance row")
+		return
+	}
+	s.recordAudit(ctx, auditEvent{
+		TenantID:     row.TenantID,
+		ActorID:      actorID(c),
+		Action:       "instance.delete",
+		ResourceType: "account_instance",
+		Details:      gin.H{"instance_name": row.InstanceName, "evo_node": row.EvoNode, "proxy_id": row.ProxyID},
+	})
+	ok(c, gin.H{"instance_name": row.InstanceName, "deleted": true})
 }

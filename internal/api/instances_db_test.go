@@ -12,6 +12,7 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/acme/wadist/internal/audit"
 	wlog "github.com/acme/wadist/internal/log"
 	"github.com/acme/wadist/internal/store"
 )
@@ -165,6 +166,334 @@ func TestListInstances_pagination(t *testing.T) {
 	filteredStats := call("?state=connected")["stats"].(map[string]any)
 	if filteredStats["qr"].(float64) != 1 || filteredStats["created"].(float64) != 1 {
 		t.Errorf("stats must be unfiltered, got %v", filteredStats)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// T4: qr / state / reconnect / logout / delete lifecycle endpoints
+// ---------------------------------------------------------------------------
+
+// newInstanceLifecycleServer builds a Server wired for the T4 lifecycle
+// endpoints: real store.Manager (Postgres + Redis, same as
+// newAdminInstanceServer) plus an Audit writer (reconnect/logout/delete all
+// write audit_log rows) and a single-node "node-a" topology resolving to
+// fake — mirrors newCreateInstanceServer's wiring but skips Tenants, which
+// these endpoints (acting on an already-seeded account_instances row, not
+// the zero-jid onboarding flow) never touch.
+func newInstanceLifecycleServer(t *testing.T, fake *fakeInstanceEvo, seedProxies func(pool *pgxpool.Pool)) (*Server, *store.Manager, *pgxpool.Pool) {
+	t.Helper()
+	ctx := context.Background()
+	dsn := testDSN(t)
+	pool, err := pgxpool.New(ctx, dsn)
+	if err != nil {
+		t.Fatalf("pool: %v", err)
+	}
+	t.Cleanup(pool.Close)
+	applyAllMigrations(t, ctx, pool)
+
+	if seedProxies != nil {
+		seedProxies(pool)
+	}
+
+	rdb := newTestRedis(t)
+	mgr, err := store.NewManager(ctx, store.Config{DSN: dsn, Redis: rdb, NodeID: "instance-lifecycle-test-node", BadgerDir: t.TempDir()}, wlog.Noop)
+	if err != nil {
+		t.Fatalf("store.NewManager: %v", err)
+	}
+	t.Cleanup(mgr.Close)
+
+	s := &Server{
+		sysPool: pool,
+		deps: Deps{
+			Mgr:   mgr,
+			Audit: audit.NewAuditWriter(pool),
+		},
+		evoNodesFn: func() []string { return []string{"node-a"} },
+		evoForFn: func(node string) (instanceEvoAPI, bool) {
+			if node != "node-a" {
+				return nil, false
+			}
+			return fake, true
+		},
+	}
+	return s, mgr, pool
+}
+
+// callInstanceLifecycle invokes handler directly (bypassing the router) with
+// :name bound as a gin path param, decoding the standard {code,data,message}
+// envelope.
+func callInstanceLifecycle(handler func(*gin.Context), method, name string) (int, map[string]any) {
+	w := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(w)
+	c.Request = httptest.NewRequest(method, "/admin/instances/"+name, nil)
+	c.Params = gin.Params{{Key: "name", Value: name}}
+	handler(c)
+	var env struct {
+		Data map[string]any `json:"data"`
+	}
+	_ = json.Unmarshal(w.Body.Bytes(), &env)
+	return w.Code, env.Data
+}
+
+func instanceState(t *testing.T, ctx context.Context, pool *pgxpool.Pool, name string) string {
+	t.Helper()
+	var state string
+	if err := pool.QueryRow(ctx, `SELECT state FROM account_instances WHERE instance_name=$1`, name).Scan(&state); err != nil {
+		t.Fatalf("query instance state %s: %v", name, err)
+	}
+	return state
+}
+
+func instanceRowExists(t *testing.T, ctx context.Context, pool *pgxpool.Pool, name string) bool {
+	t.Helper()
+	var n int
+	if err := pool.QueryRow(ctx, `SELECT count(*) FROM account_instances WHERE instance_name=$1`, name).Scan(&n); err != nil {
+		t.Fatalf("count instance %s: %v", name, err)
+	}
+	return n > 0
+}
+
+func auditCount(t *testing.T, ctx context.Context, pool *pgxpool.Pool, action, instanceName string) int {
+	t.Helper()
+	var n int
+	if err := pool.QueryRow(ctx,
+		`SELECT count(*) FROM audit_log WHERE action=$1 AND details->>'instance_name'=$2`,
+		action, instanceName).Scan(&n); err != nil {
+		t.Fatalf("query audit_log %s/%s: %v", action, instanceName, err)
+	}
+	return n
+}
+
+func proxyCurrentBindings(t *testing.T, ctx context.Context, pool *pgxpool.Pool, proxyID int64) int {
+	t.Helper()
+	var n int
+	if err := pool.QueryRow(ctx, `SELECT current_bindings FROM proxy_pool WHERE id=$1`, proxyID).Scan(&n); err != nil {
+		t.Fatalf("query proxy_pool %d: %v", proxyID, err)
+	}
+	return n
+}
+
+// TestInstanceLifecycle_QRAndState_Passthrough: both read-only endpoints
+// transparently return whatever the (fake) Evolution client returns, and
+// neither writes an audit_log row.
+func TestInstanceLifecycle_QRAndState_Passthrough(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	ctx := context.Background()
+	fake := &fakeInstanceEvo{connectBase64: "data:image/png;base64,QRDATA", fetchStateVal: "connecting"}
+	s, mgr, pool := newInstanceLifecycleServer(t, fake, nil)
+	tid, _ := seedTenantUser(t, ctx, s, "lifecycle-qrstate@acme.test")
+	seedInstance(t, ctx, mgr, "inst-qr1", "", tid, "node-a", "qr")
+
+	code, data := callInstanceLifecycle(s.handleAdminInstanceQR, http.MethodGet, "inst-qr1")
+	if code != http.StatusOK {
+		t.Fatalf("qr status = %d, want 200; data=%v", code, data)
+	}
+	if data["base64"] != "data:image/png;base64,QRDATA" {
+		t.Errorf("qr base64 = %v", data["base64"])
+	}
+
+	code, data = callInstanceLifecycle(s.handleAdminInstanceState, http.MethodGet, "inst-qr1")
+	if code != http.StatusOK {
+		t.Fatalf("state status = %d, want 200; data=%v", code, data)
+	}
+	if data["state"] != "connecting" {
+		t.Errorf("state = %v, want connecting", data["state"])
+	}
+
+	fake.mu.Lock()
+	if len(fake.connectCalls) != 1 || fake.connectCalls[0] != "inst-qr1" {
+		t.Errorf("ConnectInstance calls = %v", fake.connectCalls)
+	}
+	if len(fake.fetchStateCalls) != 1 || fake.fetchStateCalls[0] != "inst-qr1" {
+		t.Errorf("FetchState calls = %v", fake.fetchStateCalls)
+	}
+	fake.mu.Unlock()
+
+	if n := auditCount(t, ctx, pool, "instance.reconnect", "inst-qr1"); n != 0 {
+		t.Errorf("qr must not audit instance.reconnect, got %d", n)
+	}
+}
+
+// TestInstanceLifecycle_Reconnect_Audits: reconnect re-triggers pairing
+// (ConnectInstance) and writes an instance.reconnect audit row.
+func TestInstanceLifecycle_Reconnect_Audits(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	ctx := context.Background()
+	fake := &fakeInstanceEvo{connectBase64: "QR2"}
+	s, mgr, pool := newInstanceLifecycleServer(t, fake, nil)
+	tid, _ := seedTenantUser(t, ctx, s, "lifecycle-reconnect@acme.test")
+	seedInstance(t, ctx, mgr, "inst-rc1", "", tid, "node-a", "disconnected")
+
+	code, data := callInstanceLifecycle(s.handleAdminInstanceReconnect, http.MethodPost, "inst-rc1")
+	if code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; data=%v", code, data)
+	}
+	if data["base64"] != "QR2" {
+		t.Errorf("base64 = %v, want QR2", data["base64"])
+	}
+
+	fake.mu.Lock()
+	if len(fake.connectCalls) != 1 || fake.connectCalls[0] != "inst-rc1" {
+		t.Errorf("ConnectInstance calls = %v", fake.connectCalls)
+	}
+	fake.mu.Unlock()
+
+	if n := auditCount(t, ctx, pool, "instance.reconnect", "inst-rc1"); n != 1 {
+		t.Errorf("instance.reconnect audit rows = %d, want 1", n)
+	}
+}
+
+// TestInstanceLifecycle_Logout_UpdatesStateAndAudits: logout calls Evolution
+// LogoutInstance, sets state=loggedOut via UpsertInstance, and audits.
+func TestInstanceLifecycle_Logout_UpdatesStateAndAudits(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	ctx := context.Background()
+	fake := &fakeInstanceEvo{}
+	s, mgr, pool := newInstanceLifecycleServer(t, fake, nil)
+	tid, _ := seedTenantUser(t, ctx, s, "lifecycle-logout@acme.test")
+	seedInstance(t, ctx, mgr, "inst-lo1", "110@wa", tid, "node-a", "connected")
+
+	code, data := callInstanceLifecycle(s.handleAdminInstanceLogout, http.MethodPost, "inst-lo1")
+	if code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; data=%v", code, data)
+	}
+	if data["state"] != "loggedOut" {
+		t.Errorf("response state = %v, want loggedOut", data["state"])
+	}
+
+	if got := instanceState(t, ctx, pool, "inst-lo1"); got != "loggedOut" {
+		t.Errorf("db state = %q, want loggedOut", got)
+	}
+
+	fake.mu.Lock()
+	if len(fake.logoutCalls) != 1 || fake.logoutCalls[0] != "inst-lo1" {
+		t.Errorf("LogoutInstance calls = %v", fake.logoutCalls)
+	}
+	fake.mu.Unlock()
+
+	if n := auditCount(t, ctx, pool, "instance.logout", "inst-lo1"); n != 1 {
+		t.Errorf("instance.logout audit rows = %d, want 1", n)
+	}
+}
+
+// TestInstanceLifecycle_Delete_ReleasesProxyRemovesRowAndAudits: happy-path
+// delete releases the bound proxy's pool slot, removes the account_instances
+// row, and audits — after Evolution DeleteInstance succeeded.
+func TestInstanceLifecycle_Delete_ReleasesProxyRemovesRowAndAudits(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	ctx := context.Background()
+	fake := &fakeInstanceEvo{}
+	var proxyID int64
+	s, mgr, pool := newInstanceLifecycleServer(t, fake, func(pool *pgxpool.Pool) {
+		if err := pool.QueryRow(ctx,
+			`INSERT INTO proxy_pool (proxy_url, proxy_type, country_code, max_bindings, current_bindings)
+			 VALUES ('socks5://u:p@h1:1080','socks5','US',1,1) RETURNING id`).Scan(&proxyID); err != nil {
+			t.Fatalf("seed proxy: %v", err)
+		}
+	})
+	tid, _ := seedTenantUser(t, ctx, s, "lifecycle-delete@acme.test")
+	if err := mgr.UpsertInstance(ctx, store.InstanceRow{
+		InstanceName: "inst-del1", TenantID: tid, EvoNode: "node-a", ProxyID: proxyID, State: "connected",
+	}); err != nil {
+		t.Fatalf("seed instance with proxy: %v", err)
+	}
+
+	code, data := callInstanceLifecycle(s.handleAdminInstanceDelete, http.MethodDelete, "inst-del1")
+	if code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; data=%v", code, data)
+	}
+
+	if instanceRowExists(t, ctx, pool, "inst-del1") {
+		t.Errorf("account_instances row for inst-del1 still exists after delete")
+	}
+
+	fake.mu.Lock()
+	if len(fake.deleted) != 1 || fake.deleted[0] != "inst-del1" {
+		t.Errorf("DeleteInstance calls = %v, want [inst-del1]", fake.deleted)
+	}
+	fake.mu.Unlock()
+
+	if cur := proxyCurrentBindings(t, ctx, pool, proxyID); cur != 0 {
+		t.Errorf("proxy_pool.current_bindings = %d, want 0 (released)", cur)
+	}
+
+	if n := auditCount(t, ctx, pool, "instance.delete", "inst-del1"); n != 1 {
+		t.Errorf("instance.delete audit rows = %d, want 1", n)
+	}
+}
+
+// TestInstanceLifecycle_Delete_EvoFails_NoRowRemovedNoProxyReleased: when
+// Evolution's DeleteInstance fails, the endpoint must 500 WITHOUT deleting
+// the account_instances row or releasing the proxy — an Evolution-side
+// instance the DB no longer references would be orphaned otherwise (the
+// exact failure mode the brief's ordering requirement guards against).
+func TestInstanceLifecycle_Delete_EvoFails_NoRowRemovedNoProxyReleased(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	ctx := context.Background()
+	fake := &fakeInstanceEvo{failDelete: true}
+	var proxyID int64
+	s, mgr, pool := newInstanceLifecycleServer(t, fake, func(pool *pgxpool.Pool) {
+		if err := pool.QueryRow(ctx,
+			`INSERT INTO proxy_pool (proxy_url, proxy_type, country_code, max_bindings, current_bindings)
+			 VALUES ('socks5://u:p@h2:1080','socks5','US',1,1) RETURNING id`).Scan(&proxyID); err != nil {
+			t.Fatalf("seed proxy: %v", err)
+		}
+	})
+	tid, _ := seedTenantUser(t, ctx, s, "lifecycle-delete-fail@acme.test")
+	if err := mgr.UpsertInstance(ctx, store.InstanceRow{
+		InstanceName: "inst-del2", TenantID: tid, EvoNode: "node-a", ProxyID: proxyID, State: "connected",
+	}); err != nil {
+		t.Fatalf("seed instance with proxy: %v", err)
+	}
+
+	code, _ := callInstanceLifecycle(s.handleAdminInstanceDelete, http.MethodDelete, "inst-del2")
+	if code != http.StatusInternalServerError {
+		t.Fatalf("status = %d, want 500", code)
+	}
+
+	if !instanceRowExists(t, ctx, pool, "inst-del2") {
+		t.Errorf("account_instances row for inst-del2 was removed despite Evolution failure")
+	}
+	if cur := proxyCurrentBindings(t, ctx, pool, proxyID); cur != 1 {
+		t.Errorf("proxy_pool.current_bindings = %d, want 1 (not released)", cur)
+	}
+	if n := auditCount(t, ctx, pool, "instance.delete", "inst-del2"); n != 0 {
+		t.Errorf("instance.delete audit rows = %d, want 0 (delete never committed)", n)
+	}
+}
+
+// TestInstanceLifecycle_NotFound: all five endpoints 404 on an unknown
+// instance_name — none of them may reach the (fake) Evolution client.
+func TestInstanceLifecycle_NotFound(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	fake := &fakeInstanceEvo{}
+	s, _, _ := newInstanceLifecycleServer(t, fake, nil)
+
+	cases := []struct {
+		name    string
+		method  string
+		handler func(*gin.Context)
+	}{
+		{"qr", http.MethodGet, s.handleAdminInstanceQR},
+		{"state", http.MethodGet, s.handleAdminInstanceState},
+		{"reconnect", http.MethodPost, s.handleAdminInstanceReconnect},
+		{"logout", http.MethodPost, s.handleAdminInstanceLogout},
+		{"delete", http.MethodDelete, s.handleAdminInstanceDelete},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			code, _ := callInstanceLifecycle(tc.handler, tc.method, "no-such-instance")
+			if code != http.StatusNotFound {
+				t.Errorf("%s status = %d, want 404", tc.name, code)
+			}
+		})
+	}
+
+	fake.mu.Lock()
+	defer fake.mu.Unlock()
+	if len(fake.connectCalls)+len(fake.fetchStateCalls)+len(fake.logoutCalls)+len(fake.deleted) != 0 {
+		t.Errorf("Evolution must never be reached on 404: connect=%v state=%v logout=%v delete=%v",
+			fake.connectCalls, fake.fetchStateCalls, fake.logoutCalls, fake.deleted)
 	}
 }
 

@@ -23,15 +23,35 @@ import (
 )
 
 // fakeInstanceEvo is a fake instanceEvoAPI: records every call and can be
-// told to fail SetProxy, so handleAdminCreateInstance's rollback path
-// (DeleteInstance + ReleaseInstanceProxy) can be exercised without a real
-// Evolution cluster/HTTP round-trip.
+// told to fail specific methods, so both handleAdminCreateInstance's
+// rollback path and the T4 lifecycle endpoints (qr/state/reconnect/logout/
+// delete) can be exercised without a real Evolution cluster/HTTP round-trip.
 type fakeInstanceEvo struct {
 	mu            sync.Mutex
 	created       []string
 	setProxyCalls []string
 	deleted       []string
 	failSetProxy  bool
+
+	// connectCalls/connectBase64/failConnect back ConnectInstance (used by
+	// both the QR fetch and reconnect endpoints).
+	connectCalls  []string
+	connectBase64 string
+	failConnect   bool
+
+	// fetchStateCalls/fetchStateVal/failFetchState back FetchState.
+	fetchStateCalls []string
+	fetchStateVal   string
+	failFetchState  bool
+
+	// logoutCalls/failLogout back LogoutInstance.
+	logoutCalls []string
+	failLogout  bool
+
+	// failDelete makes DeleteInstance return an error (delete endpoint's
+	// Evo-fails-so-don't-touch-the-DB path); deleted is still NOT appended
+	// to on failure, mirroring a real client that didn't complete the call.
+	failDelete bool
 }
 
 func (f *fakeInstanceEvo) CreateInstance(ctx context.Context, instanceName, webhookURL string) error {
@@ -54,7 +74,40 @@ func (f *fakeInstanceEvo) SetProxy(ctx context.Context, instanceName string, pro
 func (f *fakeInstanceEvo) DeleteInstance(ctx context.Context, instanceName string) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	if f.failDelete {
+		return errors.New("evolution: deleteInstance boom")
+	}
 	f.deleted = append(f.deleted, instanceName)
+	return nil
+}
+
+func (f *fakeInstanceEvo) ConnectInstance(ctx context.Context, instanceName string) (string, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.connectCalls = append(f.connectCalls, instanceName)
+	if f.failConnect {
+		return "", errors.New("evolution: connectInstance boom")
+	}
+	return f.connectBase64, nil
+}
+
+func (f *fakeInstanceEvo) FetchState(ctx context.Context, instanceName string) (string, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.fetchStateCalls = append(f.fetchStateCalls, instanceName)
+	if f.failFetchState {
+		return "", errors.New("evolution: fetchState boom")
+	}
+	return f.fetchStateVal, nil
+}
+
+func (f *fakeInstanceEvo) LogoutInstance(ctx context.Context, instanceName string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.logoutCalls = append(f.logoutCalls, instanceName)
+	if f.failLogout {
+		return errors.New("evolution: logoutInstance boom")
+	}
 	return nil
 }
 

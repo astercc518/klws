@@ -117,6 +117,65 @@ func (m *Manager) SetInstanceState(ctx context.Context, instanceName, state stri
 	return err
 }
 
+// GetInstance looks up one account_instances row by instance_name. ok is
+// false when no such instance exists (callers 404). Uses the SystemPool
+// (BYPASSRLS): this backs the admin god-view lifecycle endpoints
+// (qr/state/reconnect/logout/delete), which have no tenant request-context.
+func (m *Manager) GetInstance(ctx context.Context, instanceName string) (InstanceRow, bool, error) {
+	var row InstanceRow
+	var jid *string
+	var proxyID *int64
+	err := m.SystemPool().QueryRow(ctx,
+		`SELECT instance_name, jid, tenant_id, evo_node, proxy_id, state
+		   FROM account_instances WHERE instance_name=$1`, instanceName).
+		Scan(&row.InstanceName, &jid, &row.TenantID, &row.EvoNode, &proxyID, &row.State)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return InstanceRow{}, false, nil
+		}
+		return InstanceRow{}, false, err
+	}
+	if jid != nil {
+		row.JID = *jid
+	}
+	if proxyID != nil {
+		row.ProxyID = *proxyID
+	}
+	return row, true, nil
+}
+
+// DeleteInstanceRow removes one account_instances row by instance_name.
+// Idempotent (0 rows affected is not an error) — the delete endpoint calls
+// this ONLY after the Evolution DeleteInstance round-trip succeeds, so an
+// Evolution failure never leaves an orphaned Evolution-side instance
+// unreferenced-but-undeleted on our side, nor does a DB failure here leave a
+// deleted-in-Evolution instance still routable.
+func (m *Manager) DeleteInstanceRow(ctx context.Context, instanceName string) error {
+	_, err := m.SystemPool().Exec(ctx, `DELETE FROM account_instances WHERE instance_name=$1`, instanceName)
+	return err
+}
+
+// ReleaseInstanceProxyByID releases proxyID's pool slot on instance teardown.
+// Unlike ReleaseInstanceProxy (called during create-time rollback, when the
+// caller already has the country_code from the just-made ProxyBinding), the
+// delete endpoint only has the account_instances row's proxy_id — so this
+// looks up country_code from proxy_pool first, then delegates. No-op when
+// proxyID is 0 (no proxy was ever bound) or the proxy row is already gone.
+func (m *Manager) ReleaseInstanceProxyByID(ctx context.Context, proxyID int64) error {
+	if proxyID == 0 {
+		return nil
+	}
+	var cc string
+	err := m.bizPool.QueryRow(ctx, `SELECT country_code FROM proxy_pool WHERE id=$1`, proxyID).Scan(&cc)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil
+		}
+		return err
+	}
+	return m.ReleaseInstanceProxy(ctx, proxyID, cc)
+}
+
 // JIDForInstance resolves an Evolution instance_name to its bound WA jid.
 // ok is false when the instance is unknown or has no jid bound yet.
 func (m *Manager) JIDForInstance(ctx context.Context, instanceName string) (string, bool, error) {

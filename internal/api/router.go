@@ -234,6 +234,11 @@ func (s *Server) Router() *gin.Engine {
 
 		admin.GET("/instances", s.handleAdminListInstances)
 		admin.POST("/instances", s.handleAdminCreateInstance)
+		admin.GET("/instances/:name/qr", s.handleAdminInstanceQR)
+		admin.GET("/instances/:name/state", s.handleAdminInstanceState)
+		admin.POST("/instances/:name/reconnect", s.handleAdminInstanceReconnect)
+		admin.POST("/instances/:name/logout", s.handleAdminInstanceLogout)
+		admin.DELETE("/instances/:name", s.handleAdminInstanceDelete)
 
 		admin.GET("/settings/risk", s.handleAdminGetRiskConfig)
 		admin.PUT("/settings/risk", s.handleAdminUpdateRiskConfig)
