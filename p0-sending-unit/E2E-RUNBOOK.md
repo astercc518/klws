@@ -31,3 +31,16 @@
    - 处置：跑一小批先核对回显；若不一致，P0-4 里给匹配加"按 jid 数字前缀兜底"的 fallback。
 5. **批量上限**：`screen-run` 一次性把整批发给检测端点。若 v2 对单请求号码数有上限，大批会失败/截断——真机先小批（如 50）验证端点容量，P0-4 再做分片。
 6. 只把 ON_WHATSAPP 的号喂给发送队列（P0-4 批量投放接入点）——这一步把筛号的保号价值真正兑现。
+
+## 养号（P0-3）真机验证
+
+前置：一批已上线（ONLINE）的号，用于号池内互聊。
+
+1. 入池（选道）：`node dist/index.js warmup-enroll <accountId> STANDARD`（炮灰用 FAST）。号进 WARMING。
+2. 跑养号周期（可挂 cron 反复跑）：`node dist/index.js warmup-cycle 100`
+   - WARMING 且 ONLINE 的号两两配对，各发一条 `oi, tudo bem?` 给搭档；受当日上限守门。
+   - 让搭档号回一句（真机上收到即算 reply；自动计回复 = P0-3 后续接线，暂可人工调 recordReply）。
+3. 评估毕业：`node dist/index.js warmup-promote <accountId>`
+   - 达标（互聊够 + 回复够 + 在线时长够）→ 升 MATURE，返回 `{promoted:true}`。
+4. 只把 MATURE 号喂给冷发（P0-4 接入点）。**关键校准**：养号默认参数（LANE_POLICIES）是拍的合理值；跑一批真号统计"每号从毕业到被封发了多少条 = 真实 N"，据此回调 STANDARD 道的门槛/爬坡。
+5. 自动计回复 & 只发 MATURE 的冷发接线在 P0-3 后续 / P0-4。

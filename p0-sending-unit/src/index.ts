@@ -7,6 +7,8 @@ import { PrismaMessageRepository } from './adapters/prisma-message-repository.js
 import { PrismaTargetNumberRepository } from './adapters/prisma-target-number-repository.js';
 import { AccountService } from './pool/account-service.js';
 import { ScreeningService } from './screening/screening-service.js';
+import { PrismaWarmupProfileRepository } from './adapters/prisma-warmup-profile-repository.js';
+import { WarmupService } from './warmup/warmup-service.js';
 import { buildWebhookServer } from './webhook/webhook-server.js';
 import type { Proxy } from './domain/account.js';
 
@@ -28,6 +30,13 @@ const screening = new ScreeningService({
   ids: { next: () => randomUUID() },
 });
 
+const warmup = new WarmupService({
+  profiles: new PrismaWarmupProfileRepository(prisma),
+  accounts: new PrismaAccountRepository(prisma),
+  evolution,
+  clock: () => new Date().toISOString(),
+});
+
 async function serve(): Promise<void> {
   const app = buildWebhookServer(service, cfg.webhookSecret);
   const addr = await app.listen({ port: cfg.webhookPort, host: '0.0.0.0' });
@@ -40,6 +49,9 @@ async function serve(): Promise<void> {
 //   node dist/index.js send <id> <to> <text...>
 //   node dist/index.js screen-import <num> [num...]
 //   node dist/index.js screen-run <checkerInstanceName> [batchSize]
+//   node dist/index.js warmup-enroll <accountId> <FAST|STANDARD>
+//   node dist/index.js warmup-cycle [batchSize]
+//   node dist/index.js warmup-promote <accountId>
 //   node dist/index.js serve            (or no args) -> start webhook server
 async function runCli(cmd: string, rest: string[]): Promise<void> {
   try {
@@ -64,6 +76,17 @@ async function runCli(cmd: string, rest: string[]): Promise<void> {
       const [checker, batch] = rest;
       if (!checker) throw new Error('usage: screen-run <checkerInstanceName> [batchSize]');
       console.log(JSON.stringify(await screening.runScreening(checker, batch ? Number(batch) : 100)));
+    } else if (cmd === 'warmup-enroll') {
+      const [id, lane] = rest;
+      if (!id || (lane !== 'FAST' && lane !== 'STANDARD')) throw new Error('usage: warmup-enroll <accountId> <FAST|STANDARD>');
+      console.log(JSON.stringify(await warmup.enroll(id, lane)));
+    } else if (cmd === 'warmup-cycle') {
+      const [batch] = rest;
+      console.log(JSON.stringify(await warmup.pairAndWarm(batch ? Number(batch) : 100)));
+    } else if (cmd === 'warmup-promote') {
+      const [id] = rest;
+      if (!id) throw new Error('usage: warmup-promote <accountId>');
+      console.log(JSON.stringify({ promoted: await warmup.evaluateAndPromote(id) }));
     } else {
       throw new Error(`unknown command: ${cmd}`);
     }
