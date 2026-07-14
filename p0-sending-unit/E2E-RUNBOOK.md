@@ -12,3 +12,16 @@
    - 接收号应收到消息；DB 中 Message 由 `PENDING`→`SENT`→`DELIVERED`（→`READ` 若已读）
 6. 封号验证（可选）：在手机端主动登出该设备，应收到 `connection.update state=close 401`，DB 账号变 `DEAD`、proxy 清空、deadReason=LOGGED_OUT
 7. 记录：本轮该号从上线到被封共发出多少条 → 这就是真实 N 值的第一个数据点，回填给 P0-3 养号试验。
+
+## 筛号（P0-2）真机验证
+
+前置：一个已上线的"检测号"（专用于筛号，与主发送号隔离），其 Evolution 实例名记为 <checker>。
+
+1. 导入原始号码（可来自号码库）：
+   `node dist/index.js screen-import 1187654321 +55 11 91234-5678 5511222222222`
+   - 输出 `{imported, invalid, duplicates}`；无效号入库标 INVALID，重复按 e164 去重。
+2. 跑在网检测：
+   `node dist/index.js screen-run <checker> 200`
+   - 输出 `{checked, onWhatsApp, notOnWhatsApp}`；在网号状态变 ON_WHATSAPP 并记录 jid。
+3. 校准点：确认 Evolution v2 的 `/chat/whatsappNumbers/{instance}` 返回字段（number/exists/jid）与客户端映射一致；若字段名不同，改 `evolution-client.ts` 的 checkNumbers 映射即可。
+4. 只把 ON_WHATSAPP 的号喂给发送队列（P0-4 批量投放接入点）——这一步把筛号的保号价值真正兑现。
