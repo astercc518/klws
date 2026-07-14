@@ -36,6 +36,7 @@ import {
 } from "@/components/ui/dialog";
 import { cn } from "@/lib/utils";
 import { useT } from "@/components/locale-provider";
+import { AdminInstanceWizard } from "@/components/admin-instance-wizard";
 
 type InstanceState = "created" | "qr" | "connected" | "disconnected" | "loggedOut";
 
@@ -115,6 +116,7 @@ export function AdminInstances() {
   const [logoutTarget, setLogoutTarget] = useState<InstanceRow | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<InstanceRow | null>(null);
   const [bulkTarget, setBulkTarget] = useState<BulkTarget | null>(null);
+  const [wizardOpen, setWizardOpen] = useState(false);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -322,12 +324,7 @@ export function AdminInstances() {
               className="h-8 w-24 font-mono text-sm"
               aria-label={t("admin.instances.filterByTenantAria")}
             />
-            <Button
-              className="gap-2"
-              onClick={() => {
-                // TODO(T7): open the QR pairing wizard once it lands.
-              }}
-            >
+            <Button className="gap-2" onClick={() => setWizardOpen(true)}>
               <QrCode className="size-4" />
               {t("admin.instances.connectNew")}
             </Button>
@@ -384,6 +381,7 @@ export function AdminInstances() {
         )}
       />
 
+      <AdminInstanceWizard open={wizardOpen} onOpenChange={setWizardOpen} onSuccess={refresh} />
       <LogoutInstanceDialog target={logoutTarget} onClose={() => setLogoutTarget(null)} onDone={refresh} />
       <DeleteInstanceDialog target={deleteTarget} onClose={() => setDeleteTarget(null)} onDone={refresh} />
       <BulkConfirmDialog
