@@ -54,7 +54,7 @@ CREATE INDEX ix_metric_snapshots_captured ON metric_snapshots (captured_at DESC)
 
 ### 5.1 采样器(internal/metrics/sampler.go)
 - `Sampler{pool, interval, retention}`;`RunLoop(ctx)`:每 interval 采样一次(DB 聚合)→ `INSERT metric_snapshots` → 清理过期。
-- 采样查询复用 `handleAdminStats` 同款聚合 + 近1h 发送/到达/失败/回执延迟(campaign_recipients + receipts 时间戳)。
+- 采样查询复用 `handleAdminStats` 同款聚合 + 近1h 处理/到达/失败/到达延迟(campaign_recipients updated_at/delivered_at/created_at)。
 - 接线 cmd/wadist(worker 进程)`go sampler.RunLoop(ctx)`;门控 `WADIST_METRICS_SAMPLE_INTERVAL`(默认 15min)、`WADIST_METRICS_RETENTION_DAYS`(默认 90)。**采样失败只 log 不 panic**(不影响发送主流程)。
 
 ### 5.2 只读端点(internal/api,新 metrics_api.go)
@@ -69,7 +69,7 @@ CREATE INDEX ix_metric_snapshots_captured ON metric_snapshots (captured_at DESC)
 
 ## 6. 前端
 
-- **风控看板** `/admin/risk-monitor`(nav 策略中心组,`ShieldAlert` 图标):顶部指标卡(封号率/活跃/隔离/到达率/回执延迟/积压)+ 健康分分布图(Tremor,接主题 token)+ 近期趋势小图(读 trend)+ **异常账号明细表**(ProDataTable server,ban/quarantine/低分筛选)。
+- **风控看板** `/admin/risk-monitor`(nav 策略中心组,`ShieldAlert` 图标):顶部指标卡(封号率/活跃/隔离/到达率/到达延迟/积压)+ 健康分分布图(Tremor,接主题 token)+ 近期趋势小图(读 trend)+ **异常账号明细表**(ProDataTable server,ban/quarantine/低分筛选)。
 - **报表中心** `/admin/reports`(nav 系统组或新"报表"组,`BarChart3` 图标):趋势图(指标下拉 + 日/周/月 bucket 切换 + 时间范围)+ 租户消耗排行表 + 两个 CSV 导出按钮。
 - **大盘①趋势接入**:现有大盘的趋势卡从 metric_snapshots 取真实历史(替换占位/实时快照)。
 - 全文案 i18n dict(`admin.risk.*`/`admin.reports.*`,zh/en 成对);图表配色用 P1 已验证 chart token。
