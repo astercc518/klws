@@ -18,6 +18,7 @@ import (
 
 	"github.com/acme/wadist/internal/audit"
 	"github.com/acme/wadist/internal/billing"
+	"github.com/acme/wadist/internal/cluster"
 	"github.com/acme/wadist/internal/console"
 	"github.com/acme/wadist/internal/pricing"
 	"github.com/acme/wadist/internal/receipt"
@@ -48,6 +49,14 @@ type Deps struct {
 	CORSOrigin string // allowed browser origin (default http://localhost:3000)
 
 	EvolutionWebhookSecret string // Authorization token Evolution echoes on webhook callbacks (WADIST_EVOLUTION_WEBHOOK_SECRET); empty = dev, accept unauthenticated
+
+	// EvoCluster is the registry of per-node Evolution HTTP clients (same
+	// construction as cmd/wadist/main.go's worker-side wiring). DORMANT here:
+	// no handler/route reads it yet — it exists so later instance-ops tasks
+	// can reach a node's client via EvoCluster.For(node) without re-wiring
+	// Deps. EvolutionCapPerNode rides along for the same reason.
+	EvoCluster    *cluster.EvoCluster
+	EvoCapPerNode int
 }
 
 // Server holds the injected deps plus a readiness flag (mirrors console.Server

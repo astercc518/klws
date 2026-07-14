@@ -16,6 +16,7 @@ import (
 	"github.com/acme/wadist/internal/api"
 	"github.com/acme/wadist/internal/audit"
 	"github.com/acme/wadist/internal/billing"
+	"github.com/acme/wadist/internal/cluster"
 	"github.com/acme/wadist/internal/config"
 	"github.com/acme/wadist/internal/console"
 	walog "github.com/acme/wadist/internal/log"
@@ -111,6 +112,16 @@ func run(ctx context.Context) (*api.Server, func(), error) {
 	price := pricing.NewRepo(mgr.SystemPool())
 	tenants := console.NewTenantRepo(mgr.SystemPool())
 
+	// EvoCluster: same construction as cmd/wadist/main.go's worker-side
+	// wiring (baseCfg is the SAME config.Load() the worker reads, so
+	// EvolutionNodes/APIKey/WebhookSecret are already populated from env —
+	// no config changes needed here). DORMANT: injected into Deps only, no
+	// route reads it yet (see internal/api/router.go Deps.EvoCluster doc).
+	// NewEvoCluster tolerates an empty node map (returns an empty registry,
+	// never panics) though in practice config.parseNodes always falls back
+	// to a "default" node.
+	evoCluster := cluster.NewEvoCluster(baseCfg.EvolutionNodes, baseCfg.EvolutionAPIKey, baseCfg.EvolutionWebhookSecret)
+
 	// JSON API server — reuses the SAME session/user/tenant/billing/pricing
 	// instances and the store.Manager's RLS machinery; no security logic is
 	// reinvented and no red-line package is touched.
@@ -130,6 +141,8 @@ func run(ctx context.Context) (*api.Server, func(), error) {
 		CORSOrigin:      os.Getenv("WADIST_CORS_ORIGIN"), // empty -> defaults to http://localhost:3000
 
 		EvolutionWebhookSecret: baseCfg.EvolutionWebhookSecret,
+		EvoCluster:             evoCluster,
+		EvoCapPerNode:          baseCfg.EvolutionCapPerNode,
 	})
 	if len(baseCfg.BlindIndexKey) == 0 {
 		log.Printf("api: WADIST_BLIND_INDEX_KEY not set — send endpoints will fail-closed (ErrSendNotConfigured)")
