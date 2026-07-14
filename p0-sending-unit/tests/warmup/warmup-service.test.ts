@@ -1,6 +1,7 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import { WarmupService } from '../../src/warmup/warmup-service.js';
 import { InMemoryWarmupProfileRepository } from '../../src/adapters/in-memory-warmup-profile-repository.js';
+import { InMemoryAccountRepository } from '../../src/adapters/in-memory-account-repository.js';
 import { LANE_POLICIES } from '../../src/warmup/warmup-policy.js';
 
 function fixedClock(iso: string) {
@@ -10,7 +11,7 @@ function fixedClock(iso: string) {
 describe('WarmupService', () => {
   it('enroll creates a WARMING profile with onlineSince and lane', async () => {
     const profiles = new InMemoryWarmupProfileRepository();
-    const svc = new WarmupService({ profiles, clock: fixedClock('2026-07-14T00:00:00.000Z') });
+    const svc = new WarmupService({ profiles, accounts: new InMemoryAccountRepository(), evolution: { sendText: vi.fn() } as never, clock: fixedClock('2026-07-14T00:00:00.000Z') });
     const p = await svc.enroll('a1', 'STANDARD');
     expect(p.stage).toBe('WARMING');
     expect(p.lane).toBe('STANDARD');
@@ -19,7 +20,7 @@ describe('WarmupService', () => {
 
   it('recordReply increments repliesReceived', async () => {
     const profiles = new InMemoryWarmupProfileRepository();
-    const svc = new WarmupService({ profiles, clock: fixedClock('2026-07-14T00:00:00.000Z') });
+    const svc = new WarmupService({ profiles, accounts: new InMemoryAccountRepository(), evolution: { sendText: vi.fn() } as never, clock: fixedClock('2026-07-14T00:00:00.000Z') });
     await svc.enroll('a1', 'STANDARD');
     await svc.recordReply('a1');
     expect((await profiles.findByAccountId('a1'))!.repliesReceived).toBe(1);
@@ -31,7 +32,7 @@ describe('WarmupService', () => {
     // enroll at T0; evaluate at T0 + (minOnlineHours) hours
     const t0 = Date.parse('2026-07-14T00:00:00.000Z');
     let now = t0;
-    const svc = new WarmupService({ profiles, clock: () => new Date(now).toISOString() });
+    const svc = new WarmupService({ profiles, accounts: new InMemoryAccountRepository(), evolution: { sendText: vi.fn() } as never, clock: () => new Date(now).toISOString() });
     const p = await svc.enroll('a1', 'STANDARD');
     // manually set the message/reply signals to exactly the bar
     await profiles.save({ ...p, warmupMessagesSent: std.minWarmupMessages, repliesReceived: std.minReplies });
