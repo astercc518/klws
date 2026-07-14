@@ -244,6 +244,9 @@ func (s *Server) Router() *gin.Engine {
 		admin.GET("/settings/risk", s.handleAdminGetRiskConfig)
 		admin.PUT("/settings/risk", s.handleAdminUpdateRiskConfig)
 
+		admin.GET("/risk/overview", s.handleAdminRiskOverview)
+		admin.GET("/risk/accounts", s.handleAdminRiskAccounts)
+
 		admin.GET("/campaigns", s.handleAdminListCampaigns)
 		admin.GET("/campaigns/:id/recipients", s.handleAdminListCampaignRecipients)
 		admin.GET("/recipients", s.handleAdminListRecipients)
