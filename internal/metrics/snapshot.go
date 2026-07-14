@@ -105,6 +105,16 @@ var metricColumns = map[string]string{
 	"avg_delivery_ms":      "avg_delivery_ms",
 }
 
+// ValidMetric reports whether name is a whitelisted Trend() metric. Callers
+// (e.g. the HTTP layer) use this to reject a bad metric at the boundary with a
+// 400 BEFORE calling Trend, so that any error Trend itself returns can be
+// classified as a real backend failure (500) — the whitelist is authored once
+// here and read through this function to avoid a second, drifting copy.
+func ValidMetric(name string) bool {
+	_, ok := metricColumns[name]
+	return ok
+}
+
 // bucketWhitelist bounds the date_trunc() field argument. date_trunc's field
 // parameter is an ordinary text value (not an identifier), so it is safe to
 // bind normally — but we still validate it against a fixed set to reject

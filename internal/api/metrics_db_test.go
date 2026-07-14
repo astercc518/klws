@@ -371,7 +371,38 @@ func TestReportsTrend_BadMetric(t *testing.T) {
 	}
 }
 
-// TestHandleAdminReportsTrend_BadBucket asserts an unwhitelisted bucket value
+// TestReportsTrend_MetricValidatedAtHandler asserts the metric whitelist is
+// enforced at the HANDLER boundary (via metrics.ValidMetric), not deep in
+// store.Trend: an unknown-but-benign metric name (no injection) returns 400,
+// while a valid metric over an empty range returns 200 with an empty series.
+// This is what lets a genuine DB failure inside Trend be classified 500 —
+// nothing reaches Trend unless metric+bucket already passed the boundary.
+func TestReportsTrend_MetricValidatedAtHandler(t *testing.T) {
+	s, _ := newFinanceServer(t)
+
+	// Unknown but harmless metric → 400 at the handler (would never reach Trend).
+	wbad := doGET(t, s, s.handleAdminReportsTrend, "/admin/reports/trend?metric=not_a_metric&bucket=day")
+	if wbad.Code != http.StatusBadRequest {
+		t.Fatalf("unknown metric: status %d body %s, want 400", wbad.Code, wbad.Body.String())
+	}
+
+	// Valid metric, no seeded rows → 200 with an empty array (not 400/500).
+	wok := doGET(t, s, s.handleAdminReportsTrend, "/admin/reports/trend?metric=accounts_active&bucket=day")
+	if wok.Code != http.StatusOK {
+		t.Fatalf("valid metric: status %d body %s, want 200", wok.Code, wok.Body.String())
+	}
+	var env struct {
+		Data []trendPointView `json:"data"`
+	}
+	if err := json.Unmarshal(wok.Body.Bytes(), &env); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if len(env.Data) != 0 {
+		t.Errorf("empty range should yield 0 points, got %d", len(env.Data))
+	}
+}
+
+// TestReportsTrend_BadBucket asserts an unwhitelisted bucket value
 // surfaces as 400.
 func TestReportsTrend_BadBucket(t *testing.T) {
 	s, _ := newFinanceServer(t)

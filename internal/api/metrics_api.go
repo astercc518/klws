@@ -348,6 +348,19 @@ type trendPointView struct {
 // wrap around the existing SystemPool, not a new connection) rather than
 // wiring it into Deps, since this handler is Trend's only caller today.
 func (s *Server) handleAdminReportsTrend(c *gin.Context) {
+	// Validate BOTH caller-supplied selectors at the boundary (400) so that
+	// any error store.Trend returns below can only be a real backend failure
+	// (pool.Query / rows.Scan / rows.Err) and is classified 500 — mixing the
+	// two would return 400 for a dropped DB connection, leak raw Postgres
+	// error text into a 4xx body, and suppress backend-failure alerting.
+	// metric's whitelist lives in the metrics package (it maps to a SQL column
+	// name); we read it through metrics.ValidMetric rather than keeping a
+	// second, drift-prone copy here.
+	metric := c.Query("metric")
+	if !metrics.ValidMetric(metric) {
+		fail(c, http.StatusBadRequest, "bad metric")
+		return
+	}
 	bucket := c.DefaultQuery("bucket", "day")
 	if !reportsBucketWhitelist[bucket] {
 		fail(c, http.StatusBadRequest, "bad bucket (want hour|day|week)")
@@ -360,11 +373,11 @@ func (s *Server) handleAdminReportsTrend(c *gin.Context) {
 	}
 
 	store := metrics.NewStore(s.systemPool())
-	points, err := store.Trend(c.Request.Context(), c.Query("metric"), bucket, from, to)
+	points, err := store.Trend(c.Request.Context(), metric, bucket, from, to)
 	if err != nil {
-		// Trend only errors on an unwhitelisted metric/bucket (see its doc
-		// comment) — both are caller mistakes, so 400 rather than 500.
-		fail(c, http.StatusBadRequest, err.Error())
+		// metric + bucket are already whitelisted above, so Trend can only
+		// fail on a real backend error (query / scan) here — 500, static msg.
+		fail(c, http.StatusInternalServerError, "trend query")
 		return
 	}
 
