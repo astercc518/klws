@@ -52,6 +52,7 @@ async function serve(): Promise<void> {
 //   node dist/index.js warmup-enroll <accountId> <FAST|STANDARD>
 //   node dist/index.js warmup-cycle [batchSize]
 //   node dist/index.js warmup-promote <accountId>
+//   node dist/index.js warmup-reply <accountId>   (manual reply signal; STANDARD-lane promotion)
 //   node dist/index.js serve            (or no args) -> start webhook server
 async function runCli(cmd: string, rest: string[]): Promise<void> {
   try {
@@ -87,6 +88,13 @@ async function runCli(cmd: string, rest: string[]): Promise<void> {
       const [id] = rest;
       if (!id) throw new Error('usage: warmup-promote <accountId>');
       console.log(JSON.stringify({ promoted: await warmup.evaluateAndPromote(id) }));
+    } else if (cmd === 'warmup-reply') {
+      // Manual reply signal until inbound-message auto-counting (MESSAGES_UPSERT) is wired.
+      // STANDARD lane needs repliesReceived >= minReplies to promote; this is the only path today.
+      const [id] = rest;
+      if (!id) throw new Error('usage: warmup-reply <accountId>');
+      await warmup.recordReply(id);
+      console.log(JSON.stringify({ ok: true }));
     } else {
       throw new Error(`unknown command: ${cmd}`);
     }

@@ -39,7 +39,7 @@
 1. 入池（选道）：`node dist/index.js warmup-enroll <accountId> STANDARD`（炮灰用 FAST）。号进 WARMING。
 2. 跑养号周期（可挂 cron 反复跑）：`node dist/index.js warmup-cycle 100`
    - WARMING 且 ONLINE 的号两两配对，各发一条 `oi, tudo bem?` 给搭档；受当日上限守门。
-   - 让搭档号回一句（真机上收到即算 reply；自动计回复 = P0-3 后续接线，暂可人工调 recordReply）。
+   - 回复信号：webhook 自动计回复(订阅 MESSAGES_UPSERT)是 P0-4 接线,当前**暂用 CLI 手动标**:`node dist/index.js warmup-reply <accountId>`。⚠️ STANDARD 道 minReplies=5,不手动标(或不接自动计)则永远无法毕业;FAST 道 minReplies=0 不受影响。
 3. 评估毕业：`node dist/index.js warmup-promote <accountId>`
    - 达标（互聊够 + 回复够 + 在线时长够）→ 升 MATURE，返回 `{promoted:true}`。
 4. 只把 MATURE 号喂给冷发（P0-4 接入点）。**关键校准**：养号默认参数（LANE_POLICIES）是拍的合理值；跑一批真号统计"每号从毕业到被封发了多少条 = 真实 N"，据此回调 STANDARD 道的门槛/爬坡。
