@@ -4,6 +4,7 @@
 
 1. 起依赖：`docker compose up -d`，`npx prisma migrate deploy`
 2. 起控制服务：`npm run build && npm start`（监听 3000，Evolution 通过 host.docker.internal 回调）
+   - 注意：webhook 现在带密钥令牌。`.env` 里设 `WEBHOOK_SECRET`，Evolution 回调地址会自动带上 `/hook/<secret>`；直接 POST `/hook`（无令牌）会被 401 拒绝。
 3. 导号：调 `service.importAccount('<协议号>')`，记录返回 id
 4. 上线：`service.bringOnline(id, { host, port, protocol:'http', username, password })`
    - 拿到 `pairingCode`，在该协议号的 WhatsApp「已连接的设备 → 连接设备 → 用号码连接」输入配对码

@@ -18,7 +18,7 @@ const service = new AccountService({
   accounts: new PrismaAccountRepository(prisma),
   messages: new PrismaMessageRepository(prisma),
   evolution,
-  webhookUrl: `http://host.docker.internal:${cfg.webhookPort}/hook`,
+  webhookUrl: `http://host.docker.internal:${cfg.webhookPort}/hook/${cfg.webhookSecret}`,
   ids: { next: () => randomUUID() },
 });
 
@@ -29,7 +29,7 @@ const screening = new ScreeningService({
 });
 
 async function serve(): Promise<void> {
-  const app = buildWebhookServer(service);
+  const app = buildWebhookServer(service, cfg.webhookSecret);
   const addr = await app.listen({ port: cfg.webhookPort, host: '0.0.0.0' });
   console.log(`webhook listening on ${addr}`);
 }
