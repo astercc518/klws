@@ -14,6 +14,7 @@ import {
   Coins,
   CalendarCheck,
   QrCode,
+  ShieldAlert,
   type LucideIcon,
 } from "lucide-react";
 
@@ -89,6 +90,7 @@ export const NAV_GROUPS: NavGroup[] = [
     en: "Policy",
     items: [
       { href: "/admin/settings/risk", label: "风控策略", en: "Risk", icon: SlidersHorizontal },
+      { href: "/admin/risk-monitor", label: "风控监控", en: "Risk Monitor", icon: ShieldAlert },
     ],
   },
   {
