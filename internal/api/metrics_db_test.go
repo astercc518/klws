@@ -196,11 +196,11 @@ func TestRiskAccounts_ReasonClassificationAndFiltering(t *testing.T) {
 	s := &Server{sysPool: pool}
 	tid, _ := seedTenantUser(t, ctx, s, "risk-accounts@acme.test")
 
-	seedRiskAccount(t, ctx, s, tid, "healthy@s.whatsapp.net", "active", 100, false)     // not anomalous
-	seedRiskAccount(t, ctx, s, tid, "banned@s.whatsapp.net", "banned", 100, false)      // reason=ban
-	seedRiskAccount(t, ctx, s, tid, "flagged@s.whatsapp.net", "flagged", 100, false)    // reason=ban
-	seedRiskAccount(t, ctx, s, tid, "quarantine@s.whatsapp.net", "active", 100, true)   // reason=quarantine
-	seedRiskAccount(t, ctx, s, tid, "lowhealth@s.whatsapp.net", "active", 20, false)    // reason=low_health
+	seedRiskAccount(t, ctx, s, tid, "healthy@s.whatsapp.net", "active", 100, false)   // not anomalous
+	seedRiskAccount(t, ctx, s, tid, "banned@s.whatsapp.net", "banned", 100, false)    // reason=ban
+	seedRiskAccount(t, ctx, s, tid, "flagged@s.whatsapp.net", "flagged", 100, false)  // reason=ban
+	seedRiskAccount(t, ctx, s, tid, "quarantine@s.whatsapp.net", "active", 100, true) // reason=quarantine
+	seedRiskAccount(t, ctx, s, tid, "lowhealth@s.whatsapp.net", "active", 20, false)  // reason=low_health
 	// priority conflict: banned AND quarantined AND low_health simultaneously
 	// must classify as "ban" (highest priority), not quarantine/low_health.
 	seedRiskAccount(t, ctx, s, tid, "multi@s.whatsapp.net", "banned", 10, true)
@@ -290,5 +290,173 @@ func TestRiskAccounts_ReasonClassificationAndFiltering(t *testing.T) {
 				t.Errorf("health_score = %v, want 100", r["health_score"])
 			}
 		}
+	}
+}
+
+// ---------------------------------------------------------------------------
+// P3 task-4: GET /admin/reports/trend + GET /admin/reports/tenant-consumption
+// ---------------------------------------------------------------------------
+
+// seedMetricSnapshot inserts one metric_snapshots row (tenant_id always NULL,
+// platform-level — same as internal/metrics.Store.Insert) with capturedAt as
+// an RFC3339 string and accountsActive as the only varying gauge (the other
+// NOT NULL int columns are filled with 0/constant so the row satisfies the
+// schema without being relevant to the trend assertions).
+func seedMetricSnapshot(t *testing.T, ctx context.Context, s *Server, capturedAt string, accountsActive int) {
+	t.Helper()
+	_, err := s.systemPool().Exec(ctx, `
+INSERT INTO metric_snapshots
+    (captured_at, tenant_id, accounts_total, accounts_active, accounts_banned,
+     accounts_quarantined, queue_backlog, processed_1h, delivered_1h, failed_1h, avg_delivery_ms)
+VALUES ($1::timestamptz, NULL, 100, $2, 0, 0, 0, 0, 0, 0, NULL)`, capturedAt, accountsActive)
+	if err != nil {
+		t.Fatalf("seed metric snapshot: %v", err)
+	}
+}
+
+// TestHandleAdminReportsTrend_DayBucketAggregation mirrors
+// internal/metrics.TestSnapshotTrendDayBucketAggregation but through the HTTP
+// handler: two Shanghai-local days, two samples each, asserting the averaged
+// day-bucket series comes back in the JSON envelope.
+func TestReportsTrend_DayBucketAggregation(t *testing.T) {
+	s, ctx := newFinanceServer(t)
+	// day1 (Asia/Shanghai 07-10): 09:00 and 17:00 CST -> avg(10,20)=15.
+	seedMetricSnapshot(t, ctx, s, "2026-07-10T01:00:00Z", 10)
+	seedMetricSnapshot(t, ctx, s, "2026-07-10T09:00:00Z", 20)
+	// day2 (07-11): avg(40,60)=50.
+	seedMetricSnapshot(t, ctx, s, "2026-07-11T01:00:00Z", 40)
+	seedMetricSnapshot(t, ctx, s, "2026-07-11T09:00:00Z", 60)
+
+	w := doGET(t, s, s.handleAdminReportsTrend,
+		"/admin/reports/trend?metric=accounts_active&bucket=day&from=2026-07-09T00:00:00Z&to=2026-07-12T00:00:00Z")
+	if w.Code != http.StatusOK {
+		t.Fatalf("status %d body %s", w.Code, w.Body.String())
+	}
+	var env struct {
+		Data []struct {
+			Bucket string  `json:"bucket"`
+			Value  float64 `json:"value"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &env); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if len(env.Data) != 2 {
+		t.Fatalf("expected 2 day buckets, got %d: %+v", len(env.Data), env.Data)
+	}
+	if env.Data[0].Value != 15 {
+		t.Errorf("day1 avg = %v, want 15", env.Data[0].Value)
+	}
+	if env.Data[1].Value != 50 {
+		t.Errorf("day2 avg = %v, want 50", env.Data[1].Value)
+	}
+}
+
+// TestHandleAdminReportsTrend_BadMetric asserts an unwhitelisted metric name
+// (which metrics.Store.Trend rejects internally) surfaces as 400, not 500.
+func TestReportsTrend_BadMetric(t *testing.T) {
+	s, ctx := newFinanceServer(t)
+	seedMetricSnapshot(t, ctx, s, "2026-07-10T01:00:00Z", 10)
+
+	w := doGET(t, s, s.handleAdminReportsTrend,
+		"/admin/reports/trend?metric=accounts_total%3B+DROP+TABLE+metric_snapshots%3B--&bucket=day")
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("status %d body %s, want 400", w.Code, w.Body.String())
+	}
+
+	// table must still exist — the injection attempt must not have executed.
+	var count int
+	if err := s.systemPool().QueryRow(ctx, `SELECT count(*) FROM metric_snapshots`).Scan(&count); err != nil {
+		t.Fatalf("metric_snapshots should still exist: %v", err)
+	}
+}
+
+// TestHandleAdminReportsTrend_BadBucket asserts an unwhitelisted bucket value
+// surfaces as 400.
+func TestReportsTrend_BadBucket(t *testing.T) {
+	s, _ := newFinanceServer(t)
+	w := doGET(t, s, s.handleAdminReportsTrend, "/admin/reports/trend?metric=accounts_active&bucket=month")
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("status %d body %s, want 400", w.Code, w.Body.String())
+	}
+}
+
+// TestHandleAdminReportsTenantConsumption_RankingAndPagination seeds three
+// tenants with distinct settle spend (and one hold row that must NOT count,
+// same exclusion rule as handleAdminFinanceStats' netExpr/settle filter) and
+// asserts descending consumption ranking, limit/offset pagination, and total.
+func TestReportsTenantConsumption_RankingAndPagination(t *testing.T) {
+	s, ctx := newFinanceServer(t)
+	t1, _ := seedTenantUser(t, ctx, s, "rc1@acme.test")
+	t2, _ := seedTenantUser(t, ctx, s, "rc2@acme.test")
+	t3, _ := seedTenantUser(t, ctx, s, "rc3@acme.test")
+
+	seedLedger(t, ctx, s, t1, "settle", -500, 0, 500, 0, "2026-07-05T10:00:00+08:00", "rc-t1")
+	seedLedger(t, ctx, s, t2, "settle", -300, 0, 700, 0, "2026-07-05T11:00:00+08:00", "rc-t2")
+	seedLedger(t, ctx, s, t3, "settle", -800, 0, 200, 0, "2026-07-05T12:00:00+08:00", "rc-t3")
+	// hold nets to zero and must not distort ranking (mirrors netExpr exclusion test in finance_db_test.go).
+	seedLedger(t, ctx, s, t1, "hold", -50, 50, 450, 50, "2026-07-05T12:30:00+08:00", "rc-t1-hold")
+
+	w := doGET(t, s, s.handleAdminReportsTenantConsumption, "/admin/reports/tenant-consumption?from=2026-07-05&to=2026-07-05")
+	if w.Code != http.StatusOK {
+		t.Fatalf("status %d body %s", w.Code, w.Body.String())
+	}
+	var env struct {
+		Data struct {
+			Rows []struct {
+				TenantID    int64  `json:"tenant_id"`
+				TenantName  string `json:"tenant_name"`
+				Consumption int64  `json:"consumption"`
+			} `json:"rows"`
+			Total int `json:"total"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &env); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if env.Data.Total != 3 {
+		t.Fatalf("total = %d, want 3", env.Data.Total)
+	}
+	if len(env.Data.Rows) != 3 {
+		t.Fatalf("rows len = %d, want 3", len(env.Data.Rows))
+	}
+	// descending: t3(800) > t1(500) > t2(300)
+	if env.Data.Rows[0].TenantID != t3 || env.Data.Rows[0].Consumption != 800 {
+		t.Errorf("rows[0] = %+v, want tenant %d consumption 800", env.Data.Rows[0], t3)
+	}
+	if env.Data.Rows[1].TenantID != t1 || env.Data.Rows[1].Consumption != 500 {
+		t.Errorf("rows[1] = %+v, want tenant %d consumption 500", env.Data.Rows[1], t1)
+	}
+	if env.Data.Rows[2].TenantID != t2 || env.Data.Rows[2].Consumption != 300 {
+		t.Errorf("rows[2] = %+v, want tenant %d consumption 300", env.Data.Rows[2], t2)
+	}
+
+	// pagination: limit=2 -> first two rows, total still 3.
+	wp := doGET(t, s, s.handleAdminReportsTenantConsumption, "/admin/reports/tenant-consumption?from=2026-07-05&to=2026-07-05&limit=2")
+	var envp struct {
+		Data struct {
+			Rows  []map[string]any `json:"rows"`
+			Total int              `json:"total"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(wp.Body.Bytes(), &envp); err != nil {
+		t.Fatalf("decode paged: %v", err)
+	}
+	if len(envp.Data.Rows) != 2 || envp.Data.Total != 3 {
+		t.Errorf("limit paging: rows=%d total=%d", len(envp.Data.Rows), envp.Data.Total)
+	}
+
+	wp2 := doGET(t, s, s.handleAdminReportsTenantConsumption, "/admin/reports/tenant-consumption?from=2026-07-05&to=2026-07-05&limit=2&offset=2")
+	var envp2 struct {
+		Data struct {
+			Rows  []map[string]any `json:"rows"`
+			Total int              `json:"total"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(wp2.Body.Bytes(), &envp2); err != nil {
+		t.Fatalf("decode paged2: %v", err)
+	}
+	if len(envp2.Data.Rows) != 1 || envp2.Data.Total != 3 {
+		t.Errorf("offset paging: rows=%d total=%d", len(envp2.Data.Rows), envp2.Data.Total)
 	}
 }

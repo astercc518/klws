@@ -247,6 +247,9 @@ func (s *Server) Router() *gin.Engine {
 		admin.GET("/risk/overview", s.handleAdminRiskOverview)
 		admin.GET("/risk/accounts", s.handleAdminRiskAccounts)
 
+		admin.GET("/reports/trend", s.handleAdminReportsTrend)
+		admin.GET("/reports/tenant-consumption", s.handleAdminReportsTenantConsumption)
+
 		admin.GET("/campaigns", s.handleAdminListCampaigns)
 		admin.GET("/campaigns/:id/recipients", s.handleAdminListCampaignRecipients)
 		admin.GET("/recipients", s.handleAdminListRecipients)

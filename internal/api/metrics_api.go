@@ -13,8 +13,11 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/gin-gonic/gin"
+
+	"github.com/acme/wadist/internal/metrics"
 )
 
 const (
@@ -269,4 +272,180 @@ SELECT jid, tenant_id, tenant_name, ban_status, health_score, quarantined_until,
 	}
 
 	ok(c, gin.H{"rows": out, "total": total, "stats": stats})
+}
+
+// ---------------------------------------------------------------------------
+// GET /admin/reports/trend + GET /admin/reports/tenant-consumption — P3
+// task-4. Both read-only, SystemPool, no red-line engine package touched.
+// ---------------------------------------------------------------------------
+
+// reportsBucketWhitelist bounds the `bucket` query param before it ever
+// reaches metrics.Store.Trend. metric's whitelist lives inside Store (it maps
+// to a SQL column name, so it MUST be validated there — see metrics/
+// snapshot.go's metricColumns doc comment); bucket doesn't select an
+// identifier, so there's no reason to make a DB round trip just to learn
+// "month" isn't hour|day|week — the handler rejects it up front.
+var reportsBucketWhitelist = map[string]bool{"hour": true, "day": true, "week": true}
+
+// parseReportTrendRange parses `from`/`to` for GET /admin/reports/trend and
+// GET /admin/reports/tenant-consumption. Accepts either an RFC3339 timestamp
+// or a bare YYYY-MM-DD date (parsed in Asia/Shanghai, same cnLoc as
+// parseBillRange in finance_query.go); a bare date for `to` is treated as
+// inclusive of that whole day (advanced to the next day's midnight, mirroring
+// parseBillRange's convention) so `to=2026-07-10` includes everything on
+// 07-10. Empty from/to default to the trailing 30 days ending now.
+func parseReportTrendRange(fromStr, toStr string) (from, to time.Time, err error) {
+	parseOne := func(v string) (t time.Time, dateOnly bool, err error) {
+		if t, err = time.Parse(time.RFC3339, v); err == nil {
+			return t, false, nil
+		}
+		t, err = time.ParseInLocation("2006-01-02", v, cnLoc)
+		if err != nil {
+			return time.Time{}, false, fmt.Errorf("bad time %q (want RFC3339 or YYYY-MM-DD)", v)
+		}
+		return t, true, nil
+	}
+
+	if toStr == "" {
+		to = time.Now()
+	} else {
+		t, dateOnly, perr := parseOne(toStr)
+		if perr != nil {
+			return time.Time{}, time.Time{}, perr
+		}
+		if dateOnly {
+			t = t.AddDate(0, 0, 1) // inclusive whole day -> next-day bound
+		}
+		to = t
+	}
+
+	if fromStr == "" {
+		from = to.AddDate(0, 0, -30)
+	} else {
+		t, _, perr := parseOne(fromStr)
+		if perr != nil {
+			return time.Time{}, time.Time{}, perr
+		}
+		from = t
+	}
+
+	if !from.Before(to) {
+		return time.Time{}, time.Time{}, fmt.Errorf("`from` must be before `to`")
+	}
+	return from, to, nil
+}
+
+// trendPointView is the JSON shape of one metrics.TrendPoint.
+type trendPointView struct {
+	Bucket string  `json:"bucket"`
+	Value  float64 `json:"value"`
+}
+
+// handleAdminReportsTrend: GET
+// /admin/reports/trend?metric=&bucket=hour|day|week&from=&to= — reads T1's
+// metric_snapshots time series via metrics.Store.Trend. A fresh Store is
+// constructed per request (metrics.NewStore(s.systemPool()) — a cheap struct
+// wrap around the existing SystemPool, not a new connection) rather than
+// wiring it into Deps, since this handler is Trend's only caller today.
+func (s *Server) handleAdminReportsTrend(c *gin.Context) {
+	bucket := c.DefaultQuery("bucket", "day")
+	if !reportsBucketWhitelist[bucket] {
+		fail(c, http.StatusBadRequest, "bad bucket (want hour|day|week)")
+		return
+	}
+	from, to, err := parseReportTrendRange(c.Query("from"), c.Query("to"))
+	if err != nil {
+		fail(c, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	store := metrics.NewStore(s.systemPool())
+	points, err := store.Trend(c.Request.Context(), c.Query("metric"), bucket, from, to)
+	if err != nil {
+		// Trend only errors on an unwhitelisted metric/bucket (see its doc
+		// comment) — both are caller mistakes, so 400 rather than 500.
+		fail(c, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	out := make([]trendPointView, 0, len(points))
+	for _, p := range points {
+		out = append(out, trendPointView{Bucket: p.Bucket.Format(time.RFC3339), Value: p.Value})
+	}
+	ok(c, out)
+}
+
+// tenantConsumptionRow is one ranked row of GET /admin/reports/tenant-consumption.
+type tenantConsumptionRow struct {
+	TenantID    int64  `json:"tenant_id"`
+	TenantName  string `json:"tenant_name"`
+	Consumption int64  `json:"consumption"`
+}
+
+// handleAdminReportsTenantConsumption: GET
+// /admin/reports/tenant-consumption?from=&to=&limit=&offset= — tenant settle
+// spend ranking, descending, paginated. Reuses SP4's exact 消耗 formula
+// verbatim (netExpr = delta_balance+delta_frozen, defined in finance_stats.go;
+// settle rows are stored negative so -SUM(...) reports a positive spend) so
+// this endpoint and /admin/finance/stats' "top_tenants" can never silently
+// disagree on what "消耗" means — no re-derivation here.
+func (s *Server) handleAdminReportsTenantConsumption(c *gin.Context) {
+	ctx := c.Request.Context()
+	from, to, err := parseReportTrendRange(c.Query("from"), c.Query("to"))
+	if err != nil {
+		fail(c, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	var limit int
+	if n, err := strconv.Atoi(c.Query("limit")); err == nil {
+		limit = n
+	}
+	limit = clampPage(limit, 20, 200)
+	var offset int
+	if n, err := strconv.Atoi(c.Query("offset")); err == nil && n > 0 {
+		offset = n
+	}
+
+	pool := s.systemPool()
+	rows, err := pool.Query(ctx, `
+SELECT l.tenant_id, COALESCE(t.name, ''),
+       COALESCE(-SUM(`+netExpr+`) FILTER (WHERE l.kind='settle'), 0) AS consumption
+  FROM wallet_ledger l
+  LEFT JOIN tenants t ON t.id = l.tenant_id
+ WHERE l.created_at >= $1 AND l.created_at < $2
+ GROUP BY l.tenant_id, t.name
+ ORDER BY consumption DESC, l.tenant_id
+ LIMIT $3 OFFSET $4`, from, to, limit, offset)
+	if err != nil {
+		fail(c, http.StatusInternalServerError, "tenant consumption query")
+		return
+	}
+	defer rows.Close()
+	out := make([]tenantConsumptionRow, 0)
+	for rows.Next() {
+		var r tenantConsumptionRow
+		if err := rows.Scan(&r.TenantID, &r.TenantName, &r.Consumption); err != nil {
+			fail(c, http.StatusInternalServerError, "scan tenant consumption")
+			return
+		}
+		out = append(out, r)
+	}
+	if err := rows.Err(); err != nil {
+		fail(c, http.StatusInternalServerError, "iterate tenant consumption")
+		return
+	}
+
+	var total int
+	if err := pool.QueryRow(ctx, `
+SELECT count(*) FROM (
+  SELECT l.tenant_id FROM wallet_ledger l
+   WHERE l.created_at >= $1 AND l.created_at < $2
+   GROUP BY l.tenant_id
+) sub`, from, to).Scan(&total); err != nil {
+		fail(c, http.StatusInternalServerError, "count tenant consumption")
+		return
+	}
+
+	ok(c, gin.H{"rows": out, "total": total})
 }
