@@ -25,3 +25,11 @@ model Message {
   status            String
   account           Account @relation(fields: [accountId], references: [id])
 }
+
+model TargetNumber {
+  id     String  @id
+  raw    String
+  e164   String? @unique
+  status String
+  jid    String?
+}

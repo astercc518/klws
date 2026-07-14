@@ -12,3 +12,6 @@ export interface CreateInstancePayload {
 
 export interface ConnectResponse { pairingCode?: string | null; code?: string }
 export interface SendTextResponse { key?: { id?: string } }
+
+export interface CheckNumberEntry { number?: string; exists?: boolean; jid?: string | null }
+export type CheckNumbersResponse = CheckNumberEntry[];

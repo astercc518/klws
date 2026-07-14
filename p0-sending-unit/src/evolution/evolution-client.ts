@@ -1,5 +1,5 @@
 import type { Proxy } from '../domain/account.js';
-import type { CreateInstancePayload, ConnectResponse, SendTextResponse } from './evolution-types.js';
+import type { CreateInstancePayload, ConnectResponse, SendTextResponse, CheckNumbersResponse } from './evolution-types.js';
 
 export type FetchFn = typeof fetch;
 
@@ -67,5 +67,16 @@ export class EvolutionClient {
     const id = r.key?.id;
     if (!id) throw new EvolutionApiError(200, 'sendText response missing key.id');
     return { providerMessageId: id };
+  }
+
+  async checkNumbers(p: { instanceName: string; numbers: string[] }): Promise<Array<{ number: string; exists: boolean; jid: string | null }>> {
+    const r = await this.request<CheckNumbersResponse>('POST', `/chat/whatsappNumbers/${p.instanceName}`, {
+      numbers: p.numbers,
+    });
+    return r.map((e) => ({
+      number: e.number ?? '',
+      exists: e.exists === true,
+      jid: e.jid ?? null,
+    }));
   }
 }

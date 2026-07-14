@@ -4,7 +4,9 @@ import { loadConfig } from './config.js';
 import { EvolutionClient } from './evolution/evolution-client.js';
 import { PrismaAccountRepository } from './adapters/prisma-account-repository.js';
 import { PrismaMessageRepository } from './adapters/prisma-message-repository.js';
+import { PrismaTargetNumberRepository } from './adapters/prisma-target-number-repository.js';
 import { AccountService } from './pool/account-service.js';
+import { ScreeningService } from './screening/screening-service.js';
 import { buildWebhookServer } from './webhook/webhook-server.js';
 import type { Proxy } from './domain/account.js';
 
@@ -20,6 +22,12 @@ const service = new AccountService({
   ids: { next: () => randomUUID() },
 });
 
+const screening = new ScreeningService({
+  targets: new PrismaTargetNumberRepository(prisma),
+  evolution,
+  ids: { next: () => randomUUID() },
+});
+
 async function serve(): Promise<void> {
   const app = buildWebhookServer(service);
   const addr = await app.listen({ port: cfg.webhookPort, host: '0.0.0.0' });
@@ -30,6 +38,8 @@ async function serve(): Promise<void> {
 //   node dist/index.js import <phone>
 //   node dist/index.js online <id> <proxyHost> <proxyPort> [username] [password]
 //   node dist/index.js send <id> <to> <text...>
+//   node dist/index.js screen-import <num> [num...]
+//   node dist/index.js screen-run <checkerInstanceName> [batchSize]
 //   node dist/index.js serve            (or no args) -> start webhook server
 async function runCli(cmd: string, rest: string[]): Promise<void> {
   try {
@@ -46,6 +56,14 @@ async function runCli(cmd: string, rest: string[]): Promise<void> {
       const [id, to, ...text] = rest;
       if (!id || !to || text.length === 0) throw new Error('usage: send <id> <to> <text...>');
       console.log(JSON.stringify(await service.sendMessage(id, to, text.join(' '))));
+    } else if (cmd === 'screen-import') {
+      const nums = rest;
+      if (nums.length === 0) throw new Error('usage: screen-import <num> [num...]');
+      console.log(JSON.stringify(await screening.importNumbers(nums)));
+    } else if (cmd === 'screen-run') {
+      const [checker, batch] = rest;
+      if (!checker) throw new Error('usage: screen-run <checkerInstanceName> [batchSize]');
+      console.log(JSON.stringify(await screening.runScreening(checker, batch ? Number(batch) : 100)));
     } else {
       throw new Error(`unknown command: ${cmd}`);
     }
@@ -61,4 +79,4 @@ main.catch((e) => {
   process.exit(1);
 });
 
-export { service };
+export { service, screening };
