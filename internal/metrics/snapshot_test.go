@@ -192,6 +192,50 @@ func TestSnapshotTrendDayBucketAggregation(t *testing.T) {
 	}
 }
 
+func TestSnapshotTrendBucketUsesShanghaiTZ(t *testing.T) {
+	if testing.Short() {
+		t.Skip("integration")
+	}
+	pool, ctx := pgPool(t)
+	applyMigrations(t, ctx, pool)
+
+	store := NewStore(pool)
+
+	// Two samples that share the SAME UTC calendar day (2026-07-10) but fall on
+	// DIFFERENT Asia/Shanghai (+8) local days:
+	//   15:00 UTC → 2026-07-10 23:00 CST → Shanghai day 07-10
+	//   20:00 UTC → 2026-07-11 04:00 CST → Shanghai day 07-11
+	// If the query bucketed by UTC (missing/wrong AT TIME ZONE), both land in a
+	// single 07-10 bucket → len==1, avg==(70+30)/2==50, and this test fails.
+	// Correct Asia/Shanghai bucketing yields two buckets with distinct averages.
+	shanghaiDay10 := time.Date(2026, 7, 10, 15, 0, 0, 0, time.UTC) // CST 07-10 23:00
+	shanghaiDay11 := time.Date(2026, 7, 10, 20, 0, 0, 0, time.UTC) // CST 07-11 04:00
+
+	if err := store.Insert(ctx, Snapshot{CapturedAt: shanghaiDay10, AccountsTotal: 100, AccountsActive: 70}); err != nil {
+		t.Fatalf("seed day10: %v", err)
+	}
+	if err := store.Insert(ctx, Snapshot{CapturedAt: shanghaiDay11, AccountsTotal: 100, AccountsActive: 30}); err != nil {
+		t.Fatalf("seed day11: %v", err)
+	}
+
+	from := time.Date(2026, 7, 9, 0, 0, 0, 0, time.UTC)
+	to := time.Date(2026, 7, 12, 0, 0, 0, 0, time.UTC)
+	points, err := store.Trend(ctx, "accounts_active", "day", from, to)
+	if err != nil {
+		t.Fatalf("Trend: %v", err)
+	}
+	if len(points) != 2 {
+		t.Fatalf("expected 2 Shanghai-local day buckets (UTC bucketing would give 1), got %d: %+v", len(points), points)
+	}
+	// points are ORDER BY bucket ascending: 07-10 then 07-11.
+	if points[0].Value != 70 {
+		t.Fatalf("Shanghai 07-10 bucket: expected avg 70 (the 15:00 UTC sample), got %v", points[0].Value)
+	}
+	if points[1].Value != 30 {
+		t.Fatalf("Shanghai 07-11 bucket: expected avg 30 (the 20:00 UTC sample), got %v", points[1].Value)
+	}
+}
+
 func TestSnapshotTrendRejectsUnknownMetric(t *testing.T) {
 	if testing.Short() {
 		t.Skip("integration")
