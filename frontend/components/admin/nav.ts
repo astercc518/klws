@@ -15,6 +15,7 @@ import {
   CalendarCheck,
   QrCode,
   ShieldAlert,
+  BarChart3,
   type LucideIcon,
 } from "lucide-react";
 
@@ -96,7 +97,10 @@ export const NAV_GROUPS: NavGroup[] = [
   {
     title: "系统审计",
     en: "Audit",
-    items: [{ href: "/admin/audit", label: "风控与审计", en: "Audit", icon: ScrollText }],
+    items: [
+      { href: "/admin/audit", label: "风控与审计", en: "Audit", icon: ScrollText },
+      { href: "/admin/reports", label: "报表中心", en: "Reports", icon: BarChart3 },
+    ],
   },
 ];
 
