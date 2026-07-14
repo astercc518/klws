@@ -13,6 +13,7 @@ import {
   Network,
   Coins,
   CalendarCheck,
+  QrCode,
   type LucideIcon,
 } from "lucide-react";
 
@@ -57,6 +58,7 @@ export const NAV_GROUPS: NavGroup[] = [
     items: [
       { href: "/admin/resources", label: "代理网络池", en: "Proxies", icon: Globe },
       { href: "/admin/devices", label: "节点与设备", en: "Devices", icon: Smartphone },
+      { href: "/admin/instances", label: "实例", en: "Instances", icon: QrCode },
     ],
   },
   {
