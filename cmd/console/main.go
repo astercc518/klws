@@ -143,6 +143,7 @@ func run(ctx context.Context) (*api.Server, func(), error) {
 		EvolutionWebhookSecret: baseCfg.EvolutionWebhookSecret,
 		EvoCluster:             evoCluster,
 		EvoCapPerNode:          baseCfg.EvolutionCapPerNode,
+		EvolutionWebhookURL:    baseCfg.EvolutionWebhookURL,
 	})
 	if len(baseCfg.BlindIndexKey) == 0 {
 		log.Printf("api: WADIST_BLIND_INDEX_KEY not set — send endpoints will fail-closed (ErrSendNotConfigured)")

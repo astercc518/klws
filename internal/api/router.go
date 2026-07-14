@@ -51,12 +51,17 @@ type Deps struct {
 	EvolutionWebhookSecret string // Authorization token Evolution echoes on webhook callbacks (WADIST_EVOLUTION_WEBHOOK_SECRET); empty = dev, accept unauthenticated
 
 	// EvoCluster is the registry of per-node Evolution HTTP clients (same
-	// construction as cmd/wadist/main.go's worker-side wiring). DORMANT here:
-	// no handler/route reads it yet — it exists so later instance-ops tasks
-	// can reach a node's client via EvoCluster.For(node) without re-wiring
-	// Deps. EvolutionCapPerNode rides along for the same reason.
+	// construction as cmd/wadist/main.go's worker-side wiring). Reached via
+	// EvoCluster.For(node) by POST /admin/instances (T3) and the admin
+	// instance list. EvolutionCapPerNode rides along for the same reason.
 	EvoCluster    *cluster.EvoCluster
 	EvoCapPerNode int
+
+	// EvolutionWebhookURL is the callback URL handed to Evolution on
+	// CreateInstance (WADIST_EVOLUTION_WEBHOOK_URL) — same config.Config field
+	// cmd/wadist/main.go's buildEvoSession uses. Wired by T3 (POST
+	// /admin/instances); empty is valid in dev (Evolution just gets no webhook).
+	EvolutionWebhookURL string
 }
 
 // Server holds the injected deps plus a readiness flag (mirrors console.Server
@@ -71,6 +76,13 @@ type Server struct {
 	// endpoint — set ONLY by tests so it can run against a raw pool without a
 	// full store.Manager.
 	sysPool *pgxpool.Pool
+
+	// evoNodesFn / evoForFn, when non-nil, override evoNodes()/evoClientFor()
+	// (internal/api/instances_api.go) — set ONLY by tests so
+	// handleAdminCreateInstance can be exercised against a fake instanceEvoAPI
+	// instead of a real EvoCluster/HTTP round-trip. Mirrors the sysPool pattern.
+	evoNodesFn func() []string
+	evoForFn   func(node string) (instanceEvoAPI, bool)
 }
 
 // NewServer wires the dependencies. Call Router() to get the gin.Engine.
@@ -221,6 +233,7 @@ func (s *Server) Router() *gin.Engine {
 		admin.DELETE("/resources/devices/:id", s.handleAdminDeleteDevice)
 
 		admin.GET("/instances", s.handleAdminListInstances)
+		admin.POST("/instances", s.handleAdminCreateInstance)
 
 		admin.GET("/settings/risk", s.handleAdminGetRiskConfig)
 		admin.PUT("/settings/risk", s.handleAdminUpdateRiskConfig)

@@ -23,15 +23,71 @@ type InstanceRow struct {
 
 // UpsertInstance creates or updates an instance routing row. Idempotent on
 // instance_name. Uses the system (BYPASSRLS) pool: routing has no tenant
-// request-context, tenant_id is a stored column.
+// request-context, tenant_id is a stored column. ProxyID is optional
+// (NULLIF(...,0) so the zero value of an unset field maps to SQL NULL,
+// preserving prior behavior for callers — e.g. cmd/wadist/main.go's jid-sticky
+// path — that never set it).
 func (m *Manager) UpsertInstance(ctx context.Context, in InstanceRow) error {
 	_, err := m.SystemPool().Exec(ctx, `
-INSERT INTO account_instances (instance_name, jid, tenant_id, evo_node, state, updated_at)
-VALUES ($1, NULLIF($2,''), $3, $4, $5, now())
+INSERT INTO account_instances (instance_name, jid, tenant_id, evo_node, proxy_id, state, updated_at)
+VALUES ($1, NULLIF($2,''), $3, $4, NULLIF($5,0), $6, now())
 ON CONFLICT (instance_name) DO UPDATE
-   SET evo_node = EXCLUDED.evo_node, state = EXCLUDED.state, updated_at = now()`,
-		in.InstanceName, in.JID, in.TenantID, in.EvoNode, in.State)
+   SET evo_node = EXCLUDED.evo_node, proxy_id = EXCLUDED.proxy_id, state = EXCLUDED.state, updated_at = now()`,
+		in.InstanceName, in.JID, in.TenantID, in.EvoNode, in.ProxyID, in.State)
 	return err
+}
+
+// BindInstanceProxy allocates one alive proxy with free capacity for
+// countryCode and durably increments its proxy_pool counters — WITHOUT
+// touching account_devices or account_instances.
+//
+// This is deliberately NOT BindProxy (proxy.go): BindProxy's durable write is
+// an `UPDATE account_devices ... WHERE account_jid=$accountJID`, which returns
+// ErrAccountMissing when no row exists yet for that key. At instance-creation
+// time (POST /admin/instances) there is no account_devices row — the account
+// isn't onboarded yet, may never get a real jid this session, and the
+// account_instances row doesn't exist until the caller's follow-up
+// UpsertInstance runs. Keying the allocation off instance_name would hit the
+// exact same ErrAccountMissing wall. So this method only does the pool-side
+// half of what `bind` does (redis pick + proxy_pool counters); the caller
+// persists the returned ProxyID itself via UpsertInstance{ProxyID: ...}.
+//
+// Rollback contract: if anything downstream fails (SetProxy, UpsertInstance),
+// the caller MUST call ReleaseInstanceProxy with the same ProxyID/Country to
+// avoid leaking pool capacity — this method does not register a row an
+// automatic release could key off of.
+func (m *Manager) BindInstanceProxy(ctx context.Context, countryCode string) (*ProxyBinding, error) {
+	nowMs := time.Now().UnixMilli()
+	id, meta, err := m.proxyAlloc.pick(ctx, countryCode, nowMs)
+	if err != nil {
+		return nil, err // ErrNoProxyAvailable on miss
+	}
+	url, ptype, mcc, ok := parseMeta(meta)
+	if !ok {
+		_ = m.proxyAlloc.release(ctx, id, countryCode, nowMs) // return the slot; corrupt meta
+		return nil, fmt.Errorf("proxy meta corrupt for id %d: %q", id, meta)
+	}
+	if _, err := m.bizPool.Exec(ctx,
+		`UPDATE proxy_pool SET current_bindings=current_bindings+1, usage_count=usage_count+1 WHERE id=$1`, id); err != nil {
+		_ = m.proxyAlloc.release(ctx, id, countryCode, nowMs) // PG failed → don't leak capacity in Redis
+		return nil, err
+	}
+	return &ProxyBinding{ProxyID: id, ProxyURL: url, ProxyType: ptype, Country: mcc}, nil
+}
+
+// ReleaseInstanceProxy is BindInstanceProxy's inverse: decrements proxy_id's
+// proxy_pool counter and returns its slot to the Redis hot index. It does NOT
+// touch account_devices or account_instances (mirrors BindInstanceProxy's
+// scope). Used both for fail-closed rollback (SetProxy/UpsertInstance failed
+// after a successful bind) and, later, for instance teardown. Best-effort
+// idempotent on a bad/already-released id: the PG UPDATE is a no-op (0 rows)
+// and releaseLua no-ops on unknown members, so a double-release is safe.
+func (m *Manager) ReleaseInstanceProxy(ctx context.Context, proxyID int64, countryCode string) error {
+	if _, err := m.bizPool.Exec(ctx,
+		`UPDATE proxy_pool SET current_bindings=GREATEST(current_bindings-1,0) WHERE id=$1`, proxyID); err != nil {
+		return err
+	}
+	return m.proxyAlloc.release(ctx, proxyID, countryCode, time.Now().UnixMilli())
 }
 
 // BindInstanceJID back-fills the jid once pairing completes. Idempotent.
