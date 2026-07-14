@@ -3,6 +3,7 @@ export interface Config {
   evolutionApiKey: string;
   databaseUrl: string;
   webhookPort: number;
+  webhookSecret: string;
 }
 
 function required(env: NodeJS.ProcessEnv, key: string): string {
@@ -17,5 +18,6 @@ export function loadConfig(env: NodeJS.ProcessEnv): Config {
     evolutionApiKey: required(env, 'EVOLUTION_API_KEY'),
     databaseUrl: required(env, 'DATABASE_URL'),
     webhookPort: Number(required(env, 'WEBHOOK_PORT')),
+    webhookSecret: required(env, 'WEBHOOK_SECRET'),
   };
 }
