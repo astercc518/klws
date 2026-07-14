@@ -53,8 +53,12 @@ const CONNECTED_STATES = new Set(["connected", "open"]);
 
 // Evolution's QR payload shape is unconfirmed until T8's real-device check —
 // some deployments may already return a full data URI, others a bare base64
-// string. Accept either instead of double-prefixing.
-function toDataUri(raw: string): string {
+// string. Accept either instead of double-prefixing. An empty payload
+// (Evolution returns "" from ConnectInstance when the instance is already
+// connected — see cluster/evolution_client.go) yields null so the render
+// layer skips <img> instead of emitting a broken "data:image/png;base64,".
+function toDataUri(raw: string | undefined | null): string | null {
+  if (!raw) return null;
   return raw.startsWith("data:") ? raw : `data:image/png;base64,${raw}`;
 }
 
@@ -89,6 +93,12 @@ export function AdminInstanceWizard({
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const giveUpRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const closeRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // Re-entrancy guards for the poll interval: inFlightRef prevents a second
+  // GET /state from firing while the previous one is still pending (state
+  // slower than POLL_INTERVAL_MS), and succeededRef makes the connected
+  // branch fire exactly once even if two overlapping ticks both see "open".
+  const inFlightRef = useRef(false);
+  const succeededRef = useRef(false);
 
   const clearTimers = useCallback(() => {
     if (pollRef.current) {
@@ -112,6 +122,8 @@ export function AdminInstanceWizard({
   // the dialog instead.
   const resetState = useCallback(() => {
     clearTimers();
+    succeededRef.current = false;
+    inFlightRef.current = false;
     setStep("form");
     setTenantId("");
     setCountryCode("US");
@@ -142,42 +154,81 @@ export function AdminInstanceWizard({
   // Unmount safety net alongside the close-triggered cleanup above.
   useEffect(() => clearTimers, [clearTimers]);
 
+  // markConnected fires the success side-effects (toast + list refresh +
+  // auto-close) exactly once — succeededRef short-circuits any second caller,
+  // so two overlapping poll ticks that both observe "open" can't double-toast
+  // or double-refresh.
+  const markConnected = useCallback(
+    (name: string) => {
+      if (succeededRef.current) return;
+      succeededRef.current = true;
+      clearTimers();
+      setConnected(true);
+      toast.success(t("admin.instances.wizard.connectedTitle"), { description: name });
+      onSuccess();
+      closeRef.current = setTimeout(() => {
+        resetState();
+        onOpenChange(false);
+      }, 1200);
+    },
+    [clearTimers, onOpenChange, onSuccess, resetState, t],
+  );
+
   const fetchQr = useCallback(
     async (name: string) => {
       setQrLoading(true);
       setQrError(null);
       try {
         const r = await api.get<{ base64: string }>(`/admin/instances/${name}/qr`);
-        setQrImage(toDataUri(r.base64));
+        const uri = toDataUri(r.base64);
+        if (uri) {
+          setQrImage(uri);
+        } else {
+          // Empty base64: Evolution returns "" from ConnectInstance when the
+          // instance is already connected. Don't render a broken <img> —
+          // probe state once; if paired, jump straight to the success state.
+          setQrImage(null);
+          try {
+            const s = await api.get<{ state: string }>(`/admin/instances/${name}/state`);
+            if (CONNECTED_STATES.has(s.state)) {
+              markConnected(name);
+            } else {
+              setQrError(t("admin.instances.wizard.qrFailed"));
+            }
+          } catch {
+            setQrError(t("admin.instances.wizard.qrFailed"));
+          }
+        }
       } catch (e) {
         setQrError(e instanceof ApiError ? e.message : t("admin.instances.wizard.qrFailed"));
       } finally {
         setQrLoading(false);
       }
     },
-    [t],
+    [markConnected, t],
   );
 
   const startPolling = useCallback(
     (name: string) => {
       clearTimers();
+      succeededRef.current = false;
+      inFlightRef.current = false;
       setTimedOut(false);
       pollRef.current = setInterval(async () => {
+        // In-flight guard: if the previous GET /state is slower than the
+        // interval, skip this tick rather than stacking overlapping requests.
+        if (inFlightRef.current || succeededRef.current) return;
+        inFlightRef.current = true;
         try {
           const r = await api.get<{ state: string }>(`/admin/instances/${name}/state`);
           if (CONNECTED_STATES.has(r.state)) {
-            clearTimers();
-            setConnected(true);
-            toast.success(t("admin.instances.wizard.connectedTitle"), { description: name });
-            onSuccess();
-            closeRef.current = setTimeout(() => {
-              resetState();
-              onOpenChange(false);
-            }, 1200);
+            markConnected(name);
           }
         } catch {
           // Transient poll failures are expected mid-pairing (node hiccups) —
           // keep polling until the give-up timeout fires.
+        } finally {
+          inFlightRef.current = false;
         }
       }, POLL_INTERVAL_MS);
       giveUpRef.current = setTimeout(() => {
@@ -185,7 +236,7 @@ export function AdminInstanceWizard({
         setTimedOut(true);
       }, POLL_TIMEOUT_MS);
     },
-    [clearTimers, onOpenChange, onSuccess, resetState, t],
+    [clearTimers, markConnected],
   );
 
   async function handleCreate() {
