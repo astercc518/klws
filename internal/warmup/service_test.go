@@ -63,3 +63,11 @@ func TestServiceDemote(t *testing.T) {
 		t.Fatalf("want WARMING after demote got %s", p2.Stage)
 	}
 }
+
+func TestServiceDemoteMissingIsNoop(t *testing.T) {
+	pool, ctx := pgPool(t)
+	svc := NewService(NewStore(pool), fixedClock(time.Now().UTC()))
+	if err := svc.Demote(ctx, "notpool@s.whatsapp.net", "conn_down"); err != nil {
+		t.Fatalf("demote on missing profile must be no-op, got %v", err)
+	}
+}

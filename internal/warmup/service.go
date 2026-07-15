@@ -78,8 +78,12 @@ func (s *Service) EvaluateAndPromote(ctx context.Context, jid string) (bool, err
 }
 
 // Demote 把 MATURE 号退回 WARMING(封号信号/health 掉)。reason 仅用于日志/审计。
+// 非池内号(无 profile)静默跳过,与 RecordReply 一致。
 func (s *Service) Demote(ctx context.Context, jid, reason string) error {
 	p, err := s.store.Get(ctx, jid)
+	if errors.Is(err, ErrNotFound) {
+		return nil // 非池内号(无 profile)静默跳过,与 RecordReply 一致
+	}
 	if err != nil {
 		return err
 	}
