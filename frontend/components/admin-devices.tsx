@@ -257,7 +257,18 @@ export function AdminDevices() {
     }
     setBulkDeleteKeys(null);
     setSel(new Set());
-    refresh();
+    // Server-paged: if this wiped the whole current page, step back one page so
+    // the admin doesn't land on a now-empty tail page. Changing `page` re-fires
+    // the load effect on its own, so don't also call load() here (double fetch);
+    // just refresh the proxy pool, which the page effect doesn't touch. If rows
+    // remain on this page, stay put and do a full refresh.
+    const removedWholePage = bulkDeleteKeys.length >= (rows?.length ?? 0) && page > 0;
+    if (removedWholePage) {
+      setPage((p) => Math.max(0, p - 1));
+      loadProxies();
+    } else {
+      refresh();
+    }
   }
 
   const columns: Column<Device>[] = [
