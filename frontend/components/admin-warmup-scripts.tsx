@@ -33,10 +33,10 @@ interface ScriptTurn {
 }
 
 interface ScriptRow {
-  ID: number;
-  Lang: string;
-  Turns: ScriptTurn[];
-  Enabled: boolean;
+  id: number;
+  lang: string;
+  turns: ScriptTurn[];
+  enabled: boolean;
 }
 
 const EMPTY_TURNS: ScriptTurn[] = [
@@ -69,9 +69,9 @@ export function ScriptsDialog({ open, onOpenChange }: { open: boolean; onOpenCha
   }, [open]); // eslint-disable-line react-hooks/exhaustive-deps
 
   async function toggleEnabled(row: ScriptRow) {
-    setBusyID(row.ID);
+    setBusyID(row.id);
     try {
-      await api.put(`/admin/warmup/scripts/${row.ID}`, { enabled: !row.Enabled });
+      await api.put(`/admin/warmup/scripts/${row.id}`, { enabled: !row.enabled });
       load();
     } catch (e) {
       toast.error(t("admin.warmup.script.setEnabledFailedTitle"), {
@@ -84,9 +84,9 @@ export function ScriptsDialog({ open, onOpenChange }: { open: boolean; onOpenCha
 
   async function confirmDelete() {
     if (!deleteTarget) return;
-    setBusyID(deleteTarget.ID);
+    setBusyID(deleteTarget.id);
     try {
-      await api.delete(`/admin/warmup/scripts/${deleteTarget.ID}`);
+      await api.delete(`/admin/warmup/scripts/${deleteTarget.id}`);
       toast.success(t("admin.warmup.script.deleteSuccessTitle"));
       setDeleteTarget(null);
       load();
@@ -158,35 +158,35 @@ export function ScriptsDialog({ open, onOpenChange }: { open: boolean; onOpenCha
               </div>
             ) : (
               scripts.map((sc) => (
-                <div key={sc.ID} className="flex items-center justify-between gap-3 rounded-lg border p-2.5">
+                <div key={sc.id} className="flex items-center justify-between gap-3 rounded-lg border p-2.5">
                   <div className="min-w-0 flex-1 space-y-1">
                     <div className="flex items-center gap-2">
-                      <span className="font-mono text-xs font-medium">{sc.Lang}</span>
-                      <StatusBadge tone={sc.Enabled ? "positive" : "neutral"}>
-                        {sc.Enabled ? t("admin.warmup.script.enabledYes") : t("admin.warmup.script.enabledNo")}
+                      <span className="font-mono text-xs font-medium">{sc.lang}</span>
+                      <StatusBadge tone={sc.enabled ? "positive" : "neutral"}>
+                        {sc.enabled ? t("admin.warmup.script.enabledYes") : t("admin.warmup.script.enabledNo")}
                       </StatusBadge>
                       <span className="text-[10px] text-muted-foreground">
-                        {t("admin.warmup.script.turnsCount").replace("{n}", String(sc.Turns.length))}
+                        {t("admin.warmup.script.turnsCount").replace("{n}", String(sc.turns.length))}
                       </span>
                     </div>
                     <p className="truncate text-xs text-muted-foreground">
-                      {sc.Turns.map((tn) => `${tn.from}: ${tn.text}`).join("  →  ")}
+                      {sc.turns.map((tn) => `${tn.from}: ${tn.text}`).join("  →  ")}
                     </p>
                   </div>
                   <div className="flex shrink-0 items-center gap-1">
                     <Button
                       variant="outline"
                       size="sm"
-                      disabled={busyID === sc.ID}
+                      disabled={busyID === sc.id}
                       onClick={() => toggleEnabled(sc)}
                     >
-                      {sc.Enabled ? t("admin.warmup.script.disable") : t("admin.warmup.script.enable")}
+                      {sc.enabled ? t("admin.warmup.script.disable") : t("admin.warmup.script.enable")}
                     </Button>
                     <Button
                       variant="ghost"
                       size="icon-sm"
                       aria-label={t("admin.warmup.script.delete")}
-                      disabled={busyID === sc.ID}
+                      disabled={busyID === sc.id}
                       onClick={() => setDeleteTarget(sc)}
                     >
                       <Trash2 className="size-4" />
@@ -263,13 +263,13 @@ export function ScriptsDialog({ open, onOpenChange }: { open: boolean; onOpenCha
             <DialogTitle>{t("admin.warmup.script.deleteConfirmTitle")}</DialogTitle>
             <DialogDescription>
               {t("admin.warmup.script.deleteConfirmDesc")}
-              <span className="font-mono text-xs">{deleteTarget?.Lang}</span>
+              <span className="font-mono text-xs">{deleteTarget?.lang}</span>
             </DialogDescription>
           </DialogHeader>
           <DialogFooter>
             <DialogClose render={<Button variant="ghost" />}>{t("admin.warmup.cancel")}</DialogClose>
-            <Button variant="destructive" onClick={confirmDelete} disabled={busyID === deleteTarget?.ID}>
-              {busyID === deleteTarget?.ID
+            <Button variant="destructive" onClick={confirmDelete} disabled={busyID === deleteTarget?.id}>
+              {busyID === deleteTarget?.id
                 ? t("admin.warmup.script.deleting")
                 : t("admin.warmup.script.deleteConfirm")}
             </Button>

@@ -13,10 +13,10 @@ type Turn struct {
 }
 
 type Script struct {
-	ID      int64
-	Lang    string
-	Turns   []Turn
-	Enabled bool
+	ID      int64  `json:"id"`
+	Lang    string `json:"lang"`
+	Turns   []Turn `json:"turns"`
+	Enabled bool   `json:"enabled"`
 }
 
 // LoadScripts 读 enabled 脚本;lang 非空按 lang 过滤,空取全部。所有返回行
