@@ -221,7 +221,13 @@ export function ContactsList() {
     if (inserted > 0 && invalid === 0) {
       toast.success(t("dash.contacts.bulk.suppressResultTitle"), { description: desc });
     } else if (inserted === 0 && duplicates === 0) {
+      // Total failure (every group errored / no usable number): mirror
+      // applyBulkTag's catch path — keep the dialog open and preserve the
+      // selection so the user sees the red error toast and can retry without
+      // re-selecting. Closing here on an irreversible compliance opt-out would
+      // risk the user missing the failure and assuming they were suppressed.
       toast.error(t("dash.contacts.bulk.suppressFailed"), { description: desc });
+      return;
     } else {
       toast.info(t("dash.contacts.bulk.suppressResultTitle"), { description: desc });
     }
