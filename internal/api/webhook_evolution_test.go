@@ -20,7 +20,7 @@ import (
 func TestEvolutionWebhook_Authorization(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	r := gin.New()
-	NewEvolutionWebhook("s3cr3t", &fakeReceipt{}, newFakeInst(), nil).Register(r)
+	NewEvolutionWebhook("s3cr3t", &fakeReceipt{}, newFakeInst(), nil, nil).Register(r)
 	body := []byte(`{"event":"connection.update","instance":"wa_1","data":{"state":"open"}}`)
 
 	req := httptest.NewRequest(http.MethodPost, "/webhook/evolution", bytes.NewReader(body))
@@ -97,7 +97,7 @@ func postWebhook(t *testing.T, h *EvolutionWebhook, body []byte) int {
 // Evolution v2 connection.update carries the account's own JID in `wuid`.
 func TestWebhook_ConnectionUpdate_BindsJIDAndState(t *testing.T) {
 	inst := newFakeInst()
-	h := NewEvolutionWebhook("", &fakeReceipt{}, inst, nil)
+	h := NewEvolutionWebhook("", &fakeReceipt{}, inst, nil, nil)
 	body := []byte(`{"event":"connection.update","instance":"wa_1","data":{"state":"open","wuid":"123@s.whatsapp.net"}}`)
 	if code := postWebhook(t, h, body); code != http.StatusOK {
 		t.Fatalf("code=%d", code)
@@ -114,7 +114,7 @@ func TestWebhook_ConnectionClose_FiresHealthSignal(t *testing.T) {
 	inst := newFakeInst()
 	inst.jidByInst["wa_1"] = "123@s.whatsapp.net"
 	health := &fakeHealth{}
-	h := NewEvolutionWebhook("", &fakeReceipt{}, inst, health)
+	h := NewEvolutionWebhook("", &fakeReceipt{}, inst, health, nil)
 	body := []byte(`{"event":"connection.update","instance":"wa_1","data":{"state":"close"}}`)
 	postWebhook(t, h, body)
 	if len(health.calls) != 1 || health.calls[0] != "123@s.whatsapp.net:conn_churn" {
@@ -128,7 +128,7 @@ func TestWebhook_MessagesUpdate_RecordsReadReceipt(t *testing.T) {
 	inst := newFakeInst()
 	inst.jidByInst["wa_1"] = "123@s.whatsapp.net"
 	rec := &fakeReceipt{}
-	h := NewEvolutionWebhook("", rec, inst, nil)
+	h := NewEvolutionWebhook("", rec, inst, nil, nil)
 	body := []byte(`{"event":"messages.update","instance":"wa_1","data":{"keyId":"WAMID7","fromMe":true,"status":"READ"}}`)
 	postWebhook(t, h, body)
 	if len(rec.evs) != 1 {
@@ -146,7 +146,7 @@ func TestWebhook_MessagesUpdate_DeliveryAck(t *testing.T) {
 	inst := newFakeInst()
 	inst.jidByInst["wa_1"] = "123@s.whatsapp.net"
 	rec := &fakeReceipt{}
-	h := NewEvolutionWebhook("", rec, inst, nil)
+	h := NewEvolutionWebhook("", rec, inst, nil, nil)
 	body := []byte(`{"event":"messages.update","instance":"wa_1","data":{"keyId":"M8","fromMe":true,"status":"DELIVERY_ACK"}}`)
 	postWebhook(t, h, body)
 	if len(rec.evs) != 1 || rec.evs[0].Kind != receipt.Delivered {
@@ -160,7 +160,7 @@ func TestWebhook_MessagesUpdate_ServerAckSkipped(t *testing.T) {
 	inst := newFakeInst()
 	inst.jidByInst["wa_1"] = "123@s.whatsapp.net"
 	rec := &fakeReceipt{}
-	h := NewEvolutionWebhook("", rec, inst, nil)
+	h := NewEvolutionWebhook("", rec, inst, nil, nil)
 	body := []byte(`{"event":"messages.update","instance":"wa_1","data":{"keyId":"M9","fromMe":true,"status":"SERVER_ACK"}}`)
 	postWebhook(t, h, body)
 	if len(rec.evs) != 0 {
@@ -170,7 +170,7 @@ func TestWebhook_MessagesUpdate_ServerAckSkipped(t *testing.T) {
 
 func TestWebhook_MessagesUpdate_UnknownInstanceNoRecord(t *testing.T) {
 	rec := &fakeReceipt{}
-	h := NewEvolutionWebhook("", rec, newFakeInst(), nil)
+	h := NewEvolutionWebhook("", rec, newFakeInst(), nil, nil)
 	body := []byte(`{"event":"messages.update","instance":"ghost","data":{"keyId":"X","fromMe":true,"status":"READ"}}`)
 	postWebhook(t, h, body)
 	if len(rec.evs) != 0 {
@@ -182,7 +182,7 @@ func TestWebhook_MessagesUpdate_NotFromMeSkipped(t *testing.T) {
 	inst := newFakeInst()
 	inst.jidByInst["wa_1"] = "j"
 	rec := &fakeReceipt{}
-	h := NewEvolutionWebhook("", rec, inst, nil)
+	h := NewEvolutionWebhook("", rec, inst, nil, nil)
 	body := []byte(`{"event":"messages.update","instance":"wa_1","data":{"keyId":"X","fromMe":false,"status":"READ"}}`)
 	postWebhook(t, h, body)
 	if len(rec.evs) != 0 {
@@ -194,10 +194,83 @@ func TestWebhook_MessagesUpdate_DBErrorReturns500(t *testing.T) {
 	inst := newFakeInst()
 	inst.jidByInst["wa_1"] = "123@s.whatsapp.net"
 	rec := &errReceipt{} // Record returns an error
-	h := NewEvolutionWebhook("", rec, inst, nil)
+	h := NewEvolutionWebhook("", rec, inst, nil, nil)
 	body := []byte(`{"event":"messages.update","instance":"wa_1","data":{"keyId":"X","fromMe":true,"status":"READ"}}`)
 	code := postWebhook(t, h, body)
 	if code != http.StatusInternalServerError {
 		t.Fatalf("db error must yield 500, got %d", code)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// qrcode.updated — FIX-1: the QR's base64 arrives ONLY via this webhook event
+// (Evolution v2.3.7's synchronous connect response has none), so this is the
+// sole write path into the QR cache handleAdminInstanceQR reads from.
+// ---------------------------------------------------------------------------
+
+// fakeQR is a fake qrSink recording every Set call.
+type fakeQR struct {
+	sets map[string]string
+}
+
+func newFakeQR() *fakeQR { return &fakeQR{sets: map[string]string{}} }
+
+func (f *fakeQR) Set(instance, base64 string) { f.sets[instance] = base64 }
+
+// TestWebhook_QRCodeUpdated_SetsCache pins the real payload shape captured
+// off a live Evolution v2.3.7 instance: the base64 (data: URI prefixed) lives
+// at data.qrcode.base64, nested one level under the event's top-level data.
+func TestWebhook_QRCodeUpdated_SetsCache(t *testing.T) {
+	qr := newFakeQR()
+	h := NewEvolutionWebhook("", &fakeReceipt{}, newFakeInst(), nil, qr)
+	body := []byte(`{"event":"qrcode.updated","instance":"verify1","data":{"qrcode":{
+		"instance":"verify1","pairingCode":null,
+		"code":"2@Dpbb...","base64":"data:image/png;base64,iVBOR..."}}}`)
+	if code := postWebhook(t, h, body); code != http.StatusOK {
+		t.Fatalf("code=%d", code)
+	}
+	if got := qr.sets["verify1"]; got != "data:image/png;base64,iVBOR..." {
+		t.Fatalf("qr.Set(verify1) = %q, want the base64 payload", got)
+	}
+}
+
+// TestWebhook_QRCodeUpdated_MissingBase64NoSet: an event with no
+// data.qrcode (or an empty base64) must not call Set — there is nothing
+// useful to cache, and calling Set("", "") would poison the cache with a
+// blank key.
+func TestWebhook_QRCodeUpdated_MissingBase64NoSet(t *testing.T) {
+	qr := newFakeQR()
+	h := NewEvolutionWebhook("", &fakeReceipt{}, newFakeInst(), nil, qr)
+	body := []byte(`{"event":"qrcode.updated","instance":"verify1","data":{}}`)
+	if code := postWebhook(t, h, body); code != http.StatusOK {
+		t.Fatalf("code=%d", code)
+	}
+	if len(qr.sets) != 0 {
+		t.Fatalf("qr.Set must not be called without a base64: %+v", qr.sets)
+	}
+}
+
+// TestWebhook_QRCodeUpdated_NilSinkNoPanic: production wires this from
+// s.deps.QRCache, which may legitimately be nil (bare Server{} in tests, or
+// a deploy that hasn't wired it) — the handler must degrade to a no-op, not
+// crash the webhook receiver for every other event type too.
+func TestWebhook_QRCodeUpdated_NilSinkNoPanic(t *testing.T) {
+	h := NewEvolutionWebhook("", &fakeReceipt{}, newFakeInst(), nil, nil)
+	body := []byte(`{"event":"qrcode.updated","instance":"verify1","data":{"qrcode":{"base64":"data:image/png;base64,X"}}}`)
+	if code := postWebhook(t, h, body); code != http.StatusOK {
+		t.Fatalf("code=%d", code)
+	}
+}
+
+// TestWebhook_QRCodeUpdated_EventNameNormalized: Evolution's two spellings
+// (dotted and underscored/upper) both route to the qrcode.updated case, same
+// as connection.update / messages.update already do.
+func TestWebhook_QRCodeUpdated_EventNameNormalized(t *testing.T) {
+	qr := newFakeQR()
+	h := NewEvolutionWebhook("", &fakeReceipt{}, newFakeInst(), nil, qr)
+	body := []byte(`{"event":"QRCODE_UPDATED","instance":"verify1","data":{"qrcode":{"base64":"data:image/png;base64,X"}}}`)
+	postWebhook(t, h, body)
+	if qr.sets["verify1"] != "data:image/png;base64,X" {
+		t.Fatalf("underscored/upper event name not normalized: %+v", qr.sets)
 	}
 }

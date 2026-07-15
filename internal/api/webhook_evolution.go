@@ -31,19 +31,29 @@ type healthSink interface {
 	ApplyHealthSignal(ctx context.Context, jid, signal string, cooloff time.Duration) error
 }
 
+// qrSink caches the latest QR pairing code per instance (satisfied by
+// *qrCache). This is the ONLY place a QR's base64 image ever arrives — see
+// evoWebhookData's qrcode.updated doc comment — so the webhook is the sole
+// writer; handleAdminInstanceQR (instances_api.go) reads it back.
+type qrSink interface {
+	Set(instance, base64 string)
+}
+
 // EvolutionWebhook receives Evolution API callbacks: authenticates via the
 // Authorization header Evolution echoes back (configured as webhook.headers.
 // authorization at instance-create time — Evolution v2 does NOT sign payloads),
-// then feeds receipts (messages.update) and instance state (connection.update).
+// then feeds receipts (messages.update), instance state (connection.update),
+// and the pairing QR cache (qrcode.updated).
 type EvolutionWebhook struct {
 	secret string
 	rec    receiptSink
 	inst   instanceStore
 	health healthSink
+	qr     qrSink
 }
 
-func NewEvolutionWebhook(secret string, rec receiptSink, inst instanceStore, health healthSink) *EvolutionWebhook {
-	return &EvolutionWebhook{secret: secret, rec: rec, inst: inst, health: health}
+func NewEvolutionWebhook(secret string, rec receiptSink, inst instanceStore, health healthSink, qr qrSink) *EvolutionWebhook {
+	return &EvolutionWebhook{secret: secret, rec: rec, inst: inst, health: health, qr: qr}
 }
 
 func (h *EvolutionWebhook) Register(r gin.IRouter) {
@@ -93,6 +103,10 @@ func (h *EvolutionWebhook) handle(c *gin.Context) {
 		}); err != nil {
 			c.AbortWithStatus(http.StatusInternalServerError)
 			return
+		}
+	case "qrcode.updated":
+		if b64 := w.Data.qrBase64(); b64 != "" && h.qr != nil {
+			h.qr.Set(w.Instance, b64)
 		}
 	}
 	c.Status(http.StatusOK)

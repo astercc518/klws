@@ -62,6 +62,19 @@ type Deps struct {
 	// cmd/wadist/main.go's buildEvoSession uses. Wired by T3 (POST
 	// /admin/instances); empty is valid in dev (Evolution just gets no webhook).
 	EvolutionWebhookURL string
+
+	// QRCache caches the latest pairing QR base64 per instance, populated by
+	// the qrcode.updated webhook event and read by GET
+	// /admin/instances/:name/qr. Evolution v2's synchronous connect response
+	// carries no base64 (verified live), so the webhook push is the only
+	// source of the actual QR image. main.go constructs ONE instance via
+	// api.NewQRCache() and puts it here — Router() below hands that SAME
+	// instance to NewEvolutionWebhook (the writer) while handleAdminInstanceQR
+	// reads it via s.deps.QRCache (the reader). Nil is safe (qrCache's
+	// methods no-op / return "" on a nil receiver) — tests that build a bare
+	// Server{deps: Deps{...}} without setting this still compile and run,
+	// just without a live QR cache.
+	QRCache *qrCache
 }
 
 // Server holds the injected deps plus a readiness flag (mirrors console.Server
@@ -117,7 +130,7 @@ func (s *Server) Router() *gin.Engine {
 
 	// Evolution 数据面回调（HMAC 鉴权，非用户鉴权）。E0 log-only。
 	// health sink (sendgate) deferred: E6-followup wires console sendgate
-	NewEvolutionWebhook(s.deps.EvolutionWebhookSecret, s.deps.Receipt, s.deps.Mgr, nil).Register(v1)
+	NewEvolutionWebhook(s.deps.EvolutionWebhookSecret, s.deps.Receipt, s.deps.Mgr, nil, s.deps.QRCache).Register(v1)
 
 	// --- Auth controller ---
 	// login is public; logout/me require a valid token.

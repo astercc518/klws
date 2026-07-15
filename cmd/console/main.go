@@ -122,6 +122,14 @@ func run(ctx context.Context) (*api.Server, func(), error) {
 	// to a "default" node.
 	evoCluster := cluster.NewEvoCluster(baseCfg.EvolutionNodes, baseCfg.EvolutionAPIKey, baseCfg.EvolutionWebhookSecret)
 
+	// qrCache: ONE shared instance for the whole process. Evolution v2's QR
+	// image arrives only via the qrcode.updated webhook (its synchronous
+	// connect response has no base64 — see internal/api/qr_cache.go) — the
+	// webhook handler built inside api.Router() (internal/api/router.go)
+	// writes here via Deps.QRCache, and GET /admin/instances/:name/qr reads
+	// the SAME instance back through that same Deps field.
+	qrCache := api.NewQRCache()
+
 	// JSON API server — reuses the SAME session/user/tenant/billing/pricing
 	// instances and the store.Manager's RLS machinery; no security logic is
 	// reinvented and no red-line package is touched.
@@ -134,6 +142,7 @@ func run(ctx context.Context) (*api.Server, func(), error) {
 		Sessions: sessions,
 		Audit:    audit.NewAuditWriter(mgr.SystemPool()),
 		Receipt:  receipt.New(mgr.SystemPool()),
+		QRCache:  qrCache,
 		// Super/bootstrap admins hidden from the console + write-protected (403).
 		ProtectedAdmins: api.ParseProtectedAdmins(os.Getenv("WADIST_PROTECTED_ADMINS")),
 		SessionKey:      webCfg.SessionKey,               // same HMAC key as the old console cookie

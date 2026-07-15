@@ -138,7 +138,7 @@ func TestListInstances_pagination(t *testing.T) {
 	}
 
 	// tenant_id filter
-	if call("?tenant_id="+strconv.FormatInt(tidA, 10))["total"].(float64) != 3 {
+	if call("?tenant_id=" + strconv.FormatInt(tidA, 10))["total"].(float64) != 3 {
 		t.Errorf("tenant_id filter wrong")
 	}
 
@@ -205,8 +205,9 @@ func newInstanceLifecycleServer(t *testing.T, fake *fakeInstanceEvo, seedProxies
 	s := &Server{
 		sysPool: pool,
 		deps: Deps{
-			Mgr:   mgr,
-			Audit: audit.NewAuditWriter(pool),
+			Mgr:     mgr,
+			Audit:   audit.NewAuditWriter(pool),
+			QRCache: newQRCache(),
 		},
 		evoNodesFn: func() []string { return []string{"node-a"} },
 		evoForFn: func(node string) (instanceEvoAPI, bool) {
@@ -652,4 +653,3 @@ func TestListNodes_Empty(t *testing.T) {
 		t.Errorf("rows len = %d, want 0", len(rows))
 	}
 }
-

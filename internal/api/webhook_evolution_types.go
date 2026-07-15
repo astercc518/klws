@@ -23,17 +23,30 @@ type evoWebhook struct {
 //   - messages.upsert / send responses: NESTED — data.key.{id,fromMe}.
 //   - connection.update: data.wuid holds THIS account's own JID (NOT remoteJid),
 //     plus data.state ("open"/"close"/"connecting"/"refused").
+//   - qrcode.updated: NESTED — data.qrcode.{instance,pairingCode,code,base64}.
+//     Verified against a live v2.3.7 instance: this is the ONLY place the QR's
+//     base64 (data:image/png;base64,... prefixed) is ever delivered — the
+//     synchronous GET /instance/connect/{name} response has no base64 field.
 //
 // The accessor helpers below read whichever shape is present.
 type evoWebhookData struct {
-	Key       *evoKey `json:"key,omitempty"`
-	KeyID     string  `json:"keyId,omitempty"`  // messages.update flat message id
-	FromMe    *bool   `json:"fromMe,omitempty"` // messages.update flat direction
-	Status    string  `json:"status,omitempty"`
-	Ack       *int    `json:"ack,omitempty"` // legacy/tolerance; v2 update uses status
-	State     string  `json:"state,omitempty"`
-	RemoteJID string  `json:"remoteJid,omitempty"`
-	WUID      string  `json:"wuid,omitempty"` // connection.update: own account JID
+	Key       *evoKey    `json:"key,omitempty"`
+	KeyID     string     `json:"keyId,omitempty"`  // messages.update flat message id
+	FromMe    *bool      `json:"fromMe,omitempty"` // messages.update flat direction
+	Status    string     `json:"status,omitempty"`
+	Ack       *int       `json:"ack,omitempty"` // legacy/tolerance; v2 update uses status
+	State     string     `json:"state,omitempty"`
+	RemoteJID string     `json:"remoteJid,omitempty"`
+	WUID      string     `json:"wuid,omitempty"`   // connection.update: own account JID
+	QRCode    *evoQRCode `json:"qrcode,omitempty"` // qrcode.updated: the pairing QR
+}
+
+// evoQRCode is the qrcode.updated payload's nested data.qrcode object.
+type evoQRCode struct {
+	Instance    string `json:"instance,omitempty"`
+	PairingCode string `json:"pairingCode,omitempty"`
+	Code        string `json:"code,omitempty"`   // raw WA pairing string (2@...)
+	Base64      string `json:"base64,omitempty"` // data:image/png;base64,... — what the admin UI renders
 }
 
 type evoKey struct {
@@ -72,6 +85,15 @@ func (d evoWebhookData) ownJID() string {
 		return d.WUID
 	}
 	return d.RemoteJID
+}
+
+// qrBase64 returns the qrcode.updated QR image payload, or "" if this event
+// carried no qrcode data (or Evolution ever sent an empty base64).
+func (d evoWebhookData) qrBase64() string {
+	if d.QRCode == nil {
+		return ""
+	}
+	return d.QRCode.Base64
 }
 
 // normalizeEvent folds Evolution's two event-name spellings

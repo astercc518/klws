@@ -300,8 +300,19 @@ func (s *Server) evoClientForRow(c *gin.Context, row store.InstanceRow) (instanc
 }
 
 // handleAdminInstanceQR: GET /admin/instances/:name/qr → {base64}. Read-only
-// (no audit): triggers/re-reads pairing via Evolution's connect endpoint,
-// which itself mutates no wadist-owned state.
+// (no audit).
+//
+// Evolution v2.3.7's synchronous GET /instance/connect/{name} response
+// carries NO base64 (verified live: it returns only
+// {"count":N,"pairingCode":null}) — the actual QR image arrives later,
+// asynchronously, via the qrcode.updated webhook event, which
+// webhook_evolution.go writes into s.deps.QRCache. So this handler still
+// calls ConnectInstance to (re-)trigger Evolution's pairing/QR generation as
+// a side effect, but the base64 it returns comes from the cache, not from
+// ConnectInstance's own return value — EXCEPT as a best-effort fallback: if
+// ConnectInstance itself ever does return a non-empty base64 (e.g. a future
+// Evolution version, or a race where Evolution answers synchronously), that
+// value is seeded into the cache too, so it's not lost.
 func (s *Server) handleAdminInstanceQR(c *gin.Context) {
 	ctx := c.Request.Context()
 	row, ok1 := s.getInstanceRow(c, c.Param("name"))
@@ -317,7 +328,10 @@ func (s *Server) handleAdminInstanceQR(c *gin.Context) {
 		fail(c, http.StatusBadGateway, "evolution connect instance failed")
 		return
 	}
-	ok(c, gin.H{"base64": b64})
+	if b64 != "" {
+		s.deps.QRCache.Set(row.InstanceName, b64)
+	}
+	ok(c, gin.H{"base64": s.deps.QRCache.Get(row.InstanceName)})
 }
 
 // handleAdminInstanceState: GET /admin/instances/:name/state → {state}.
