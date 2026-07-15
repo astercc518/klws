@@ -126,6 +126,12 @@ export function AdminProxies() {
     } else {
       toast.error(t("admin.proxies.bulk.resultTitle"), { description: desc });
     }
+    if (okCount === 0 && failCount > 0) {
+      // Total failure on an irreversible delete: keep the dialog open and the
+      // selection intact so the admin sees the error and can retry without
+      // re-selecting, instead of silently closing on a no-op.
+      return;
+    }
     setBulkDeleteKeys(null);
     setSel(new Set());
     // Server-paged: if this wiped the whole current page, step back one page so

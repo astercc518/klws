@@ -178,13 +178,13 @@ export function AdminUsersTable() {
   // above). Selected rows without a role=customer + tenant_id (sales/admin
   // rows, or an orphaned customer with no tenant) are silently skipped; the
   // dialog description reports the skipped count so it isn't a silent no-op.
-  function eligibleTenantTargets(keys: Array<string | number>): { tenantId: number; label: string }[] {
+  function eligibleTenantTargets(keys: Array<string | number>): { tenantId: number }[] {
     if (!users) return [];
     const byId = new Map(users.map((u) => [u.id, u]));
-    const out: { tenantId: number; label: string }[] = [];
+    const out: { tenantId: number }[] = [];
     for (const k of keys) {
       const u = byId.get(Number(k));
-      if (u && u.role === "customer" && u.tenant_id != null) out.push({ tenantId: u.tenant_id, label: u.email });
+      if (u && u.role === "customer" && u.tenant_id != null) out.push({ tenantId: u.tenant_id });
     }
     return out;
   }
@@ -192,6 +192,16 @@ export function AdminUsersTable() {
   async function submitBulkStatus() {
     if (!bulkStatusTarget) return;
     const targets = eligibleTenantTargets(bulkStatusTarget.keys);
+    if (targets.length === 0) {
+      // Every selected row was skipped (sales/admin rows, or a tenant-less
+      // customer) — there's nothing to report success on, so don't show the
+      // green "0 succeeded, 0 failed" toast. The dialog description already
+      // called out the skipped count before the admin confirmed.
+      toast.error(t("admin.users.bulk.noEligible"));
+      setBulkStatusTarget(null);
+      setSel(new Set());
+      return;
+    }
     let okCount = 0;
     let failCount = 0;
     for (const tgt of targets) {
@@ -222,6 +232,16 @@ export function AdminUsersTable() {
       return;
     }
     const targets = eligibleTenantTargets(bulkAssignKeys);
+    if (targets.length === 0) {
+      // Every selected row was skipped (sales/admin rows, or a tenant-less
+      // customer) — there's nothing to report success on, so don't show the
+      // green "0 succeeded, 0 failed" toast. The dialog description already
+      // called out the skipped count before the admin confirmed.
+      toast.error(t("admin.users.bulk.noEligible"));
+      setBulkAssignKeys(null);
+      setSel(new Set());
+      return;
+    }
     let okCount = 0;
     let failCount = 0;
     for (const tgt of targets) {
