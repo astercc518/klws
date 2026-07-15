@@ -16,6 +16,7 @@ import {
   QrCode,
   ShieldAlert,
   BarChart3,
+  Sprout,
   type LucideIcon,
 } from "lucide-react";
 
@@ -61,6 +62,7 @@ export const NAV_GROUPS: NavGroup[] = [
       { href: "/admin/resources", label: "代理网络池", en: "Proxies", icon: Globe },
       { href: "/admin/devices", label: "节点与设备", en: "Devices", icon: Smartphone },
       { href: "/admin/instances", label: "实例", en: "Instances", icon: QrCode },
+      { href: "/admin/warmup", label: "养号中心", en: "Warmup", icon: Sprout },
     ],
   },
   {
