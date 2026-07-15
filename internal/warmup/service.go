@@ -12,8 +12,10 @@ type Clock func() time.Time
 // Service 是养号业务编排:enroll / 回复信号 / 毕业评估 / 降级 / 手动控制。
 // PairAndWarm(池内互发)在 scripts.go / pair.go 中扩展(P5b)。
 type Service struct {
-	store *Store
-	clock Clock
+	store    *Store
+	clock    Clock
+	sender   Sender
+	accounts AccountLookup
 }
 
 func NewService(store *Store, clock Clock) *Service {
