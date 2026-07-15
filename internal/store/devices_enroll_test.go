@@ -173,3 +173,101 @@ SELECT a.account_jid
 		t.Fatalf("selectAccount would pick %q, want enrolled %q", picked, jid)
 	}
 }
+
+// TestMarkDeviceLoggedOut_ExcludesFromSelectAccount verifies the P2.x fix:
+// an admin instance-logout must flip account_devices.ban_status to
+// 'logged_out' so selectAccount (which only reads ban_status='active') never
+// picks the account again.
+func TestMarkDeviceLoggedOut_ExcludesFromSelectAccount(t *testing.T) {
+	if testing.Short() {
+		t.Skip("integration")
+	}
+	ctx := context.Background()
+	m := newTestManager(t)
+
+	proxyID := seedProxy(t, ctx, m.bizPool, "socks5://p4", "US", 1)
+	if err := m.UpsertInstance(ctx, InstanceRow{
+		InstanceName: "wa_logout_1", TenantID: 7, EvoNode: "default", State: "connecting", ProxyID: proxyID,
+	}); err != nil {
+		t.Fatalf("seed instance: %v", err)
+	}
+	jid := "333@s.whatsapp.net"
+	if err := m.EnrollDeviceForInstance(ctx, "wa_logout_1", jid); err != nil {
+		t.Fatalf("enroll: %v", err)
+	}
+
+	if err := m.MarkDeviceLoggedOut(ctx, jid); err != nil {
+		t.Fatalf("MarkDeviceLoggedOut: %v", err)
+	}
+
+	var banStatus string
+	if err := m.bizPool.QueryRow(ctx,
+		`SELECT ban_status::text FROM account_devices WHERE account_jid=$1`, jid).Scan(&banStatus); err != nil {
+		t.Fatalf("query ban_status: %v", err)
+	}
+	if banStatus != "logged_out" {
+		t.Fatalf("ban_status = %q, want logged_out", banStatus)
+	}
+}
+
+// TestMarkDeviceLoggedOut_UnknownJID_NoOp: a jid with no account_devices row
+// (e.g. an instance that never paired) must not error.
+func TestMarkDeviceLoggedOut_UnknownJID_NoOp(t *testing.T) {
+	if testing.Short() {
+		t.Skip("integration")
+	}
+	ctx := context.Background()
+	m := newTestManager(t)
+
+	if err := m.MarkDeviceLoggedOut(ctx, "does-not-exist@s.whatsapp.net"); err != nil {
+		t.Fatalf("MarkDeviceLoggedOut on unknown jid should no-op, got: %v", err)
+	}
+}
+
+// TestDeleteDeviceByJID_RemovesRow verifies the P2.x fix: an admin
+// instance-delete must remove the stale account_devices send-pool row.
+func TestDeleteDeviceByJID_RemovesRow(t *testing.T) {
+	if testing.Short() {
+		t.Skip("integration")
+	}
+	ctx := context.Background()
+	m := newTestManager(t)
+
+	proxyID := seedProxy(t, ctx, m.bizPool, "socks5://p5", "US", 1)
+	if err := m.UpsertInstance(ctx, InstanceRow{
+		InstanceName: "wa_delete_1", TenantID: 7, EvoNode: "default", State: "connecting", ProxyID: proxyID,
+	}); err != nil {
+		t.Fatalf("seed instance: %v", err)
+	}
+	jid := "444@s.whatsapp.net"
+	if err := m.EnrollDeviceForInstance(ctx, "wa_delete_1", jid); err != nil {
+		t.Fatalf("enroll: %v", err)
+	}
+
+	if err := m.DeleteDeviceByJID(ctx, jid); err != nil {
+		t.Fatalf("DeleteDeviceByJID: %v", err)
+	}
+
+	var count int
+	if err := m.bizPool.QueryRow(ctx,
+		`SELECT count(*) FROM account_devices WHERE account_jid=$1`, jid).Scan(&count); err != nil {
+		t.Fatalf("count: %v", err)
+	}
+	if count != 0 {
+		t.Fatalf("expected account_devices row removed, got count=%d", count)
+	}
+}
+
+// TestDeleteDeviceByJID_UnknownJID_NoOp: deleting a jid with no
+// account_devices row must not error (idempotent).
+func TestDeleteDeviceByJID_UnknownJID_NoOp(t *testing.T) {
+	if testing.Short() {
+		t.Skip("integration")
+	}
+	ctx := context.Background()
+	m := newTestManager(t)
+
+	if err := m.DeleteDeviceByJID(ctx, "does-not-exist@s.whatsapp.net"); err != nil {
+		t.Fatalf("DeleteDeviceByJID on unknown jid should no-op, got: %v", err)
+	}
+}

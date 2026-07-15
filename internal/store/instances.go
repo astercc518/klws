@@ -144,6 +144,35 @@ ON CONFLICT (account_jid) DO UPDATE
 	return err
 }
 
+// MarkDeviceLoggedOut sets ban_status='logged_out' on the account_devices row
+// for jid, excluding it from selectAccount's send pool (selectAccount only
+// reads ban_status='active'). Called from handleAdminInstanceLogout after the
+// Evolution LogoutInstance round-trip and account_instances state write, so a
+// logged-out account is never selected to send again. Idempotent: a jid with
+// no account_devices row (never enrolled, e.g. an instance that never paired)
+// is a no-op — 0 rows affected is not an error. Uses the SystemPool
+// (BYPASSRLS): this runs from the admin god-view logout endpoint, which has
+// no tenant request-context, mirroring EnrollDeviceForInstance.
+func (m *Manager) MarkDeviceLoggedOut(ctx context.Context, jid string) error {
+	_, err := m.SystemPool().Exec(ctx,
+		`UPDATE account_devices SET ban_status='logged_out', updated_at=now() WHERE account_jid=$1`,
+		jid)
+	return err
+}
+
+// DeleteDeviceByJID removes jid's account_devices row entirely (the send
+// pool). Called from handleAdminInstanceDelete after the account_instances
+// row is removed, cleaning up the now-stale send-pool entry so a deleted
+// instance can never be selected to send. Idempotent: no matching row is a
+// no-op — 0 rows affected is not an error. Uses the SystemPool (BYPASSRLS):
+// this runs from the admin god-view delete endpoint, which has no tenant
+// request-context, mirroring DeleteInstanceRow.
+func (m *Manager) DeleteDeviceByJID(ctx context.Context, jid string) error {
+	_, err := m.SystemPool().Exec(ctx,
+		`DELETE FROM account_devices WHERE account_jid=$1`, jid)
+	return err
+}
+
 // SetInstanceState updates lifecycle state (created/qr/connected/disconnected/loggedOut).
 func (m *Manager) SetInstanceState(ctx context.Context, instanceName, state string) error {
 	_, err := m.SystemPool().Exec(ctx,

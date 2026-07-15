@@ -411,6 +411,13 @@ func (s *Server) handleAdminInstanceLogout(c *gin.Context) {
 		fail(c, http.StatusInternalServerError, "persist logged-out state")
 		return
 	}
+	// Best-effort: exclude the account from selectAccount's send pool
+	// (ban_status='active' only) now that its session is terminal. Not
+	// fatal — a failure here just means the account stays selectable until
+	// its next send fails naturally; it never blocks the logout response.
+	if row.JID != "" {
+		_ = s.deps.Mgr.MarkDeviceLoggedOut(ctx, row.JID)
+	}
 	s.recordAudit(ctx, auditEvent{
 		TenantID:     row.TenantID,
 		ActorID:      actorID(c),
@@ -457,6 +464,14 @@ func (s *Server) handleAdminInstanceDelete(c *gin.Context) {
 	if err := s.deps.Mgr.DeleteInstanceRow(ctx, row.InstanceName); err != nil {
 		fail(c, http.StatusInternalServerError, "delete instance row")
 		return
+	}
+	// Best-effort: clean up the now-stale account_devices send-pool row so a
+	// deleted instance can never be selectAccount'd. Not fatal — the routing
+	// row is already gone, which is what matters for correctness; a leftover
+	// account_devices row would only be caught the next time it's picked and
+	// fails to send.
+	if row.JID != "" {
+		_ = s.deps.Mgr.DeleteDeviceByJID(ctx, row.JID)
 	}
 	s.recordAudit(ctx, auditEvent{
 		TenantID:     row.TenantID,

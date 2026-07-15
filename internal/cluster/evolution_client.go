@@ -29,7 +29,9 @@ func (e *EvoHTTPError) Error() string {
 }
 
 // IsThrottle reports whether err is a rate/overload signal (retry after backoff,
-// and shed the global rate). TODO(evo-verify): confirm Evolution's throttle codes.
+// and shed the global rate). TODO(evo-verify): 429/503 throttle codes not yet
+// triggered against real Evolution (2026-07-15 real-device pass only exercised
+// the happy path + 401/404 — see IsPermanent). Codes unconfirmed, keep TODO.
 func IsThrottle(err error) bool {
 	var he *EvoHTTPError
 	return errors.As(err, &he) && (he.StatusCode == 429 || he.StatusCode == 503)
@@ -37,7 +39,9 @@ func IsThrottle(err error) bool {
 
 // IsPermanent reports whether err will not be fixed by retrying (client errors:
 // bad request, unauthorized, logged-out / not-connected instance, gone).
-// TODO(evo-verify): confirm which statuses Evolution returns for logged-out.
+// TODO(evo-verify): partially verified against real Evolution v2.3.7
+// (2026-07-15) — 401/404 confirmed as the logged-out/not-found signals hit in
+// practice; 400/403/422 remain unconfirmed. Keep TODO until those are seen.
 func IsPermanent(err error) bool {
 	var he *EvoHTTPError
 	if !errors.As(err, &he) {
@@ -176,7 +180,7 @@ func (c *EvoClient) SetProxy(ctx context.Context, instanceName string, proxy *st
 // ConnectInstance triggers pairing and returns a QR (base64 data URI) when the
 // instance is unpaired; returns "" when already connected. QR also arrives via
 // the QRCODE_UPDATED webhook.
-// TODO(evo-verify): confirm path/fields against real Evolution v2.
+// Verified against real Evolution v2.3.7 (2026-07-15): QR delivered via webhook.
 func (c *EvoClient) ConnectInstance(ctx context.Context, instanceName string) (string, error) {
 	var out struct {
 		Base64 string `json:"base64"`
@@ -188,13 +192,13 @@ func (c *EvoClient) ConnectInstance(ctx context.Context, instanceName string) (s
 }
 
 // LogoutInstance ends the WA session (device unlinked). Terminal.
-// TODO(evo-verify): confirm path against real Evolution v2.
+// Verified against real Evolution v2.3.7 (2026-07-15).
 func (c *EvoClient) LogoutInstance(ctx context.Context, instanceName string) error {
 	return c.doJSON(ctx, http.MethodDelete, "/instance/logout/"+instanceName, nil, nil)
 }
 
 // DeleteInstance removes the instance and its Redis session. Idempotent.
-// TODO(evo-verify): confirm path against real Evolution v2.
+// Verified against real Evolution v2.3.7 (2026-07-15).
 func (c *EvoClient) DeleteInstance(ctx context.Context, instanceName string) error {
 	return c.doJSON(ctx, http.MethodDelete, "/instance/delete/"+instanceName, nil, nil)
 }
@@ -230,7 +234,8 @@ type SendResult struct {
 }
 
 // SendText sends a plain-text message and returns the WA message id (key.id).
-// TODO(evo-verify): confirm path/fields against real Evolution v2.
+// Verified against real Evolution v2.3.7 (2026-07-15): DELIVERY_ACK webhook
+// receipt matched on key.id, confirming SendResult.RemoteID is the right join key.
 func (c *EvoClient) SendText(ctx context.Context, instanceName, toPhone, body string) (SendResult, error) {
 	var out struct {
 		Key struct {
