@@ -296,6 +296,12 @@ func (s *Server) Router() *gin.Engine {
 		admin.GET("/warmup/policies", s.handleAdminWarmupGetPolicies)
 		admin.PUT("/warmup/policies/:lane", s.handleAdminWarmupSetPolicy)
 		admin.POST("/warmup/action", s.handleAdminWarmupAction)
+
+		// 脚本库管理(Task 18):列表(含 disabled)/创建/启停/删除。
+		admin.GET("/warmup/scripts", s.handleAdminWarmupListScripts)
+		admin.POST("/warmup/scripts", s.handleAdminWarmupCreateScript)
+		admin.PUT("/warmup/scripts/:id", s.handleAdminWarmupSetScriptEnabled)
+		admin.DELETE("/warmup/scripts/:id", s.handleAdminWarmupDeleteScript)
 	}
 
 	return r

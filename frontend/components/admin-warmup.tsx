@@ -13,6 +13,7 @@ import {
   BadgeCheck,
   PauseCircle,
   Settings2,
+  BookOpen,
 } from "lucide-react";
 import { toast } from "sonner";
 import { api, ApiError } from "@/lib/api";
@@ -37,6 +38,7 @@ import {
 } from "@/components/ui/dialog";
 import { useT } from "@/components/locale-provider";
 import { PoliciesDialog } from "@/components/admin-warmup-policies";
+import { ScriptsDialog } from "@/components/admin-warmup-scripts";
 
 export type Lane = "FAST" | "STANDARD";
 type Stage = "NEW" | "WARMING" | "MATURE";
@@ -109,6 +111,7 @@ export function AdminWarmup() {
   const [laneTarget, setLaneTarget] = useState<WarmupRow | null>(null);
   const [demoteTarget, setDemoteTarget] = useState<WarmupRow | null>(null);
   const [policiesOpen, setPoliciesOpen] = useState(false);
+  const [scriptsOpen, setScriptsOpen] = useState(false);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -358,6 +361,10 @@ export function AdminWarmup() {
               <Settings2 className="size-4" />
               {t("admin.warmup.policy.trigger")}
             </Button>
+            <Button variant="outline" className="gap-2" onClick={() => setScriptsOpen(true)}>
+              <BookOpen className="size-4" />
+              {t("admin.warmup.script.trigger")}
+            </Button>
           </div>
         }
         rowActions={(r) => (
@@ -406,6 +413,7 @@ export function AdminWarmup() {
         }}
       />
       <PoliciesDialog open={policiesOpen} onOpenChange={setPoliciesOpen} />
+      <ScriptsDialog open={scriptsOpen} onOpenChange={setScriptsOpen} />
     </div>
   );
 }
