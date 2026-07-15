@@ -104,6 +104,14 @@ export const admin: Record<Locale, Record<string, string>> = {
     "admin.devices.delete.successTitle": "设备已删除",
     "admin.devices.delete.failedTitle": "删除失败",
 
+    // admin-devices.tsx — bulk delete
+    "admin.devices.bulk.delete": "批量删除",
+    "admin.devices.bulk.confirm": "确认删除",
+    "admin.devices.bulk.resultTitle": "批量删除完成",
+    "admin.devices.bulk.resultDesc": "成功 {ok} 个,失败 {fail} 个",
+    "admin.devices.bulkDeleteDialog.title": "批量删除选中设备?",
+    "admin.devices.bulkDeleteDialog.desc": "将逐个删除选中的 {n} 台设备,此操作不可撤销,若已绑定代理会自动释放。",
+
     // components/admin-proxies.tsx — table columns
     "admin.proxies.col.address": "代理地址",
     "admin.proxies.col.type": "类型",
@@ -169,6 +177,14 @@ export const admin: Record<Locale, Record<string, string>> = {
     "admin.proxies.delete.confirm": "确认删除",
     "admin.proxies.delete.successTitle": "代理已删除",
     "admin.proxies.delete.failedTitle": "删除失败",
+
+    // admin-proxies.tsx — bulk delete
+    "admin.proxies.bulk.delete": "批量删除",
+    "admin.proxies.bulk.confirm": "确认删除",
+    "admin.proxies.bulk.resultTitle": "批量删除完成",
+    "admin.proxies.bulk.resultDesc": "成功 {ok} 个,失败 {fail} 个",
+    "admin.proxies.bulkDeleteDialog.title": "批量删除选中代理?",
+    "admin.proxies.bulkDeleteDialog.desc": "将逐个删除选中的 {n} 个代理,此操作不可撤销,已绑定的设备将自动解绑。",
 
     // components/admin-metrics.tsx
     "admin.metrics.loadFailedGeneric": "加载失败",
@@ -429,6 +445,17 @@ export const admin: Record<Locale, Record<string, string>> = {
     "admin.campaigns.cancel": "取消",
     "admin.campaigns.processingButton": "处理中…",
     "admin.campaigns.confirmStopButton": "确认终止",
+
+    // admin-campaigns.tsx — bulk stop/resume
+    "admin.campaigns.bulk.stop": "批量停止",
+    "admin.campaigns.bulk.resume": "批量继续",
+    "admin.campaigns.bulk.confirm": "确认执行",
+    "admin.campaigns.bulk.resultTitle": "批量操作完成",
+    "admin.campaigns.bulk.resultDesc": "成功 {ok} 个,失败 {fail} 个",
+    "admin.campaigns.bulkStopDialog.title": "批量停止选中任务?",
+    "admin.campaigns.bulkStopDialog.desc": "将逐个停止选中的 {n} 个任务;已停止或未运行的任务会计入失败。",
+    "admin.campaigns.bulkResumeDialog.title": "批量继续选中任务?",
+    "admin.campaigns.bulkResumeDialog.desc": "将逐个继续选中的 {n} 个任务;未处于暂停状态的任务会计入失败。",
 
     // components/admin-send-records.tsx
     "admin.sendrec.stateTab.all": "全部",
@@ -866,6 +893,14 @@ export const admin: Record<Locale, Record<string, string>> = {
     "admin.devices.delete.successTitle": "Device deleted",
     "admin.devices.delete.failedTitle": "Delete failed",
 
+    // admin-devices.tsx — bulk delete
+    "admin.devices.bulk.delete": "Bulk delete",
+    "admin.devices.bulk.confirm": "Confirm delete",
+    "admin.devices.bulk.resultTitle": "Bulk delete complete",
+    "admin.devices.bulk.resultDesc": "{ok} succeeded, {fail} failed",
+    "admin.devices.bulkDeleteDialog.title": "Delete selected devices?",
+    "admin.devices.bulkDeleteDialog.desc": "Deletes each of the {n} selected devices, one by one. This cannot be undone — any bound proxy will be released automatically.",
+
     // components/admin-proxies.tsx — table columns
     "admin.proxies.col.address": "Proxy address",
     "admin.proxies.col.type": "Type",
@@ -931,6 +966,14 @@ export const admin: Record<Locale, Record<string, string>> = {
     "admin.proxies.delete.confirm": "Confirm delete",
     "admin.proxies.delete.successTitle": "Proxy deleted",
     "admin.proxies.delete.failedTitle": "Delete failed",
+
+    // admin-proxies.tsx — bulk delete
+    "admin.proxies.bulk.delete": "Bulk delete",
+    "admin.proxies.bulk.confirm": "Confirm delete",
+    "admin.proxies.bulk.resultTitle": "Bulk delete complete",
+    "admin.proxies.bulk.resultDesc": "{ok} succeeded, {fail} failed",
+    "admin.proxies.bulkDeleteDialog.title": "Delete selected proxies?",
+    "admin.proxies.bulkDeleteDialog.desc": "Deletes each of the {n} selected proxies, one by one. This cannot be undone — any bound devices will be unbound automatically.",
 
     // components/admin-metrics.tsx
     "admin.metrics.loadFailedGeneric": "Load failed",
@@ -1191,6 +1234,17 @@ export const admin: Record<Locale, Record<string, string>> = {
     "admin.campaigns.cancel": "Cancel",
     "admin.campaigns.processingButton": "Processing…",
     "admin.campaigns.confirmStopButton": "Confirm stop",
+
+    // admin-campaigns.tsx — bulk stop/resume
+    "admin.campaigns.bulk.stop": "Bulk stop",
+    "admin.campaigns.bulk.resume": "Bulk resume",
+    "admin.campaigns.bulk.confirm": "Confirm",
+    "admin.campaigns.bulk.resultTitle": "Bulk action complete",
+    "admin.campaigns.bulk.resultDesc": "{ok} succeeded, {fail} failed",
+    "admin.campaigns.bulkStopDialog.title": "Stop selected campaigns?",
+    "admin.campaigns.bulkStopDialog.desc": "Stops each of the {n} selected campaigns, one by one; already-stopped or non-running ones will count as failures.",
+    "admin.campaigns.bulkResumeDialog.title": "Resume selected campaigns?",
+    "admin.campaigns.bulkResumeDialog.desc": "Resumes each of the {n} selected campaigns, one by one; ones not currently paused will count as failures.",
 
     // components/admin-send-records.tsx
     "admin.sendrec.stateTab.all": "All",

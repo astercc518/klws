@@ -21,6 +21,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { ProDataTable, type Column } from "@/components/admin/pro-data-table";
+import { BulkActionDialog } from "@/components/admin/bulk-action-dialog";
 import { StatusBadge, type StatusTone } from "@/components/admin/status-badge";
 import { MetricCardGroup, StatCard, type Accent } from "@/components/admin/stat-card";
 import { RowAvatar } from "@/components/admin/row-avatar";
@@ -183,6 +184,8 @@ export function AdminDevices() {
   const [proxyTarget, setProxyTarget] = useState<Device | null>(null);
   const [editTarget, setEditTarget] = useState<Device | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<Device | null>(null);
+  const [sel, setSel] = useState<Set<string | number>>(new Set());
+  const [bulkDeleteKeys, setBulkDeleteKeys] = useState<Array<string | number> | null>(null);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -227,6 +230,35 @@ export function AdminDevices() {
   useEffect(() => {
     loadProxies();
   }, [loadProxies]);
+
+  // Bulk delete loops the same single-item DELETE the row action uses; a
+  // device tied to an active proxy binding or campaign traffic can still
+  // fail server-side, so each item's outcome is reported honestly rather
+  // than pre-filtered client-side.
+  async function submitBulkDelete() {
+    if (!bulkDeleteKeys) return;
+    let okCount = 0;
+    let failCount = 0;
+    for (const k of bulkDeleteKeys) {
+      try {
+        await api.delete(`/admin/resources/devices/${k}`);
+        okCount++;
+      } catch {
+        failCount++;
+      }
+    }
+    const desc = t("admin.devices.bulk.resultDesc")
+      .replace("{ok}", () => String(okCount))
+      .replace("{fail}", () => String(failCount));
+    if (failCount === 0) {
+      toast.success(t("admin.devices.bulk.resultTitle"), { description: desc });
+    } else {
+      toast.error(t("admin.devices.bulk.resultTitle"), { description: desc });
+    }
+    setBulkDeleteKeys(null);
+    setSel(new Set());
+    refresh();
+  }
 
   const columns: Column<Device>[] = [
     {
@@ -334,6 +366,21 @@ export function AdminDevices() {
         }}
         search={{ placeholder: t("admin.devices.searchPlaceholder"), accessor: () => "" }}
         emptyState={t("admin.devices.emptyState")}
+        selection={{
+          selected: sel,
+          onChange: setSel,
+          actions: (keys) => (
+            <Button
+              variant="outline"
+              size="sm"
+              className="gap-1.5 text-destructive hover:text-destructive"
+              onClick={() => setBulkDeleteKeys(keys)}
+            >
+              <Trash2 className="size-3.5" />
+              {t("admin.devices.bulk.delete")}
+            </Button>
+          ),
+        }}
         toolbar={
           <div className="flex items-center gap-2">
             <select
@@ -401,6 +448,15 @@ export function AdminDevices() {
       />
       <EditDeviceDialog target={editTarget} onClose={() => setEditTarget(null)} onDone={load} />
       <DeleteDeviceDialog target={deleteTarget} onClose={() => setDeleteTarget(null)} onDone={load} />
+      <BulkActionDialog
+        open={bulkDeleteKeys != null}
+        onOpenChange={(o) => !o && setBulkDeleteKeys(null)}
+        title={t("admin.devices.bulkDeleteDialog.title")}
+        description={t("admin.devices.bulkDeleteDialog.desc").replace("{n}", () => String(bulkDeleteKeys?.length ?? 0))}
+        confirmLabel={t("admin.devices.bulk.confirm")}
+        destructive
+        onConfirm={submitBulkDelete}
+      />
     </>
   );
 }

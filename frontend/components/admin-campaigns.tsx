@@ -7,6 +7,7 @@ import { api, ApiError } from "@/lib/api";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { ProDataTable, type Column } from "@/components/admin/pro-data-table";
+import { BulkActionDialog } from "@/components/admin/bulk-action-dialog";
 import { StatCard, MetricCardGroup } from "@/components/admin/stat-card";
 import { CampaignDetailSheet } from "@/components/campaign-detail-sheet";
 import {
@@ -72,6 +73,9 @@ export function AdminCampaigns() {
   const [busy, setBusy] = useState(false);
   const [resumingId, setResumingId] = useState<number | null>(null);
   const [detailId, setDetailId] = useState<number | null>(null);
+  const [sel, setSel] = useState<Set<string | number>>(new Set());
+  const [bulkStopKeys, setBulkStopKeys] = useState<Array<string | number> | null>(null);
+  const [bulkResumeKeys, setBulkResumeKeys] = useState<Array<string | number> | null>(null);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -133,6 +137,63 @@ export function AdminCampaigns() {
     } finally {
       setResumingId(null);
     }
+  }
+
+  // Bulk stop/resume loop the same single-item endpoints the row actions use.
+  // No client-side state prefilter: the table is server-paginated, so `rows`
+  // only ever holds the current page and can't tell whether a selection made
+  // on an earlier page is still 'running'/'paused'. The server already
+  // enforces state (409 on a no-op stop/resume) and each item's outcome is
+  // reported honestly in the aggregated toast, so a stale selection just
+  // shows up as a failure rather than silently doing nothing.
+  async function submitBulkStop() {
+    if (!bulkStopKeys) return;
+    let okCount = 0;
+    let failCount = 0;
+    for (const k of bulkStopKeys) {
+      try {
+        await api.post(`/admin/campaigns/${k}/stop`);
+        okCount++;
+      } catch {
+        failCount++;
+      }
+    }
+    const desc = t("admin.campaigns.bulk.resultDesc")
+      .replace("{ok}", () => String(okCount))
+      .replace("{fail}", () => String(failCount));
+    if (failCount === 0) {
+      toast.success(t("admin.campaigns.bulk.resultTitle"), { description: desc });
+    } else {
+      toast.error(t("admin.campaigns.bulk.resultTitle"), { description: desc });
+    }
+    setBulkStopKeys(null);
+    setSel(new Set());
+    load();
+  }
+
+  async function submitBulkResume() {
+    if (!bulkResumeKeys) return;
+    let okCount = 0;
+    let failCount = 0;
+    for (const k of bulkResumeKeys) {
+      try {
+        await api.post(`/admin/campaigns/${k}/resume`);
+        okCount++;
+      } catch {
+        failCount++;
+      }
+    }
+    const desc = t("admin.campaigns.bulk.resultDesc")
+      .replace("{ok}", () => String(okCount))
+      .replace("{fail}", () => String(failCount));
+    if (failCount === 0) {
+      toast.success(t("admin.campaigns.bulk.resultTitle"), { description: desc });
+    } else {
+      toast.error(t("admin.campaigns.bulk.resultTitle"), { description: desc });
+    }
+    setBulkResumeKeys(null);
+    setSel(new Set());
+    load();
   }
 
   const tenantLabel = (c: Campaign) => c.tenant_name ?? `#${c.tenant_id}`;
@@ -252,6 +313,27 @@ export function AdminCampaigns() {
           },
           loading,
         }}
+        selection={{
+          selected: sel,
+          onChange: setSel,
+          actions: (keys) => (
+            <>
+              <Button variant="outline" size="sm" className="gap-1.5" onClick={() => setBulkResumeKeys(keys)}>
+                <Play className="size-3.5" />
+                {t("admin.campaigns.bulk.resume")}
+              </Button>
+              <Button
+                variant="outline"
+                size="sm"
+                className="gap-1.5 text-destructive hover:text-destructive"
+                onClick={() => setBulkStopKeys(keys)}
+              >
+                <Ban className="size-3.5" />
+                {t("admin.campaigns.bulk.stop")}
+              </Button>
+            </>
+          ),
+        }}
         rowActions={(c) =>
           c.state === "paused" ? (
             <Button variant="ghost" size="sm" className="gap-1.5" disabled={resumingId === c.id} onClick={() => resume(c)}>
@@ -295,6 +377,24 @@ export function AdminCampaigns() {
       </Dialog>
 
       <CampaignDetailSheet campaignId={detailId} apiBase="/admin/campaigns" onClose={() => setDetailId(null)} />
+
+      <BulkActionDialog
+        open={bulkStopKeys != null}
+        onOpenChange={(o) => !o && setBulkStopKeys(null)}
+        title={t("admin.campaigns.bulkStopDialog.title")}
+        description={t("admin.campaigns.bulkStopDialog.desc").replace("{n}", () => String(bulkStopKeys?.length ?? 0))}
+        confirmLabel={t("admin.campaigns.bulk.confirm")}
+        destructive
+        onConfirm={submitBulkStop}
+      />
+      <BulkActionDialog
+        open={bulkResumeKeys != null}
+        onOpenChange={(o) => !o && setBulkResumeKeys(null)}
+        title={t("admin.campaigns.bulkResumeDialog.title")}
+        description={t("admin.campaigns.bulkResumeDialog.desc").replace("{n}", () => String(bulkResumeKeys?.length ?? 0))}
+        confirmLabel={t("admin.campaigns.bulk.confirm")}
+        onConfirm={submitBulkResume}
+      />
     </div>
   );
 }

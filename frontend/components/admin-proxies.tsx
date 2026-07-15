@@ -8,6 +8,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { ProDataTable, type Column } from "@/components/admin/pro-data-table";
+import { BulkActionDialog } from "@/components/admin/bulk-action-dialog";
 import { StatusBadge } from "@/components/admin/status-badge";
 import { MetricCardGroup, StatCard } from "@/components/admin/stat-card";
 import { RowAvatar } from "@/components/admin/row-avatar";
@@ -71,6 +72,8 @@ export function AdminProxies() {
   const [loading, setLoading] = useState(false);
   const [editTarget, setEditTarget] = useState<Proxy | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<Proxy | null>(null);
+  const [sel, setSel] = useState<Set<string | number>>(new Set());
+  const [bulkDeleteKeys, setBulkDeleteKeys] = useState<Array<string | number> | null>(null);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -97,6 +100,34 @@ export function AdminProxies() {
   useEffect(() => {
     load();
   }, [load]);
+
+  // Bulk delete loops the same single-item DELETE the row action uses; a
+  // proxy still bound to devices can fail server-side, so each item's
+  // outcome is reported honestly rather than pre-filtered client-side.
+  async function submitBulkDelete() {
+    if (!bulkDeleteKeys) return;
+    let okCount = 0;
+    let failCount = 0;
+    for (const k of bulkDeleteKeys) {
+      try {
+        await api.delete(`/admin/resources/proxies/${k}`);
+        okCount++;
+      } catch {
+        failCount++;
+      }
+    }
+    const desc = t("admin.proxies.bulk.resultDesc")
+      .replace("{ok}", () => String(okCount))
+      .replace("{fail}", () => String(failCount));
+    if (failCount === 0) {
+      toast.success(t("admin.proxies.bulk.resultTitle"), { description: desc });
+    } else {
+      toast.error(t("admin.proxies.bulk.resultTitle"), { description: desc });
+    }
+    setBulkDeleteKeys(null);
+    setSel(new Set());
+    load();
+  }
 
   const columns: Column<Proxy>[] = [
     {
@@ -200,6 +231,21 @@ export function AdminProxies() {
           loading,
         }}
         search={{ placeholder: t("admin.proxies.searchPlaceholder"), accessor: () => "" }}
+        selection={{
+          selected: sel,
+          onChange: setSel,
+          actions: (keys) => (
+            <Button
+              variant="outline"
+              size="sm"
+              className="gap-1.5 text-destructive hover:text-destructive"
+              onClick={() => setBulkDeleteKeys(keys)}
+            >
+              <Trash2 className="size-3.5" />
+              {t("admin.proxies.bulk.delete")}
+            </Button>
+          ),
+        }}
         toolbar={
           <div className="flex items-center gap-2">
             <select
@@ -238,6 +284,15 @@ export function AdminProxies() {
 
       <EditProxyDialog target={editTarget} onClose={() => setEditTarget(null)} onDone={load} />
       <DeleteProxyDialog target={deleteTarget} onClose={() => setDeleteTarget(null)} onDone={load} />
+      <BulkActionDialog
+        open={bulkDeleteKeys != null}
+        onOpenChange={(o) => !o && setBulkDeleteKeys(null)}
+        title={t("admin.proxies.bulkDeleteDialog.title")}
+        description={t("admin.proxies.bulkDeleteDialog.desc").replace("{n}", () => String(bulkDeleteKeys?.length ?? 0))}
+        confirmLabel={t("admin.proxies.bulk.confirm")}
+        destructive
+        onConfirm={submitBulkDelete}
+      />
     </>
   );
 }
