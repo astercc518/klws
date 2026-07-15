@@ -23,6 +23,7 @@ import (
 	"github.com/acme/wadist/internal/pricing"
 	"github.com/acme/wadist/internal/receipt"
 	"github.com/acme/wadist/internal/store"
+	"github.com/acme/wadist/internal/warmup"
 )
 
 func main() {
@@ -143,6 +144,13 @@ func run(ctx context.Context) (*api.Server, func(), error) {
 		Audit:    audit.NewAuditWriter(mgr.SystemPool()),
 		Receipt:  receipt.New(mgr.SystemPool()),
 		QRCache:  qrCache,
+		// Warmup: account warmup service (webhook auto-enroll + admin API).
+		// SystemPool required — warmup tables REVOKE app_tenant (see
+		// internal/warmup/store.go), so the tenant-RLS pool cannot read them.
+		Warmup: warmup.NewService(
+			warmup.NewStore(mgr.SystemPool()),
+			func() time.Time { return time.Now() },
+		),
 		// Super/bootstrap admins hidden from the console + write-protected (403).
 		ProtectedAdmins: api.ParseProtectedAdmins(os.Getenv("WADIST_PROTECTED_ADMINS")),
 		SessionKey:      webCfg.SessionKey,               // same HMAC key as the old console cookie
