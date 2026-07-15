@@ -306,6 +306,22 @@ export const admin: Record<Locale, Record<string, string>> = {
     "admin.users.dlg.assignFailedTitle": "指派失败",
     "admin.users.dlg.confirmAssign": "确认指派",
 
+    // components/admin-users-table.tsx — bulk actions (BulkActionDialog)
+    "admin.users.bulk.suspend": "批量挂起",
+    "admin.users.bulk.resume": "批量恢复",
+    "admin.users.bulk.assignSales": "批量指派销售",
+    "admin.users.bulk.confirm": "确认执行",
+    "admin.users.bulk.resultTitle": "批量操作完成",
+    "admin.users.bulk.resultDesc": "成功 {ok} 个,失败 {fail} 个",
+    "admin.users.bulk.skippedNotice": "另有 {skipped} 个客户没有关联租户,已跳过。",
+    "admin.users.bulk.assignNoSalesSelected": "请先选择销售账号",
+    "admin.users.bulkSuspendDialog.title": "批量挂起选中客户?",
+    "admin.users.bulkSuspendDialog.desc": "将逐个挂起选中的 {n} 个客户。",
+    "admin.users.bulkResumeDialog.title": "批量恢复选中客户?",
+    "admin.users.bulkResumeDialog.desc": "将逐个恢复选中的 {n} 个客户。",
+    "admin.users.bulkAssignDialog.title": "批量指派销售?",
+    "admin.users.bulkAssignDialog.desc": "将为选中的 {n} 个客户指派同一位销售。",
+
     // components/admin-billing.tsx
     "admin.billing.loadFailed": "加载失败",
     "admin.billing.loadFailedPrefix": "加载失败:",
@@ -1051,6 +1067,22 @@ export const admin: Record<Locale, Record<string, string>> = {
     "admin.users.dlg.assignedTitle": "Sales rep assigned",
     "admin.users.dlg.assignFailedTitle": "Assignment failed",
     "admin.users.dlg.confirmAssign": "Confirm assign",
+
+    // components/admin-users-table.tsx — bulk actions (BulkActionDialog)
+    "admin.users.bulk.suspend": "Bulk suspend",
+    "admin.users.bulk.resume": "Bulk resume",
+    "admin.users.bulk.assignSales": "Bulk assign sales",
+    "admin.users.bulk.confirm": "Confirm",
+    "admin.users.bulk.resultTitle": "Bulk action complete",
+    "admin.users.bulk.resultDesc": "{ok} succeeded, {fail} failed",
+    "admin.users.bulk.skippedNotice": "{skipped} more customers have no linked tenant and were skipped.",
+    "admin.users.bulk.assignNoSalesSelected": "Pick a sales rep first",
+    "admin.users.bulkSuspendDialog.title": "Suspend selected customers?",
+    "admin.users.bulkSuspendDialog.desc": "Suspends each of the {n} selected customers, one by one.",
+    "admin.users.bulkResumeDialog.title": "Resume selected customers?",
+    "admin.users.bulkResumeDialog.desc": "Resumes each of the {n} selected customers, one by one.",
+    "admin.users.bulkAssignDialog.title": "Assign sales rep in bulk?",
+    "admin.users.bulkAssignDialog.desc": "Assigns the same sales rep to each of the {n} selected customers.",
 
     // components/admin-billing.tsx
     "admin.billing.loadFailed": "Load failed",

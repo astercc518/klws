@@ -22,7 +22,8 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import { Card } from "@/components/ui/card";
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import { ProDataTable, type Column } from "@/components/admin/pro-data-table";
+import { BulkActionDialog } from "@/components/admin/bulk-action-dialog";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -99,6 +100,13 @@ export function AdminUsersTable() {
   const [assignTarget, setAssignTarget] = useState<AssignActionTarget | null>(null);
   const [ledgerTarget, setLedgerTarget] = useState<TenantActionTarget | null>(null);
   const [statusBusyId, setStatusBusyId] = useState<number | null>(null);
+  const [sel, setSel] = useState<Set<string | number>>(new Set());
+  const [bulkStatusTarget, setBulkStatusTarget] = useState<{
+    status: "suspended" | "active";
+    keys: Array<string | number>;
+  } | null>(null);
+  const [bulkAssignKeys, setBulkAssignKeys] = useState<Array<string | number> | null>(null);
+  const [bulkSalesId, setBulkSalesId] = useState("");
 
   const load = useCallback(async () => {
     try {
@@ -165,6 +173,78 @@ export function AdminUsersTable() {
     }
   }
 
+  // Bulk actions operate on the customer's tenant (status/assignment are
+  // tenant-scoped, not user-scoped — see toggleTenantStatus/AssignSalesDialog
+  // above). Selected rows without a role=customer + tenant_id (sales/admin
+  // rows, or an orphaned customer with no tenant) are silently skipped; the
+  // dialog description reports the skipped count so it isn't a silent no-op.
+  function eligibleTenantTargets(keys: Array<string | number>): { tenantId: number; label: string }[] {
+    if (!users) return [];
+    const byId = new Map(users.map((u) => [u.id, u]));
+    const out: { tenantId: number; label: string }[] = [];
+    for (const k of keys) {
+      const u = byId.get(Number(k));
+      if (u && u.role === "customer" && u.tenant_id != null) out.push({ tenantId: u.tenant_id, label: u.email });
+    }
+    return out;
+  }
+
+  async function submitBulkStatus() {
+    if (!bulkStatusTarget) return;
+    const targets = eligibleTenantTargets(bulkStatusTarget.keys);
+    let okCount = 0;
+    let failCount = 0;
+    for (const tgt of targets) {
+      try {
+        await api.post(`/admin/tenants/${tgt.tenantId}/status`, { status: bulkStatusTarget.status });
+        okCount++;
+      } catch {
+        failCount++;
+      }
+    }
+    const desc = t("admin.users.bulk.resultDesc")
+      .replace("{ok}", () => String(okCount))
+      .replace("{fail}", () => String(failCount));
+    if (failCount === 0) {
+      toast.success(t("admin.users.bulk.resultTitle"), { description: desc });
+    } else {
+      toast.error(t("admin.users.bulk.resultTitle"), { description: desc });
+    }
+    setBulkStatusTarget(null);
+    setSel(new Set());
+    load();
+  }
+
+  async function submitBulkAssign() {
+    if (!bulkAssignKeys) return;
+    if (bulkSalesId === "") {
+      toast.error(t("admin.users.bulk.assignNoSalesSelected"));
+      return;
+    }
+    const targets = eligibleTenantTargets(bulkAssignKeys);
+    let okCount = 0;
+    let failCount = 0;
+    for (const tgt of targets) {
+      try {
+        await api.post(`/admin/sales/${tgt.tenantId}/assign`, { sales_user_id: Number(bulkSalesId) });
+        okCount++;
+      } catch {
+        failCount++;
+      }
+    }
+    const desc = t("admin.users.bulk.resultDesc")
+      .replace("{ok}", () => String(okCount))
+      .replace("{fail}", () => String(failCount));
+    if (failCount === 0) {
+      toast.success(t("admin.users.bulk.resultTitle"), { description: desc });
+    } else {
+      toast.error(t("admin.users.bulk.resultTitle"), { description: desc });
+    }
+    setBulkAssignKeys(null);
+    setSel(new Set());
+    load();
+  }
+
   const [roleTab, setRoleTab] = useState<"" | Role>("");
 
   // tenant id → tenant (wallet/status/sales-owner/commission), for the
@@ -205,6 +285,191 @@ export function AdminUsersTable() {
   const shown = roleTab ? visible.filter((u) => u.role === roleTab) : visible;
   const salesUsers = users.filter((u) => u.role === "sales");
 
+  const columns: Column<User>[] = [
+    { key: "account", header: t("admin.users.accountLabel"), cell: (u) => <span className="font-mono text-sm">{u.email}</span> },
+    {
+      key: "role",
+      header: t("admin.users.roleLabel"),
+      cell: (u) => <Badge variant={roleVariant[u.role]}>{u.role}</Badge>,
+    },
+    {
+      key: "scale",
+      header: t("admin.users.col.affiliationScale"),
+      cell: (u) => {
+        const tenant = u.tenant_id != null ? tenantMap.get(u.tenant_id) : undefined;
+        const commission = commissionMap.get(u.id);
+        return (
+          <span className="text-sm text-muted-foreground">
+            {u.role === "sales"
+              ? t("admin.users.ownedTenants").replace(
+                  "{n}",
+                  () => String(commission?.tenant_count ?? ownedCount.get(u.id) ?? 0),
+                )
+              : tenant
+                ? tenant.name
+                : u.tenant_id != null
+                  ? `#${u.tenant_id}`
+                  : "—"}
+          </span>
+        );
+      },
+    },
+    {
+      key: "balance",
+      header: t("admin.users.col.balanceCommission"),
+      cell: (u) => {
+        const tenant = u.tenant_id != null ? tenantMap.get(u.tenant_id) : undefined;
+        const commission = commissionMap.get(u.id);
+        return (
+          <span className="text-sm">
+            {u.role === "sales"
+              ? t("admin.users.monthlyCommission").replace("{amount}", () => usd(commission?.commission ?? 0))
+              : tenant
+                ? usd(tenant.balance)
+                : "—"}
+          </span>
+        );
+      },
+    },
+    {
+      key: "status",
+      header: t("admin.users.col.status"),
+      cell: (u) => {
+        const tenant = u.tenant_id != null ? tenantMap.get(u.tenant_id) : undefined;
+        return (
+          <div className="flex flex-wrap gap-1">
+            {u.disabled ? (
+              <Badge variant="destructive">{t("admin.users.badge.disabled")}</Badge>
+            ) : (
+              <Badge variant="secondary">{t("admin.users.badge.enabled")}</Badge>
+            )}
+            {u.role === "customer" && tenant?.status === "suspended" && (
+              <Badge variant="outline">{t("admin.users.badge.suspended")}</Badge>
+            )}
+          </div>
+        );
+      },
+    },
+  ];
+
+  function renderRowActions(u: User) {
+    const isCustomer = u.role === "customer";
+    const tenant = u.tenant_id != null ? tenantMap.get(u.tenant_id) : undefined;
+    const hasTenant = u.tenant_id != null;
+    return (
+      <DropdownMenu>
+        <DropdownMenuTrigger
+          render={<Button variant="ghost" size="icon-sm" aria-label={t("admin.users.actionsAria")} />}
+        >
+          <MoreHorizontal className="size-4" />
+        </DropdownMenuTrigger>
+        <DropdownMenuContent align="end">
+          {isCustomer && (
+            <>
+              <DropdownMenuItem
+                disabled={!hasTenant}
+                onClick={() =>
+                  u.tenant_id != null &&
+                  setTopupTarget({ tenantId: u.tenant_id, label: u.email })
+                }
+              >
+                <Wallet className="size-4" />
+                {t("admin.users.action.topup")}
+              </DropdownMenuItem>
+              <DropdownMenuItem
+                disabled={!hasTenant}
+                onClick={() =>
+                  u.tenant_id != null &&
+                  setLedgerTarget({ tenantId: u.tenant_id, label: u.email })
+                }
+              >
+                <ScrollText className="size-4" />
+                {t("admin.users.action.viewLedger")}
+              </DropdownMenuItem>
+              <DropdownMenuItem
+                disabled={!hasTenant}
+                onClick={() =>
+                  u.tenant_id != null &&
+                  setPricingTarget({ tenantId: u.tenant_id, label: u.email })
+                }
+              >
+                <Tag className="size-4" />
+                {t("admin.users.action.pricing")}
+              </DropdownMenuItem>
+              <DropdownMenuItem
+                disabled={!hasTenant}
+                onClick={() =>
+                  u.tenant_id != null &&
+                  setAssignTarget({
+                    tenantId: u.tenant_id,
+                    label: u.email,
+                    currentSalesId: tenant?.sales_owner_id ?? null,
+                  })
+                }
+              >
+                <UserCog className="size-4" />
+                {t("admin.users.action.assignSales")}
+              </DropdownMenuItem>
+              <DropdownMenuItem
+                disabled={!hasTenant || statusBusyId === u.tenant_id}
+                onClick={() => toggleTenantStatus(u, tenant)}
+              >
+                {tenant?.status === "suspended" ? (
+                  <>
+                    <Unlock className="size-4" />
+                    {t("admin.users.action.resume")}
+                  </>
+                ) : (
+                  <>
+                    <Lock className="size-4" />
+                    {t("admin.users.action.suspend")}
+                  </>
+                )}
+              </DropdownMenuItem>
+              <DropdownMenuSeparator />
+            </>
+          )}
+          <DropdownMenuItem onClick={() => quickLogin(u)}>
+            <LogIn className="size-4" />
+            {t("admin.users.action.quickLogin")}
+          </DropdownMenuItem>
+          <DropdownMenuItem onClick={() => setEditTarget(u)}>
+            <Pencil className="size-4" />
+            {t("admin.users.action.edit")}
+          </DropdownMenuItem>
+          <DropdownMenuItem onClick={() => toggleDisabled(u)}>
+            {u.disabled ? <CircleCheck className="size-4" /> : <Ban className="size-4" />}
+            {u.disabled ? t("admin.users.action.enableAccount") : t("admin.users.action.disableAccount")}
+          </DropdownMenuItem>
+          <DropdownMenuItem onClick={() => setPwTarget(u)}>
+            <KeyRound className="size-4" />
+            {t("admin.users.action.resetPassword")}
+          </DropdownMenuItem>
+        </DropdownMenuContent>
+      </DropdownMenu>
+    );
+  }
+
+  // Bulk dialog description text — recomputed from current selection so the
+  // "N customers, M skipped" counts stay accurate while the dialog is open.
+  const bulkStatusTargets = bulkStatusTarget ? eligibleTenantTargets(bulkStatusTarget.keys) : [];
+  const bulkStatusSkipped = bulkStatusTarget ? bulkStatusTarget.keys.length - bulkStatusTargets.length : 0;
+  const bulkStatusDescKey =
+    bulkStatusTarget?.status === "suspended" ? "admin.users.bulkSuspendDialog.desc" : "admin.users.bulkResumeDialog.desc";
+  const bulkStatusDescription =
+    t(bulkStatusDescKey).replace("{n}", () => String(bulkStatusTargets.length)) +
+    (bulkStatusSkipped > 0
+      ? " " + t("admin.users.bulk.skippedNotice").replace("{skipped}", () => String(bulkStatusSkipped))
+      : "");
+
+  const bulkAssignTargets = bulkAssignKeys ? eligibleTenantTargets(bulkAssignKeys) : [];
+  const bulkAssignSkipped = bulkAssignKeys ? bulkAssignKeys.length - bulkAssignTargets.length : 0;
+  const bulkAssignDescription =
+    t("admin.users.bulkAssignDialog.desc").replace("{n}", () => String(bulkAssignTargets.length)) +
+    (bulkAssignSkipped > 0
+      ? " " + t("admin.users.bulk.skippedNotice").replace("{skipped}", () => String(bulkAssignSkipped))
+      : "");
+
   return (
     <div className="space-y-4">
       <div className="flex flex-wrap items-center justify-between gap-2">
@@ -225,164 +490,98 @@ export function AdminUsersTable() {
         <CreateUserDialog tenants={tenants} onDone={load} />
       </div>
 
-      <Card className="overflow-hidden p-0">
-        <Table>
-          <TableHeader>
-            <TableRow className="bg-muted/40">
-              <TableHead>{t("admin.users.accountLabel")}</TableHead>
-              <TableHead>{t("admin.users.roleLabel")}</TableHead>
-              <TableHead>{t("admin.users.col.affiliationScale")}</TableHead>
-              <TableHead>{t("admin.users.col.balanceCommission")}</TableHead>
-              <TableHead>{t("admin.users.col.status")}</TableHead>
-              <TableHead className="w-12" />
-            </TableRow>
-          </TableHeader>
-          <TableBody>
-            {shown.map((u) => {
-              const isCustomer = u.role === "customer";
-              const isSales = u.role === "sales";
-              const tenant = u.tenant_id != null ? tenantMap.get(u.tenant_id) : undefined;
-              const commission = commissionMap.get(u.id);
-              const hasTenant = u.tenant_id != null;
+      <ProDataTable
+        data={shown}
+        columns={columns}
+        getRowKey={(u) => u.id}
+        pageSize={50}
+        rowActions={renderRowActions}
+        selection={{
+          selected: sel,
+          onChange: setSel,
+          actions: (keys) => (
+            <>
+              <Button
+                variant="outline"
+                size="sm"
+                className="gap-1.5"
+                onClick={() => setBulkStatusTarget({ status: "suspended", keys })}
+              >
+                <Lock className="size-3.5" />
+                {t("admin.users.bulk.suspend")}
+              </Button>
+              <Button
+                variant="outline"
+                size="sm"
+                className="gap-1.5"
+                onClick={() => setBulkStatusTarget({ status: "active", keys })}
+              >
+                <Unlock className="size-3.5" />
+                {t("admin.users.bulk.resume")}
+              </Button>
+              <Button
+                variant="outline"
+                size="sm"
+                className="gap-1.5"
+                onClick={() => {
+                  setBulkSalesId("");
+                  setBulkAssignKeys(keys);
+                }}
+              >
+                <UserCog className="size-3.5" />
+                {t("admin.users.bulk.assignSales")}
+              </Button>
+            </>
+          ),
+        }}
+      />
 
-              return (
-                <TableRow key={u.id}>
-                  <TableCell className="font-mono text-sm">{u.email}</TableCell>
-                  <TableCell>
-                    <Badge variant={roleVariant[u.role]}>{u.role}</Badge>
-                  </TableCell>
-                  <TableCell className="text-sm text-muted-foreground">
-                    {isSales
-                      ? t("admin.users.ownedTenants").replace(
-                          "{n}",
-                          () => String(commission?.tenant_count ?? ownedCount.get(u.id) ?? 0),
-                        )
-                      : tenant
-                        ? tenant.name
-                        : hasTenant
-                          ? `#${u.tenant_id}`
-                          : "—"}
-                  </TableCell>
-                  <TableCell className="text-sm">
-                    {isSales
-                      ? t("admin.users.monthlyCommission").replace(
-                          "{amount}",
-                          () => usd(commission?.commission ?? 0),
-                        )
-                      : tenant
-                        ? usd(tenant.balance)
-                        : "—"}
-                  </TableCell>
-                  <TableCell>
-                    <div className="flex flex-wrap gap-1">
-                      {u.disabled ? (
-                        <Badge variant="destructive">{t("admin.users.badge.disabled")}</Badge>
-                      ) : (
-                        <Badge variant="secondary">{t("admin.users.badge.enabled")}</Badge>
-                      )}
-                      {isCustomer && tenant?.status === "suspended" && (
-                        <Badge variant="outline">{t("admin.users.badge.suspended")}</Badge>
-                      )}
-                    </div>
-                  </TableCell>
-                  <TableCell>
-                    <DropdownMenu>
-                      <DropdownMenuTrigger
-                        render={<Button variant="ghost" size="icon-sm" aria-label={t("admin.users.actionsAria")} />}
-                      >
-                        <MoreHorizontal className="size-4" />
-                      </DropdownMenuTrigger>
-                      <DropdownMenuContent align="end">
-                        {isCustomer && (
-                          <>
-                            <DropdownMenuItem
-                              disabled={!hasTenant}
-                              onClick={() =>
-                                u.tenant_id != null &&
-                                setTopupTarget({ tenantId: u.tenant_id, label: u.email })
-                              }
-                            >
-                              <Wallet className="size-4" />
-                              {t("admin.users.action.topup")}
-                            </DropdownMenuItem>
-                            <DropdownMenuItem
-                              disabled={!hasTenant}
-                              onClick={() =>
-                                u.tenant_id != null &&
-                                setLedgerTarget({ tenantId: u.tenant_id, label: u.email })
-                              }
-                            >
-                              <ScrollText className="size-4" />
-                              {t("admin.users.action.viewLedger")}
-                            </DropdownMenuItem>
-                            <DropdownMenuItem
-                              disabled={!hasTenant}
-                              onClick={() =>
-                                u.tenant_id != null &&
-                                setPricingTarget({ tenantId: u.tenant_id, label: u.email })
-                              }
-                            >
-                              <Tag className="size-4" />
-                              {t("admin.users.action.pricing")}
-                            </DropdownMenuItem>
-                            <DropdownMenuItem
-                              disabled={!hasTenant}
-                              onClick={() =>
-                                u.tenant_id != null &&
-                                setAssignTarget({
-                                  tenantId: u.tenant_id,
-                                  label: u.email,
-                                  currentSalesId: tenant?.sales_owner_id ?? null,
-                                })
-                              }
-                            >
-                              <UserCog className="size-4" />
-                              {t("admin.users.action.assignSales")}
-                            </DropdownMenuItem>
-                            <DropdownMenuItem
-                              disabled={!hasTenant || statusBusyId === u.tenant_id}
-                              onClick={() => toggleTenantStatus(u, tenant)}
-                            >
-                              {tenant?.status === "suspended" ? (
-                                <>
-                                  <Unlock className="size-4" />
-                                  {t("admin.users.action.resume")}
-                                </>
-                              ) : (
-                                <>
-                                  <Lock className="size-4" />
-                                  {t("admin.users.action.suspend")}
-                                </>
-                              )}
-                            </DropdownMenuItem>
-                            <DropdownMenuSeparator />
-                          </>
-                        )}
-                        <DropdownMenuItem onClick={() => quickLogin(u)}>
-                          <LogIn className="size-4" />
-                          {t("admin.users.action.quickLogin")}
-                        </DropdownMenuItem>
-                        <DropdownMenuItem onClick={() => setEditTarget(u)}>
-                          <Pencil className="size-4" />
-                          {t("admin.users.action.edit")}
-                        </DropdownMenuItem>
-                        <DropdownMenuItem onClick={() => toggleDisabled(u)}>
-                          {u.disabled ? <CircleCheck className="size-4" /> : <Ban className="size-4" />}
-                          {u.disabled ? t("admin.users.action.enableAccount") : t("admin.users.action.disableAccount")}
-                        </DropdownMenuItem>
-                        <DropdownMenuItem onClick={() => setPwTarget(u)}>
-                          <KeyRound className="size-4" />
-                          {t("admin.users.action.resetPassword")}
-                        </DropdownMenuItem>
-                      </DropdownMenuContent>
-                    </DropdownMenu>
-                  </TableCell>
-                </TableRow>
-              );
-            })}
-          </TableBody>
-        </Table>
-      </Card>
+      <BulkActionDialog
+        open={bulkStatusTarget != null}
+        onOpenChange={(o) => !o && setBulkStatusTarget(null)}
+        title={
+          bulkStatusTarget?.status === "suspended"
+            ? t("admin.users.bulkSuspendDialog.title")
+            : t("admin.users.bulkResumeDialog.title")
+        }
+        description={bulkStatusDescription}
+        confirmLabel={t("admin.users.bulk.confirm")}
+        destructive={bulkStatusTarget?.status === "suspended"}
+        onConfirm={submitBulkStatus}
+      />
+      <BulkActionDialog
+        open={bulkAssignKeys != null}
+        onOpenChange={(o) => !o && setBulkAssignKeys(null)}
+        title={t("admin.users.bulkAssignDialog.title")}
+        description={bulkAssignDescription}
+        confirmLabel={t("admin.users.bulk.confirm")}
+        onConfirm={submitBulkAssign}
+      >
+        <div className="space-y-2">
+          <label htmlFor="bulk-assign-sales" className="text-sm font-medium">
+            {t("admin.users.dlg.salesAccountLabel")}
+          </label>
+          {salesUsers.length === 0 ? (
+            <p className="text-sm text-muted-foreground">{t("admin.users.dlg.noSalesUsers")}</p>
+          ) : (
+            <select
+              id="bulk-assign-sales"
+              value={bulkSalesId}
+              onChange={(e) => setBulkSalesId(e.target.value)}
+              className="h-9 w-full rounded-lg border bg-transparent px-2.5 text-sm outline-none"
+            >
+              <option value="" disabled>
+                {t("admin.users.dlg.selectSalesPlaceholder")}
+              </option>
+              {salesUsers.map((s) => (
+                <option key={s.id} value={String(s.id)}>
+                  {s.email}
+                </option>
+              ))}
+            </select>
+          )}
+        </div>
+      </BulkActionDialog>
 
       <ResetPasswordDialog target={pwTarget} onClose={() => setPwTarget(null)} />
       <EditUserDialog

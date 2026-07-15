@@ -30,6 +30,8 @@ export const common: Record<Locale, Record<string, string>> = {
     "table.selectRow": "选择此行",
     "table.columns": "列",
     "table.filters": "筛选",
+    "table.cancel": "取消",
+    "table.processing": "处理中…",
     "sales.tagline": "名下客户管理",
 
     // components/campaign-detail-sheet.tsx (shared by admin & customer dashboard)
@@ -86,6 +88,8 @@ export const common: Record<Locale, Record<string, string>> = {
     "table.selectRow": "Select row",
     "table.columns": "Columns",
     "table.filters": "Filters",
+    "table.cancel": "Cancel",
+    "table.processing": "Processing…",
     "sales.tagline": "Managed customers",
 
     // components/campaign-detail-sheet.tsx (shared by admin & customer dashboard)
