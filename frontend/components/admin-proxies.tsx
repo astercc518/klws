@@ -68,6 +68,7 @@ export function AdminProxies() {
   const [page, setPage] = useState(0);
   const [query, setQuery] = useState("");
   const [alive, setAlive] = useState<"all" | "true" | "false">("all");
+  const [proxyType, setProxyType] = useState<"all" | "socks5" | "http" | "https">("all");
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [editTarget, setEditTarget] = useState<Proxy | null>(null);
@@ -80,6 +81,7 @@ export function AdminProxies() {
     const params = new URLSearchParams({ limit: String(PAGE_SIZE), offset: String(page * PAGE_SIZE) });
     if (query.trim()) params.set("q", query.trim());
     if (alive !== "all") params.set("alive", alive);
+    if (proxyType !== "all") params.set("proxy_type", proxyType);
     try {
       const d = await api.get<{ rows: Proxy[]; total: number; stats: ProxyStats }>(
         `/admin/resources/proxies?${params.toString()}`,
@@ -95,7 +97,7 @@ export function AdminProxies() {
     } finally {
       setLoading(false);
     }
-  }, [page, query, alive, t]);
+  }, [page, query, alive, proxyType, t]);
 
   useEffect(() => {
     load();
@@ -248,6 +250,15 @@ export function AdminProxies() {
           loading,
         }}
         search={{ placeholder: t("admin.proxies.searchPlaceholder"), accessor: () => "" }}
+        filters={{
+          content: (
+            <ProxyFilterForm
+              type={proxyType}
+              onTypeChange={(v) => { setProxyType(v); setPage(0); }}
+            />
+          ),
+          activeCount: proxyType !== "all" ? 1 : 0,
+        }}
         selection={{
           selected: sel,
           onChange: setSel,
@@ -311,6 +322,48 @@ export function AdminProxies() {
         onConfirm={submitBulkDelete}
       />
     </>
+  );
+}
+
+// Filter drawer content. proxy_type is the one dimension buildProxyWhere
+// (internal/api/resources_query.go) supports that the toolbar doesn't already
+// expose — "alive" already has its own toolbar select, so it stays there
+// rather than being duplicated here. country_code isn't a filterable column
+// on this endpoint, so it can't be offered here either.
+function ProxyFilterForm({
+  type,
+  onTypeChange,
+}: {
+  type: "all" | "socks5" | "http" | "https";
+  onTypeChange: (v: "all" | "socks5" | "http" | "https") => void;
+}) {
+  const t = useT();
+  return (
+    <div className="space-y-2">
+      <label htmlFor="px-filter-type" className="text-sm font-medium">
+        {t("admin.proxies.filter.typeLabel")}
+      </label>
+      <select
+        id="px-filter-type"
+        value={type}
+        onChange={(e) => onTypeChange(e.target.value as "all" | "socks5" | "http" | "https")}
+        className="h-9 w-full rounded-md border bg-transparent px-3 font-mono text-sm"
+      >
+        <option value="all">{t("admin.proxies.filter.allTypes")}</option>
+        <option value="socks5">socks5</option>
+        <option value="http">http</option>
+        <option value="https">https</option>
+      </select>
+      <Button
+        variant="ghost"
+        size="sm"
+        className="text-muted-foreground"
+        onClick={() => onTypeChange("all")}
+        disabled={type === "all"}
+      >
+        {t("admin.proxies.filter.reset")}
+      </Button>
+    </div>
   );
 }
 

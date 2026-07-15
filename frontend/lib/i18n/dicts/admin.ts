@@ -136,6 +136,9 @@ export const admin: Record<Locale, Record<string, string>> = {
     "admin.proxies.emptyState": "代理池为空,点击右上角批量导入。",
     "admin.proxies.filterByStatusAria": "按状态筛选",
     "admin.proxies.filter.allStatuses": "全部状态",
+    "admin.proxies.filter.typeLabel": "代理类型",
+    "admin.proxies.filter.allTypes": "全部类型",
+    "admin.proxies.filter.reset": "重置",
 
     // admin-proxies.tsx — row actions
     "admin.proxies.actionsAria": "操作",
@@ -925,6 +928,9 @@ export const admin: Record<Locale, Record<string, string>> = {
     "admin.proxies.emptyState": "The proxy pool is empty. Click bulk import in the top right.",
     "admin.proxies.filterByStatusAria": "Filter by status",
     "admin.proxies.filter.allStatuses": "All statuses",
+    "admin.proxies.filter.typeLabel": "Proxy type",
+    "admin.proxies.filter.allTypes": "All types",
+    "admin.proxies.filter.reset": "Reset",
 
     // admin-proxies.tsx — row actions
     "admin.proxies.actionsAria": "Actions",
