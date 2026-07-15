@@ -15,10 +15,30 @@
 | **V2 回执形状** | `messages.update` 嵌套 `data.key.id` + 数字 `data.ack` | **扁平** `data.keyId` / `data.fromMe` / `data.status`（无嵌套 key、无数字 ack） | 加扁平字段 + `msgID()/fromMe()` 双形状容错；`status` 串 `DELIVERY_ACK/READ/PLAYED/SERVER_ACK` 语义已对 |
 | **C2 代理绑定** | `/instance/create` body 平铺 `proxyHost/proxyPort/...` | v2 **无视 create 里的 proxy**；须独立 `POST /proxy/set/{name}` body `{enabled,host,port:字符串,protocol,username,password}`，且要**先 create 后 setProxy 再 connect** | 新 `EvoClient.SetProxy`；`evoInstance.Connect` 改 create→setProxy→connect，**fail-closed**（proxy 设失败绝不 connect 直连） |
 
-**仍需真机确认（文档不足以定，代码保持容错/保守默认，不再是"必错"阻塞项）**：
-- **V3 状态码**：`IsThrottle=429/503`、`IsPermanent=400/401/403/404/422`。403 当 permanent 仍需真机验登出/未连接的真实码（3.5）。
-- **QR 字段**：`ConnectInstance` 读 `base64`（3.1 C4），需真机确认字段名。
-- **presence 端点** P1/P2（3.4）。
+## ✅✅ 2026-07-15 真机全绿——生产端到端验证完成
+
+**用户备用号(HK 85266188676)+ 移动 socks5 代理 + 生产栈 Evolution v2.3.7,扫码接入→登录→发送→回执→计费全链路真机跑通。11 处 evo-verify 假设全部坐实:**
+
+| 项 | 真机结果 | 代码 |
+|---|---|---|
+| **V0 webhook 鉴权** | Evolution 回发 `Authorization: <配的值>`(无 Bearer),verify() 比对通过(webhook 无 401) | ✅ 已确认 |
+| **V1 本号 jid** | `connection.update` 回填 `account_instances.jid=85266188676@s.whatsapp.net`,来自 `data.wuid` | ✅ 已确认 |
+| **V2 回执** | `messages.update` 扁平 `keyId='3EB03...'/fromMe=true/status='DELIVERY_ACK'/'SERVER_ACK'`(非嵌套 key+数字 ack),remoteJid 为 `@lid` 格式 | ✅ 已确认 |
+| **QR 传递** | QR 在 `qrcode.updated` webhook 的 `data.qrcode.base64`(带 data: 前缀),非 connect 同步响应({count:N}) | ✅ FIX-1 已改(webhook 缓存)+前端轮询 |
+| **代理 C2** | `POST /proxy/set` socks5 生效(`testProxy successful`),握手成功出 QR | ✅ 已确认 |
+| **发送+计费** | campaign→sent,message_id 落库,delivered_at 有值;wallet_ledger hold(-5/+5)→settle(0/-5),US $0.05 | ✅ 闭环 |
+| **代理键** | assigned_jid=扫码账号,proxy_id 复用(FIX-3),无二次 BindProxy | ✅ 统一 |
+
+**仍未真机触发(代码保守,非阻塞)**:`IsThrottle=429/503`(限流未触发)、`IsPermanent` 的 `400/403/422`(仅 401/404 确认)、presence 端点 P1/P2(拟人化,发送不阻塞)。cluster/evolution_client.go 对应 TODO 保留。
+
+**⚠️ 运营铁律(真机暴露)**:新扫码号发第一条消息后被 WhatsApp `conflict/device_removed/401` 登出。**新号必须先养号(P0-3 warmup)+渐进 ramp,不能立即发**。P2.x 已加:实例 logout/delete 时同步 account_devices=logged_out/删行(排除已登出账号出发送候选);webhook close 自动同步留 follow-up(临时掉线 vs 登出难区分)。
+
+---
+
+**（历史）仍需真机确认（已由上表 2026-07-15 全部落地）**：
+- ~~**V3 状态码**~~：401/404 已确认;429/503/400/403/422 未触发(代码保守)。
+- ~~**QR 字段**~~：确认在 qrcode.updated webhook 的 data.qrcode.base64,非 connect 同步。
+- **presence 端点** P1/P2（3.4，拟人化,未真机验,非阻塞）。
 - **`Authorization` 头大小写/前缀**：Evolution 回发 `webhook.headers.authorization` 时的确切头名（我们读 `Authorization`，直接比对 token 无 `Bearer ` 前缀）。
 
 下面原始 runbook 保留，真机跑时重点验剩余项即可；已修的 4 处对真实 payload 起沙盒对拍一遍确认无回归。**真机沙盒见 `docs/four-phase-demo/evo-verify/`**。
