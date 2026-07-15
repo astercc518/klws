@@ -44,10 +44,15 @@ type qrSink interface {
 	Set(instance, base64 string)
 }
 
-// warmupEnroller folds a freshly-connected account into the warmup pool.
-// Optional: nil skips the warmup path (dev/tests without warmup wiring).
+// warmupEnroller folds a freshly-connected account into the warmup pool and
+// feeds it inbound reply signals. Optional: nil skips the warmup path
+// (dev/tests without warmup wiring).
 type warmupEnroller interface {
 	Enroll(ctx context.Context, jid string, tenantID int64, lane warmup.Lane) error
+	// RecordReply accumulates an inbound-reply signal for jid. No-op (nil
+	// error) when jid has no warmup profile (not pool-enrolled) — see
+	// warmup.Service.RecordReply's doc comment.
+	RecordReply(ctx context.Context, jid string) error
 }
 
 // EvolutionWebhook receives Evolution API callbacks: authenticates via the
@@ -141,6 +146,18 @@ func (h *EvolutionWebhook) handle(c *gin.Context) {
 			c.AbortWithStatus(http.StatusInternalServerError)
 			return
 		}
+	case "messages.upsert":
+		// 入站养号消息喂回复信号。messages.upsert 是 NESTED(data.key.{id,fromMe,
+		// remoteJid});fromMe=true 是自己发的,不计。收信方=本实例 jid。
+		if h.warmup == nil || w.Data.fromMe() {
+			break
+		}
+		jid, ok, err := h.inst.JIDForInstance(ctx, w.Instance)
+		if err != nil || !ok || jid == "" {
+			break
+		}
+		// RecordReply 内部对非池内 jid 静默跳过(spec §5:只有池内号计信号)。
+		_ = h.warmup.RecordReply(ctx, jid)
 	case "qrcode.updated":
 		if b64 := w.Data.qrBase64(); b64 != "" && h.qr != nil {
 			h.qr.Set(w.Instance, b64)

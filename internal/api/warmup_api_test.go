@@ -15,6 +15,15 @@ import (
 	"github.com/acme/wadist/internal/warmup"
 )
 
+// instanceNameForJID derives a deterministic instance_name from a test jid
+// ("recv@s.whatsapp.net" -> "irecv"), used both by seedWarmupAccount (to seed
+// account_instances) and by webhook tests that need to address that same
+// instance by name in a POST body.
+func instanceNameForJID(jid string) string {
+	local, _, _ := strings.Cut(jid, "@")
+	return "i" + local
+}
+
 // newWarmupTestServer wires a Server backed by a migrated pg testcontainer
 // pool plus a real warmup.Service (fixed clock), mirroring newCrudServer's
 // sysPool + Audit wiring so recordAudit/systemPool work in handlers under test.
@@ -26,21 +35,32 @@ func newWarmupTestServer(t *testing.T) (*Server, context.Context) {
 	return &Server{sysPool: pool, deps: Deps{Audit: audit.NewAuditWriter(pool), Warmup: svc}}, context.Background()
 }
 
-// seedWarmupAccount inserts an account_devices row + enrolls it into warmup
-// (mirrors the account_devices + EnrollIfAbsent seeding in
-// internal/warmup/list_test.go's TestStoreListJoinsDevice).
+// seedWarmupAccount inserts an account_devices row + an account_instances
+// routing row (instance_name -> jid, deterministically named via
+// instanceNameForJID) + enrolls it into warmup (mirrors the account_devices +
+// EnrollIfAbsent seeding in internal/warmup/list_test.go's
+// TestStoreListJoinsDevice). The account_instances row is required for
+// webhook handlers that resolve instance -> jid via JIDForInstance (e.g.
+// messages.upsert -> RecordReply, Task 14) — Task 7's original version of
+// this helper only seeded account_devices, which was enough for admin
+// list/pause/overview endpoints but not for webhook-driven flows.
 func seedWarmupAccount(t *testing.T, ctx context.Context, s *Server, jid string) {
 	t.Helper()
 	var proxyID int64
 	if err := s.systemPool().QueryRow(ctx, `INSERT INTO proxy_pool
 		(proxy_url,proxy_type,country_code,max_bindings,current_bindings)
-		VALUES ('socks5://w','socks5','US',1,1) RETURNING id`).Scan(&proxyID); err != nil {
+		VALUES ('socks5://w/'||$1,'socks5','US',1,1) RETURNING id`, jid).Scan(&proxyID); err != nil {
 		t.Fatalf("seed proxy: %v", err)
 	}
 	if _, err := s.systemPool().Exec(ctx, `INSERT INTO account_devices
 		(tenant_id,account_jid,phone_number,ban_status,proxy_id,registered_at,health_score,sent_today)
 		VALUES (1,$1,'15550001111','active',$2,now()-interval '10 days',80,3)`, jid, proxyID); err != nil {
 		t.Fatalf("seed device: %v", err)
+	}
+	if _, err := s.systemPool().Exec(ctx, `INSERT INTO account_instances
+		(instance_name,jid,tenant_id,evo_node,proxy_id,state)
+		VALUES ($1,$2,1,'default',$3,'open')`, instanceNameForJID(jid), jid, proxyID); err != nil {
+		t.Fatalf("seed instance: %v", err)
 	}
 	if err := s.deps.Warmup.Enroll(ctx, jid, 1, warmup.LaneStandard); err != nil {
 		t.Fatalf("enroll: %v", err)
