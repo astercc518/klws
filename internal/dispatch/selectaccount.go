@@ -14,11 +14,18 @@ import (
 // health-weighted via effective_quota. Country is matched through the bound proxy.
 // random() breaks near-ties to reduce multi-worker collisions.
 func (d *Dispatcher) selectAccount(ctx context.Context, tx pgx.Tx, tenantID int64, country string) (string, error) {
+	gateJoin := ""
+	if d.warmupGate {
+		// Business-send MATURE gate (Task 16, WADIST_WARMUP_GATE): only pick
+		// accounts that have graduated warmup. Accounts with no warmup_profiles
+		// row are excluded (inner join).
+		gateJoin = ` JOIN warmup_profiles wp ON wp.account_jid = a.account_jid AND wp.stage = 'MATURE'`
+	}
 	var jid string
 	err := tx.QueryRow(ctx, `
 SELECT a.account_jid
   FROM account_devices a
-  JOIN proxy_pool p ON p.id = a.proxy_id
+  JOIN proxy_pool p ON p.id = a.proxy_id`+gateJoin+`
  WHERE a.tenant_id = $1
    AND a.ban_status = 'active'
    AND (a.quarantined_until IS NULL OR a.quarantined_until < now())

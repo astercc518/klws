@@ -18,9 +18,9 @@ var ErrNoCapacity = errors.New("dispatch: no account with remaining quota")
 
 // MediaHandle is a reusable WhatsApp media upload result (per uploading account).
 type MediaHandle struct {
-	URL, DirectPath                      string
-	MediaKey, FileSHA256, FileEncSHA256  []byte
-	FileLength                           int64
+	URL, DirectPath                     string
+	MediaKey, FileSHA256, FileEncSHA256 []byte
+	FileLength                          int64
 }
 
 // SendPayload is the unit of work handed to the send queue.
@@ -47,12 +47,13 @@ type Enqueuer interface {
 
 // Dispatcher pulls pending recipients and assigns them to accounts.
 type Dispatcher struct {
-	pool     *pgxpool.Pool
-	billing  *billing.Repo
-	queue    Enqueuer
-	priceFor func(country string) int64
-	baseGap  time.Duration
-	m        *metrics.Metrics
+	pool       *pgxpool.Pool
+	billing    *billing.Repo
+	queue      Enqueuer
+	priceFor   func(country string) int64
+	baseGap    time.Duration
+	m          *metrics.Metrics
+	warmupGate bool
 }
 
 func NewDispatcher(pool *pgxpool.Pool, b *billing.Repo, q Enqueuer, priceFor func(string) int64, baseGap time.Duration) *Dispatcher {
@@ -60,6 +61,12 @@ func NewDispatcher(pool *pgxpool.Pool, b *billing.Repo, q Enqueuer, priceFor fun
 }
 
 func (d *Dispatcher) WithMetrics(m *metrics.Metrics) *Dispatcher { d.m = m; return d }
+
+// WithWarmupGate toggles the P5c MATURE-only business-send gate (Task 16).
+// When on, selectAccount only considers accounts whose warmup_profiles.stage
+// is MATURE (accounts with no warmup_profiles row are excluded). Default off
+// (false) preserves today's selectAccount behavior byte-for-byte.
+func (d *Dispatcher) WithWarmupGate(on bool) *Dispatcher { d.warmupGate = on; return d }
 
 // SendWorker executes a SendPayload: admit, hold, render, send, settle/refund.
 type SendWorker struct {

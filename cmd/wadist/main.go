@@ -215,7 +215,7 @@ func run(ctx context.Context, cfg *config.Config) (*metrics.Server, func(), erro
 		log.Printf("pump boot: reclaimed %d orphaned assignments", n)
 	}
 	pe := dispatch.NewPumpEnqueuer(cfg.PumpBuffer)
-	dispatcher := dispatch.NewDispatcher(pool, billingRepo, pe, priceFor, 3*time.Second).WithMetrics(m)
+	dispatcher := dispatch.NewDispatcher(pool, billingRepo, pe, priceFor, 3*time.Second).WithMetrics(m).WithWarmupGate(cfg.WarmupGate)
 
 	priceRepo := pricing.NewRepo(pool)
 
