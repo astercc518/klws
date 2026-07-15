@@ -51,10 +51,11 @@ type fakeInst struct {
 	jidByInst map[string]string
 	bound     map[string]string
 	states    map[string]string
+	enrolled  map[string]string
 }
 
 func newFakeInst() *fakeInst {
-	return &fakeInst{jidByInst: map[string]string{}, bound: map[string]string{}, states: map[string]string{}}
+	return &fakeInst{jidByInst: map[string]string{}, bound: map[string]string{}, states: map[string]string{}, enrolled: map[string]string{}}
 }
 func (f *fakeInst) JIDForInstance(_ context.Context, inst string) (string, bool, error) {
 	j, ok := f.jidByInst[inst]
@@ -67,6 +68,10 @@ func (f *fakeInst) BindInstanceJIDIfUnset(_ context.Context, inst, jid string) e
 }
 func (f *fakeInst) SetInstanceState(_ context.Context, inst, state string) error {
 	f.states[inst] = state
+	return nil
+}
+func (f *fakeInst) EnrollDeviceForInstance(_ context.Context, inst, jid string) error {
+	f.enrolled[inst] = jid
 	return nil
 }
 
@@ -107,6 +112,35 @@ func TestWebhook_ConnectionUpdate_BindsJIDAndState(t *testing.T) {
 	}
 	if inst.states["wa_1"] != "open" {
 		t.Fatalf("state=%q", inst.states["wa_1"])
+	}
+}
+
+// TestWebhook_ConnectionUpdate_EnrollsDevice pins FIX-3: a connection.update
+// carrying a jid must fold the account into account_devices (the send pool)
+// via EnrollDeviceForInstance — BindInstanceJIDIfUnset alone only updates
+// account_instances (Evolution routing), which dispatch/sendgate never read.
+func TestWebhook_ConnectionUpdate_EnrollsDevice(t *testing.T) {
+	inst := newFakeInst()
+	h := NewEvolutionWebhook("", &fakeReceipt{}, inst, nil, nil)
+	body := []byte(`{"event":"connection.update","instance":"wa_1","data":{"state":"open","wuid":"123@s.whatsapp.net"}}`)
+	if code := postWebhook(t, h, body); code != http.StatusOK {
+		t.Fatalf("code=%d", code)
+	}
+	if inst.enrolled["wa_1"] != "123@s.whatsapp.net" {
+		t.Fatalf("EnrollDeviceForInstance not called: %+v", inst.enrolled)
+	}
+}
+
+// TestWebhook_ConnectionUpdate_NoJID_NoEnroll: a connection.update without an
+// own jid (e.g. a plain state transition) must not call
+// EnrollDeviceForInstance with an empty jid.
+func TestWebhook_ConnectionUpdate_NoJID_NoEnroll(t *testing.T) {
+	inst := newFakeInst()
+	h := NewEvolutionWebhook("", &fakeReceipt{}, inst, nil, nil)
+	body := []byte(`{"event":"connection.update","instance":"wa_1","data":{"state":"connecting"}}`)
+	postWebhook(t, h, body)
+	if len(inst.enrolled) != 0 {
+		t.Fatalf("EnrollDeviceForInstance must not be called without a jid: %+v", inst.enrolled)
 	}
 }
 

@@ -23,6 +23,10 @@ type instanceStore interface {
 	JIDForInstance(ctx context.Context, instanceName string) (string, bool, error)
 	BindInstanceJIDIfUnset(ctx context.Context, instanceName, jid string) error
 	SetInstanceState(ctx context.Context, instanceName, state string) error
+	// EnrollDeviceForInstance folds a scanned-in account into account_devices
+	// (the send pool) once its jid is known — see store.Manager's doc comment
+	// for the proxy-key-reuse rationale (FIX-3).
+	EnrollDeviceForInstance(ctx context.Context, instanceName, jid string) error
 }
 
 // healthSink feeds account health signals (satisfied by *sendgate.SendGate).
@@ -76,6 +80,11 @@ func (h *EvolutionWebhook) handle(c *gin.Context) {
 	case "connection.update":
 		if jid := w.Data.ownJID(); jid != "" {
 			_ = h.inst.BindInstanceJIDIfUnset(ctx, w.Instance, jid)
+			// Best-effort: fold the account into account_devices (send pool) now
+			// that its jid is known. Never blocks the webhook's 200 — a failure
+			// here just leaves the account unsendable until the next
+			// connection.update retries it, it does not corrupt routing state.
+			_ = h.inst.EnrollDeviceForInstance(ctx, w.Instance, jid)
 		}
 		if w.Data.State != "" {
 			_ = h.inst.SetInstanceState(ctx, w.Instance, w.Data.State)

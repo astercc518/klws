@@ -109,6 +109,41 @@ func (m *Manager) BindInstanceJIDIfUnset(ctx context.Context, instanceName, jid 
 	return err
 }
 
+// EnrollDeviceForInstance folds a scanned-in account into the account_devices
+// send pool once pairing completes (jid known). Dispatch (selectaccount.go)
+// and sendgate (Admit/ApplyHealthSignal) read ONLY account_devices — an
+// account that lives solely in account_instances (Evolution routing) is
+// invisible to both, so it can never be selected to send.
+//
+// tenant_id and proxy_id are REUSED verbatim from the account_instances row
+// (not re-derived, not re-bound): this is the proxy-key unification fix —
+// the account keeps the exact proxy slot BindInstanceProxy already allocated
+// at instance-creation time, so proxy_pool's current_bindings/usage_count
+// counters are untouched by enrollment. phone_number is extracted from the
+// jid's user part (jid is always local-part@s.whatsapp.net for a paired
+// account). Only enrolls when the instance already has a proxy_id — a device
+// row with proxy_id NULL could never pass selectAccount's JOIN proxy_pool
+// anyway, so skipping it avoids a useless row.
+//
+// Idempotent on account_jid (ON CONFLICT): a reconnect (fresh
+// connection.update after e.g. conn_churn) refreshes last_connected_at and
+// resets ban_status to 'active' — matching BindInstanceJIDIfUnset's
+// first-see semantics upstream, this call itself is safe to repeat. Uses the
+// SystemPool (BYPASSRLS): this runs from the webhook with no tenant
+// request-context, mirroring every other instance-lifecycle write in this
+// file.
+func (m *Manager) EnrollDeviceForInstance(ctx context.Context, instanceName, jid string) error {
+	_, err := m.SystemPool().Exec(ctx, `
+INSERT INTO account_devices (tenant_id, account_jid, phone_number, ban_status, proxy_id, registered_at, health_score, last_connected_at)
+SELECT ai.tenant_id, $2, split_part($2,'@',1), 'active', ai.proxy_id, now(), 100, now()
+  FROM account_instances ai
+ WHERE ai.instance_name = $1 AND ai.proxy_id IS NOT NULL
+ON CONFLICT (account_jid) DO UPDATE
+   SET last_connected_at = now(), ban_status = 'active', proxy_id = EXCLUDED.proxy_id`,
+		instanceName, jid)
+	return err
+}
+
 // SetInstanceState updates lifecycle state (created/qr/connected/disconnected/loggedOut).
 func (m *Manager) SetInstanceState(ctx context.Context, instanceName, state string) error {
 	_, err := m.SystemPool().Exec(ctx,
