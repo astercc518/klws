@@ -53,6 +53,20 @@ export const dashboard: Record<Locale, Record<string, string>> = {
     "dash.contacts.deleted": "联系人已删除",
     "dash.contacts.deleteFailed": "删除失败",
 
+    // components/dashboard/contacts-list.tsx — bulk tag / bulk suppression (P4 Task 5)
+    "dash.contacts.bulk.tagDialogTitle": "批量标签操作",
+    "dash.contacts.bulk.tagDialogDesc": "对选中的 {n} 个联系人执行标签操作,请选择标签与操作类型。",
+    "dash.contacts.bulk.tagSelectLabel": "选择标签",
+    "dash.contacts.bulk.tagConfirm": "确认应用",
+    "dash.contacts.bulk.tagNoneSelected": "请先选择一个标签",
+    "dash.contacts.bulk.suppressTrigger": "加入黑名单({n})",
+    "dash.contacts.bulk.suppressDialogTitle": "批量加入黑名单",
+    "dash.contacts.bulk.suppressDialogDesc": "将把选中的 {n} 个号码加入黑名单并视为已退订,此操作不可撤销。",
+    "dash.contacts.bulk.suppressConfirm": "确认加入黑名单",
+    "dash.contacts.bulk.suppressResultTitle": "黑名单已更新",
+    "dash.contacts.bulk.suppressResultDesc": "已生效 {inserted} 个 · 重复 {dup} 个 · 未生效 {invalid} 个",
+    "dash.contacts.bulk.suppressFailed": "加入黑名单失败",
+
     // app/dashboard/contacts/page.tsx (tab bar)
     "dash.contactsTabs.contacts": "联系人",
     "dash.contactsTabs.tags": "标签与分段",
@@ -267,6 +281,20 @@ export const dashboard: Record<Locale, Record<string, string>> = {
     "dash.contacts.confirmDelete": "Confirm delete",
     "dash.contacts.deleted": "Contact deleted",
     "dash.contacts.deleteFailed": "Delete failed",
+
+    // components/dashboard/contacts-list.tsx — bulk tag / bulk suppression (P4 Task 5)
+    "dash.contacts.bulk.tagDialogTitle": "Bulk tag action",
+    "dash.contacts.bulk.tagDialogDesc": "Applies to the {n} selected contacts — pick a tag and an action.",
+    "dash.contacts.bulk.tagSelectLabel": "Tag",
+    "dash.contacts.bulk.tagConfirm": "Apply",
+    "dash.contacts.bulk.tagNoneSelected": "Pick a tag first",
+    "dash.contacts.bulk.suppressTrigger": "Add to blacklist ({n})",
+    "dash.contacts.bulk.suppressDialogTitle": "Bulk add to suppression list",
+    "dash.contacts.bulk.suppressDialogDesc": "This adds the selected {n} numbers to the suppression list and marks them unsubscribed — this cannot be undone.",
+    "dash.contacts.bulk.suppressConfirm": "Confirm blacklist",
+    "dash.contacts.bulk.suppressResultTitle": "Suppression list updated",
+    "dash.contacts.bulk.suppressResultDesc": "{inserted} added · {dup} already listed · {invalid} not applied",
+    "dash.contacts.bulk.suppressFailed": "Failed to add to suppression list",
 
     // app/dashboard/contacts/page.tsx (tab bar)
     "dash.contactsTabs.contacts": "Contacts",

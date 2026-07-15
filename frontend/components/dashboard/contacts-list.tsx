@@ -5,7 +5,7 @@
 // list + status tabs + toolbar filters, backed by GET /api/v1/contacts.
 
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { Download, MoreHorizontal, Pencil, Trash2, Tags as TagsIcon } from "lucide-react";
+import { Download, MoreHorizontal, Pencil, ShieldBan, Trash2, Tags as TagsIcon } from "lucide-react";
 import { toast } from "sonner";
 import { api, ApiError } from "@/lib/api";
 import { Button } from "@/components/ui/button";
@@ -23,10 +23,9 @@ import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
-  DropdownMenuLabel,
-  DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
+import { BulkActionDialog } from "@/components/admin/bulk-action-dialog";
 import { ProDataTable, type Column } from "@/components/admin/pro-data-table";
 import { StatusBadge, type StatusTone } from "@/components/admin/status-badge";
 import { ImportContactsDialog } from "@/components/dashboard/contacts-import-dialog";
@@ -74,6 +73,11 @@ export function ContactsList() {
   const [loading, setLoading] = useState(false);
   const [editTarget, setEditTarget] = useState<Contact | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<Contact | null>(null);
+  const [bulkTagOpen, setBulkTagOpen] = useState(false);
+  const [bulkTagId, setBulkTagId] = useState("");
+  const [bulkTagMode, setBulkTagMode] = useState<"add" | "remove">("add");
+  const [bulkSuppressOpen, setBulkSuppressOpen] = useState(false);
+  const [bulkSuppressReason, setBulkSuppressReason] = useState("");
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -140,8 +144,18 @@ export function ContactsList() {
     }
   }
 
-  async function applyTagToSelected(tag: Tag, remove: boolean) {
+  // Single POST hits the real batch endpoint (contact_ids: number[]) — no
+  // per-item looping needed. Errors here abort the whole batch (the endpoint
+  // is one INSERT/DELETE over the full id array), so success/failure is
+  // reported as one aggregated toast rather than a partial count.
+  async function applyBulkTag() {
     if (selected.size === 0) return;
+    const tag = tags.find((tg) => String(tg.id) === bulkTagId);
+    if (!tag) {
+      toast.error(t("dash.contacts.bulk.tagNoneSelected"));
+      return;
+    }
+    const remove = bulkTagMode === "remove";
     try {
       await api.post(`/contacts/tags/${tag.id}/apply`, {
         contact_ids: Array.from(selected),
@@ -153,11 +167,67 @@ export function ContactsList() {
           .replace("{n}", () => String(selected.size)),
       });
       setSelected(new Set());
+      setBulkTagOpen(false);
     } catch (e) {
       toast.error(t(remove ? "dash.contacts.tagRemoveFailed" : "dash.contacts.tagApplyFailed"), {
         description: e instanceof ApiError ? e.message : t("dash.contacts.retry"),
       });
     }
+  }
+
+  // POST /suppression takes one country + a phones[] array, not contact ids —
+  // so selected contacts are grouped by their stored country_code and sent
+  // as one batch request per group (usually just one request; only mixed-
+  // country selections fan out further). Results are summed across groups
+  // into a single honest toast: inserted / already-listed / not-applied
+  // (the last bucket folds together contacts with no usable country_code,
+  // server-reported invalid numbers, and any group whose request errored).
+  async function suppressSelected() {
+    if (selected.size === 0) return;
+    const selectedRows = (rows ?? []).filter((r) => selected.has(r.id));
+    const groups = new Map<string, string[]>();
+    let skipped = 0;
+    for (const r of selectedRows) {
+      const cc = r.country_code.trim().toUpperCase();
+      if (cc.length !== 2) {
+        skipped++;
+        continue;
+      }
+      const list = groups.get(cc) ?? [];
+      list.push(r.phone);
+      groups.set(cc, list);
+    }
+    let inserted = 0;
+    let duplicates = 0;
+    let invalid = skipped;
+    for (const [cc, phones] of groups) {
+      try {
+        const rep = await api.post<{ total: number; inserted: number; duplicates: number; invalid: number }>("/suppression", {
+          country: cc,
+          phones,
+          reason: bulkSuppressReason.trim() || undefined,
+        });
+        inserted += rep.inserted;
+        duplicates += rep.duplicates;
+        invalid += rep.invalid;
+      } catch {
+        invalid += phones.length;
+      }
+    }
+    const desc = t("dash.contacts.bulk.suppressResultDesc")
+      .replace("{inserted}", () => String(inserted))
+      .replace("{dup}", () => String(duplicates))
+      .replace("{invalid}", () => String(invalid));
+    if (inserted > 0 && invalid === 0) {
+      toast.success(t("dash.contacts.bulk.suppressResultTitle"), { description: desc });
+    } else if (inserted === 0 && duplicates === 0) {
+      toast.error(t("dash.contacts.bulk.suppressFailed"), { description: desc });
+    } else {
+      toast.info(t("dash.contacts.bulk.suppressResultTitle"), { description: desc });
+    }
+    setSelected(new Set());
+    setBulkSuppressOpen(false);
+    load();
   }
 
   // The list endpoint doesn't return each contact's tags (GET /contacts has no
@@ -297,33 +367,33 @@ export function ContactsList() {
               ))}
             </select>
             {selected.size > 0 && (
-              <DropdownMenu>
-                <DropdownMenuTrigger render={<Button variant="outline" size="sm" className="gap-1.5" />}>
+              <>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="gap-1.5"
+                  onClick={() => {
+                    setBulkTagId(tags[0] ? String(tags[0].id) : "");
+                    setBulkTagMode("add");
+                    setBulkTagOpen(true);
+                  }}
+                >
                   <TagsIcon className="size-4" />
                   {t("dash.contacts.batchTag").replace("{n}", () => String(selected.size))}
-                </DropdownMenuTrigger>
-                <DropdownMenuContent align="end">
-                  {tags.length === 0 ? (
-                    <DropdownMenuLabel className="text-muted-foreground">{t("dash.contacts.noTagsYet")}</DropdownMenuLabel>
-                  ) : (
-                    <>
-                      <DropdownMenuLabel>{t("dash.contacts.addTagLabel")}</DropdownMenuLabel>
-                      {tags.map((tag) => (
-                        <DropdownMenuItem key={`add-${tag.id}`} onClick={() => applyTagToSelected(tag, false)}>
-                          {tag.name}
-                        </DropdownMenuItem>
-                      ))}
-                      <DropdownMenuSeparator />
-                      <DropdownMenuLabel>{t("dash.contacts.removeTagLabel")}</DropdownMenuLabel>
-                      {tags.map((tag) => (
-                        <DropdownMenuItem key={`rm-${tag.id}`} variant="destructive" onClick={() => applyTagToSelected(tag, true)}>
-                          {tag.name}
-                        </DropdownMenuItem>
-                      ))}
-                    </>
-                  )}
-                </DropdownMenuContent>
-              </DropdownMenu>
+                </Button>
+                <Button
+                  variant="destructive"
+                  size="sm"
+                  className="gap-1.5"
+                  onClick={() => {
+                    setBulkSuppressReason("");
+                    setBulkSuppressOpen(true);
+                  }}
+                >
+                  <ShieldBan className="size-4" />
+                  {t("dash.contacts.bulk.suppressTrigger").replace("{n}", () => String(selected.size))}
+                </Button>
+              </>
             )}
           </div>
         }
@@ -360,6 +430,83 @@ export function ContactsList() {
 
       <EditContactDialog target={editTarget} onClose={() => setEditTarget(null)} onDone={load} />
       <DeleteContactDialog target={deleteTarget} onClose={() => setDeleteTarget(null)} onDone={load} />
+
+      <BulkActionDialog
+        open={bulkTagOpen}
+        onOpenChange={setBulkTagOpen}
+        title={t("dash.contacts.bulk.tagDialogTitle")}
+        description={t("dash.contacts.bulk.tagDialogDesc").replace("{n}", () => String(selected.size))}
+        confirmLabel={t("dash.contacts.bulk.tagConfirm")}
+        onConfirm={applyBulkTag}
+      >
+        {tags.length === 0 ? (
+          <p className="text-sm text-muted-foreground">{t("dash.contacts.noTagsYet")}</p>
+        ) : (
+          <div className="space-y-3">
+            <div className="space-y-2">
+              <label htmlFor="bulk-tag-select" className="text-sm font-medium">
+                {t("dash.contacts.bulk.tagSelectLabel")}
+              </label>
+              <select
+                id="bulk-tag-select"
+                value={bulkTagId}
+                onChange={(e) => setBulkTagId(e.target.value)}
+                className="h-9 w-full rounded-lg border bg-transparent px-2.5 text-sm outline-none"
+              >
+                {tags.map((tag) => (
+                  <option key={tag.id} value={String(tag.id)}>
+                    {tag.name}
+                  </option>
+                ))}
+              </select>
+            </div>
+            <div className="flex gap-4 text-sm">
+              <label className="flex items-center gap-1.5">
+                <input
+                  type="radio"
+                  name="bulk-tag-mode"
+                  checked={bulkTagMode === "add"}
+                  onChange={() => setBulkTagMode("add")}
+                  className="accent-brand-600"
+                />
+                {t("dash.contacts.addTagLabel")}
+              </label>
+              <label className="flex items-center gap-1.5">
+                <input
+                  type="radio"
+                  name="bulk-tag-mode"
+                  checked={bulkTagMode === "remove"}
+                  onChange={() => setBulkTagMode("remove")}
+                  className="accent-brand-600"
+                />
+                {t("dash.contacts.removeTagLabel")}
+              </label>
+            </div>
+          </div>
+        )}
+      </BulkActionDialog>
+
+      <BulkActionDialog
+        open={bulkSuppressOpen}
+        onOpenChange={setBulkSuppressOpen}
+        title={t("dash.contacts.bulk.suppressDialogTitle")}
+        description={t("dash.contacts.bulk.suppressDialogDesc").replace("{n}", () => String(selected.size))}
+        confirmLabel={t("dash.contacts.bulk.suppressConfirm")}
+        destructive
+        onConfirm={suppressSelected}
+      >
+        <div className="space-y-2">
+          <label htmlFor="bulk-suppress-reason" className="text-sm font-medium">
+            {t("dash.suppression.reasonLabel")} <span className="font-mono text-xs text-muted-foreground">{t("dash.suppression.optionalHint")}</span>
+          </label>
+          <Input
+            id="bulk-suppress-reason"
+            value={bulkSuppressReason}
+            onChange={(e) => setBulkSuppressReason(e.target.value)}
+            placeholder={t("dash.suppression.reasonPlaceholder")}
+          />
+        </div>
+      </BulkActionDialog>
     </div>
   );
 }
