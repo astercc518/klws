@@ -30,15 +30,39 @@ services:
       timeout: 3s
       retries: 10
 
+  # Evolution 侧独立 PostgreSQL。v2 用 Prisma **强制** DB(v2.1.1 起 DATABASE_ENABLED=false
+  # 会 "Database provider invalid" 退出;真机验证 2026-07-15 坐实)。存实例路由/会话元数据。
+  evolution-postgres:
+    image: postgres:16
+    restart: always
+    environment:
+      - POSTGRES_USER=evo
+      - POSTGRES_PASSWORD=${EVO_PG_PASSWORD:-evo}
+      - POSTGRES_DB=evolution
+    volumes:
+      - evo_pg:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U evo -d evolution"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
   evolution:
-    image: atendai/evolution-api:v2.1.1   # ⚠️ 上线前确认要对的确切版本(与 runbook 一致)
+    # v2.1.1 的 Baileys 已被 WhatsApp 淘汰(握手 405,即使走代理;真机验证 2026-07-15 坐实,
+    # 见 runbook)。必须 v2.3.x。镜像名 2026 迁移 atendai→evoapicloud。
+    image: evoapicloud/evolution-api:v2.3.7   # ⚠️ 升级前跑 runbook 真机对拍确认无回归
     restart: always
     depends_on:
       evolution-redis: { condition: service_healthy }
+      evolution-postgres: { condition: service_healthy }
     environment:
       # ⚠️ 必须与 wadist/backend 的 WADIST_EVOLUTION_APIKEY 一致(在 .env 设同值)。
       - AUTHENTICATION_API_KEY=${WADIST_EVOLUTION_APIKEY}
-      - DATABASE_ENABLED=false
+      - DATABASE_ENABLED=true
+      - DATABASE_PROVIDER=postgresql
+      - DATABASE_CONNECTION_URI=postgresql://evo:${EVO_PG_PASSWORD:-evo}@evolution-postgres:5432/evolution?schema=public
+      - DATABASE_CONNECTION_CLIENT_NAME=evolution
+      - DATABASE_SAVE_DATA_INSTANCE=true
       - CACHE_REDIS_ENABLED=true
       - CACHE_REDIS_URI=redis://evolution-redis:6379/0
       - CACHE_REDIS_PREFIX_KEY=evo
@@ -53,3 +77,4 @@ services:
 volumes:
   evo_redis:
   evo_instances:
+  evo_pg:

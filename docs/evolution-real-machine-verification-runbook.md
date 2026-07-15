@@ -43,7 +43,27 @@
 
 **⛔ 被环境挡住(数据中心 IP 被 WhatsApp 拒)**:沙盒出口是云数据中心 IP,Baileys 握手被 WhatsApp 反复 **`connection.update state=close statusReason=405`** 拒绝(HTTP 到 web.whatsapp.com 通,但 Baileys WebSocket 握手被拒),实例死循环 `connecting↔close`,QR 永远 `{count:0}`,从无 `QRCODE_UPDATED`。**这正是生产必须住宅/4G 代理的铁证(直连数据中心 IP 不可用)**。因此以下项在此环境**无法完成,需一个 WhatsApp 不拒的出口(住宅/4G/socks5 代理配到实例 `POST /proxy/set`)+ 手机备用号扫码**:QR base64 最终形状(C4/上述新发现)、V1 wuid、V2 回执扁平形状、V3 剩余码(400/403/422/429/503)、presence 端点、代理键迁移的 worker 时序确认。
 
-**给后续执行者**:沙盒已可复现(修好的 compose)。备好住宅/4G socks5 代理 → `POST /proxy/set/verify1` → `GET /instance/connect/verify1` 应出真 QR → 手机扫 → 按下面步骤 3-6 验剩余项。
+### 🔴 2026-07-15 续:代理 + v2.3.7 后 QR 成功产出,再验一批(重大生产发现)
+
+配了住宅/移动 http 代理(`POST /proxy/set` protocol=http)后,**v2.1.1 仍 405 握手失败**(Evolution 日志确认 `Proxy enabled` 代理生效了,但 WhatsApp 拒绝其 Baileys 客户端版本)。**换 `evoapicloud/evolution-api:v2.3.7` 立刻握手成功、产出真 QR。**
+
+| 命门 | 真机观测 | 代码影响 | 处置 |
+|---|---|---|---|
+| **🔴 Evolution 版本** | **v2.1.1 的 Baileys 被 WhatsApp 淘汰(握手 405,即使走代理)**;v2.3.7 正常 | 生产/p0/沙盒全部标注 v2.1.1 | **已升级** `docker-compose.evolution.yml`/`p0-sending-unit`/`evo-verify` → `evoapicloud/evolution-api:v2.3.7`;生产 overlay 补 evolution-postgres(v2 强制 DB) |
+| **🔴 QR 传递机制** | QR **不在** `/instance/connect` 同步响应(返回 `{count:N}`),而在 **`qrcode.updated` webhook 事件 `data.qrcode.base64`**,base64 **带 `data:image/png;base64,` 前缀**;另有 `data.qrcode.code`(WA 配对串) | `EvoClient.ConnectInstance` 读同步 `base64` **是错的**——上线前必须改为从 webhook `qrcode.updated` 取 QR | **待改代码**(P2 上线 gate);前端 `toDataUri` 前缀兼容已被坐实为对 |
+| **V0 secret 可启用** | Evolution 回发 `Authorization: <配的值>`(无 Bearer),verify() 比对正确 | 原 `.env` 注释"先留空否则全 401"已过时 | **已更新** `.env.example`:secret 可安全启用 |
+
+**QR 传递机制修正细节(给改代码的人)**:`GET /instance/connect/{name}` 返回 `{"pairingCode":null,"count":N}`(count=已推 QR 次数),QR 本体在 webhook。`qrcode.updated` 事件形状:
+```json
+{"event":"qrcode.updated","instance":"verify1","data":{"qrcode":{
+  "instance":"verify1","pairingCode":null,
+  "code":"2@Dpbb...",  "base64":"data:image/png;base64,iVBOR..."}}}
+```
+Evolution 每 ~40s 重推新 QR(count+1)直到扫码成功。
+
+**仍待扫码后验(手机在环)**:V1 本号 jid 在 `data.wuid`?V2 回执扁平 `keyId/fromMe/status`?V3 登出/未连接真实码?presence 端点?代理键迁移 worker 时序?
+
+**给后续执行者**:沙盒已可复现且升级到 v2.3.7。备好住宅/移动 http/socks5 代理 → `POST /proxy/set/verify1` → `GET /instance/connect/verify1` 触发 → 从 webhook `qrcode.updated` 取 `data.qrcode.base64` 渲染 → 手机扫 → 验剩余项。
 
 ---
 

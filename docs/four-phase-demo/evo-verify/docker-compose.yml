@@ -5,7 +5,7 @@
 #   curl -s $EVO/ -H "apikey: $KEY" | head    # 冒烟
 services:
   evolution:
-    image: evoapicloud/evolution-api:v2.1.1   # 项目 2026 迁移镜像名 atendai→evoapicloud(真机验证发现);改这里前先确认线上 tag
+    image: evoapicloud/evolution-api:v2.3.7   # 镜像名迁移 atendai→evoapicloud + v2.1.1 Baileys 被 WhatsApp 淘汰(405),v2.3.x 起可握手(真机验证 2026-07-15)
     ports: ["8080:8080"]
     environment:
       - AUTHENTICATION_API_KEY=verify-key-123      # = EvoClient 的 apikey
