@@ -180,7 +180,10 @@ export function ProDataTable<T>({
   }
 
   const visibleColumns = useMemo(
-    () => (storageKey ? columns.filter((c) => !hidden.has(c.key)) : columns),
+    () =>
+      storageKey
+        ? columns.filter((c) => !hidden.has(c.key) || c.hideable === false)
+        : columns,
     [columns, hidden, storageKey],
   );
 
