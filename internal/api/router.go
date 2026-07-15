@@ -287,6 +287,15 @@ func (s *Server) Router() *gin.Engine {
 		admin.POST("/agent/cost-pricing", s.handleAdminSetCostPricing)
 		admin.GET("/agent/settlements", s.handleAdminSettlementOverview)
 		admin.POST("/agent/settlements/close", s.handleAdminCloseSettlement)
+
+		// 养号中心(warmup): 列表(join account_devices)/总览/单号动作/车道策略。
+		// jid 走 query 而非路径通配 —— account JID 含 '@'/'.',与 gin *jid 通配
+		// 在真实场景下歧义(尾段 "/action" 边界不稳),query 更直接、前端(Task 9)也按此对齐。
+		admin.GET("/warmup", s.handleAdminWarmupList)
+		admin.GET("/warmup/overview", s.handleAdminWarmupOverview)
+		admin.GET("/warmup/policies", s.handleAdminWarmupGetPolicies)
+		admin.PUT("/warmup/policies/:lane", s.handleAdminWarmupSetPolicy)
+		admin.POST("/warmup/action", s.handleAdminWarmupAction)
 	}
 
 	return r

@@ -9,13 +9,13 @@ const (
 
 // Policy 是一条车道的养号阈值与配额上限,存 warmup_policies,可后台热改。
 type Policy struct {
-	MinWarmupMessages int
-	MinReplies        int
-	MinOnlineHours    int
-	WarmingCap        int
-	MatureBaseCap     int
-	MatureMaxCap      int
-	MatureRampStep    int
+	MinWarmupMessages int `json:"min_warmup_messages"`
+	MinReplies        int `json:"min_replies"`
+	MinOnlineHours    int `json:"min_online_hours"`
+	WarmingCap        int `json:"warming_cap"`
+	MatureBaseCap     int `json:"mature_base_cap"`
+	MatureMaxCap      int `json:"mature_max_cap"`
+	MatureRampStep    int `json:"mature_ramp_step"`
 }
 
 // MeetsPromotion 判断信号是否够 WARMING->MATURE(三条全达标)。

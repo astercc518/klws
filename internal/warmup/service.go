@@ -20,6 +20,10 @@ func NewService(store *Store, clock Clock) *Service {
 	return &Service{store: store, clock: clock}
 }
 
+// Store exposes the underlying persistence layer for admin API handlers/tests
+// that need to read rows the Service's own methods don't surface (list/overview/policies).
+func (s *Service) Store() *Store { return s.store }
+
 // Enroll 让新号进 WARMING。幂等(已有 profile 不动)。
 func (s *Service) Enroll(ctx context.Context, jid string, tenantID int64, lane Lane) error {
 	return s.store.EnrollIfAbsent(ctx, jid, tenantID, lane, s.clock())
