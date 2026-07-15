@@ -4,6 +4,8 @@ import (
 	"context"
 	"crypto/subtle"
 	"encoding/json"
+	"errors"
+	"log"
 	"net/http"
 	"time"
 
@@ -53,6 +55,11 @@ type warmupEnroller interface {
 	// error) when jid has no warmup profile (not pool-enrolled) — see
 	// warmup.Service.RecordReply's doc comment.
 	RecordReply(ctx context.Context, jid string) error
+	// Demote retreats a MATURE account back to WARMING on a churn/logout
+	// signal (reason is log/audit-only). Returns warmup.ErrInvalidTransition
+	// for WARMING/NEW jids (no-op stages, not an error condition for
+	// callers) — see warmup.Service.Demote's doc comment.
+	Demote(ctx context.Context, jid, reason string) error
 }
 
 // EvolutionWebhook receives Evolution API callbacks: authenticates via the
@@ -125,6 +132,16 @@ func (h *EvolutionWebhook) handle(c *gin.Context) {
 		if isDownState(w.Data.State) && h.health != nil {
 			if jid := h.resolveJID(ctx, w); jid != "" {
 				_ = h.health.ApplyHealthSignal(ctx, jid, "conn_churn", 5*time.Minute)
+			}
+		}
+		// 封号信号自动降级(P0-4 Task 17):MATURE 号掉线/登出退回 WARMING,
+		// 重新计时养号。WARMING/NEW 号收到同一信号会命中 ErrInvalidTransition
+		// (它们本就没有 DEMOTE 迁移),吞掉即可——无需降级。
+		if isDownState(w.Data.State) && h.warmup != nil {
+			if jid := h.resolveJID(ctx, w); jid != "" {
+				if err := h.warmup.Demote(ctx, jid, "conn_down"); err != nil && !errors.Is(err, warmup.ErrInvalidTransition) {
+					log.Printf("warmup demote %s: %v", jid, err)
+				}
 			}
 		}
 	case "messages.update":
