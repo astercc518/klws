@@ -25,6 +25,28 @@
 
 ---
 
+## ✅ 2026-07-15 沙盒对拍结果(P2-T8,部分完成)
+
+起真沙盒(`docs/four-phase-demo/evo-verify` docker compose)对拍。**沙盒本身修了 2 处过期配置**:①镜像名 `atendai/evolution-api`→`evoapicloud/evolution-api`(项目迁移);②v2.1.1 用 Prisma **强制 PostgreSQL**(原 `DATABASE_ENABLED=false`+纯 Redis 会 "Database provider invalid" 退出,已加 postgres 服务 + `DATABASE_PROVIDER=postgresql`)。修后 Evolution v2.1.1 正常起。
+
+**已真机坐实(不需 WhatsApp 登录即可验)**:
+
+| 项 | 真机观测 | 代码假设 | 结论 |
+|---|---|---|---|
+| **V0 webhook 鉴权** | webhook-capture 实收头 `Authorization: wh-secret-abc`(首字母大写、**无 `Bearer ` 前缀**),= create 时配的 `webhook.headers.authorization` 原样回发 | `webhook_evolution.go:verify` 常量时间比对 `Authorization` 头无前缀 | ✅ **完全一致**(最高危项坐实,生产设 secret 不会误拒回执) |
+| **webhook 事件形状** | 事件名 `connection.update`(点号)、`data.state`(close/connecting)、`data.statusReason`、`apikey` 回显、`server_url`/`date_time` | `normalizeEvent` 处理点号事件、读 `data.state` | ✅ 一致 |
+| **create 形状** | 接受并回显 `webhook.webhookHeaders.authorization`;`instance.status:"close"` 初始 | `CreateInstance` 发 `webhook.headers.authorization` | ✅ 一致 |
+| **V3 错误码(部分)** | 不存在实例发消息→**404**;错误 apikey→**401**;logout 未连接实例→**200 幂等** | `IsPermanent` 含 401/404;`LogoutInstance` 期望幂等 | ✅ 401/404 坐实 |
+| **setProxy 坏代理** | Evolution 真去测代理活性,坏代理请求**超时挂起**(非快速 400) | `evoInstance.Connect` fail-closed(setProxy 失败不 connect) | ⚠️ 超时也须当失败处理(fail-closed 依据成立,但超时非明确码) |
+
+**新发现(需成功握手才能最终定,但形状提示重要)**:`GET /instance/connect/{name}` 在**未握手时返回 `{"count":N}` 而非 `{base64:...}`**。强烈提示 **QR 可能不在 connect 同步响应里,而经 `QRCODE_UPDATED` webhook 事件异步推送**——这与代码 `ConnectInstance` 读同步 `base64` 的假设(C4)可能冲突,登录成功后必须确认 QR 到底在哪。
+
+**⛔ 被环境挡住(数据中心 IP 被 WhatsApp 拒)**:沙盒出口是云数据中心 IP,Baileys 握手被 WhatsApp 反复 **`connection.update state=close statusReason=405`** 拒绝(HTTP 到 web.whatsapp.com 通,但 Baileys WebSocket 握手被拒),实例死循环 `connecting↔close`,QR 永远 `{count:0}`,从无 `QRCODE_UPDATED`。**这正是生产必须住宅/4G 代理的铁证(直连数据中心 IP 不可用)**。因此以下项在此环境**无法完成,需一个 WhatsApp 不拒的出口(住宅/4G/socks5 代理配到实例 `POST /proxy/set`)+ 手机备用号扫码**:QR base64 最终形状(C4/上述新发现)、V1 wuid、V2 回执扁平形状、V3 剩余码(400/403/422/429/503)、presence 端点、代理键迁移的 worker 时序确认。
+
+**给后续执行者**:沙盒已可复现(修好的 compose)。备好住宅/4G socks5 代理 → `POST /proxy/set/verify1` → `GET /instance/connect/verify1` 应出真 QR → 手机扫 → 按下面步骤 3-6 验剩余项。
+
+---
+
 **状态**: 待执行——**这是 E6 cutover 的硬前置**。E0–E5 已把整套 Evolution 客户端/webhook/发送/分片造好并合并 main（32 提交本地未推送），但**所有 REST 路径、JSON 字段名、webhook 事件形状、ack 数值、错误状态码至今 0 真机验证**（代码里 11 处 `TODO(evo-verify)`）。本 runbook 起一个真实 Evolution 实例，逐条对拍这些假设，把每个偏差就地修掉，然后才能上 E6。
 
 **为什么必须先做**：E6 会一次性把这 11 个假设接到 live 生产 + 删 whatsmeow + 账号全量重扫码——**不可逆**。字段名错一个 = 回执全断 / 状态不更新 / 误判封号，且回滚成本灾难级。

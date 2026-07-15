@@ -5,19 +5,33 @@
 #   curl -s $EVO/ -H "apikey: $KEY" | head    # 冒烟
 services:
   evolution:
-    image: atendai/evolution-api:v2.1.1   # 与生产对齐的版本；改这里前先确认线上 tag
+    image: evoapicloud/evolution-api:v2.1.1   # 项目 2026 迁移镜像名 atendai→evoapicloud(真机验证发现);改这里前先确认线上 tag
     ports: ["8080:8080"]
     environment:
       - AUTHENTICATION_API_KEY=verify-key-123      # = EvoClient 的 apikey
-      - DATABASE_ENABLED=false
+      # v2 用 Prisma 强制要 PostgreSQL（DATABASE_ENABLED=false 是 v1 式配置，
+      # v2.1.1 会 "Database provider invalid" 退出）——真机验证发现。
+      - DATABASE_ENABLED=true
+      - DATABASE_PROVIDER=postgresql
+      - DATABASE_CONNECTION_URI=postgresql://evo:evo@postgres:5432/evolution?schema=public
+      - DATABASE_CONNECTION_CLIENT_NAME=evolution_verify
+      - DATABASE_SAVE_DATA_INSTANCE=true
+      - DATABASE_SAVE_DATA_NEW_MESSAGE=true
+      - DATABASE_SAVE_MESSAGE_UPDATE=true
       - CACHE_REDIS_ENABLED=true
       - CACHE_REDIS_URI=redis://redis:6379/0
       - CACHE_REDIS_PREFIX_KEY=evo
       # 我们用 webhook.headers.authorization 做鉴权（v2 不签名 body）——沙盒里
       # 由 create 请求带进去，不用全局配置。
-    depends_on: [redis]
+    depends_on: [redis, postgres]
   redis:
     image: redis:7-alpine
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      - POSTGRES_USER=evo
+      - POSTGRES_PASSWORD=evo
+      - POSTGRES_DB=evolution
 
   # 抓 Evolution 回调原始 body + 头（对拍 payload 形状与 Authorization 头的关键）。
   webhook-capture:
