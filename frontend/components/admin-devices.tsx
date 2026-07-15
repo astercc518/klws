@@ -16,8 +16,9 @@ import {
   Trash2,
 } from "lucide-react";
 import { toast } from "sonner";
+import Link from "next/link";
 import { api, ApiError } from "@/lib/api";
-import { Button } from "@/components/ui/button";
+import { Button, buttonVariants } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { ProDataTable, type Column } from "@/components/admin/pro-data-table";
@@ -437,7 +438,7 @@ export function AdminDevices() {
               <option value="true">{t("admin.devices.status.online")}</option>
               <option value="false">{t("admin.devices.status.offline")}</option>
             </select>
-            <ConnectDeviceDialog />
+            <ConnectDeviceLink />
             <ImportDevicesDialog onDone={load} />
           </div>
         }
@@ -487,35 +488,20 @@ export function AdminDevices() {
   );
 }
 
-// Live QR pairing is a node-side (cmd/wadist) whatsmeow flow — there is no HTTP
-// streaming endpoint for it yet, and adding one would touch the cluster engine
-// (off-limits). This dialog reserves the UX and is honest about that.
-function ConnectDeviceDialog() {
+// QR pairing lives on the Instances page's connect wizard (admin-instance-wizard.tsx,
+// route /admin/instances) — that's the real Evolution-backed scan flow. This is just
+// an entry point that sends the operator there.
+function ConnectDeviceLink() {
   const t = useT();
   return (
-    <Dialog>
-      <DialogTrigger render={<Button variant="outline" className="gap-2" />}>
-        <QrCode className="size-4" />
-        {t("admin.devices.connect.trigger")}
-      </DialogTrigger>
-      <DialogContent className="sm:max-w-md">
-        <DialogHeader>
-          <DialogTitle>{t("admin.devices.connect.title")}</DialogTitle>
-          <DialogDescription>{t("admin.devices.connect.desc")}</DialogDescription>
-        </DialogHeader>
-        <div className="flex flex-col items-center gap-3 py-4">
-          <div className="flex size-52 items-center justify-center rounded-lg border border-dashed bg-muted/40">
-            <QrCode className="size-16 text-muted-foreground/40" strokeWidth={1} />
-          </div>
-          <p className="max-w-xs text-center font-mono text-[11px] leading-relaxed text-muted-foreground">
-            {t("admin.devices.connect.note")}
-          </p>
-        </div>
-        <DialogFooter>
-          <DialogClose render={<Button variant="ghost" />}>{t("admin.devices.close")}</DialogClose>
-        </DialogFooter>
-      </DialogContent>
-    </Dialog>
+    <Link
+      href="/admin/instances"
+      title={t("admin.devices.connect.desc")}
+      className={cn(buttonVariants({ variant: "outline" }), "gap-2")}
+    >
+      <QrCode className="size-4" />
+      {t("admin.devices.connect.trigger")}
+    </Link>
   );
 }
 
