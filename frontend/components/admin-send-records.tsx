@@ -88,25 +88,35 @@ export function AdminSendRecords() {
   const tenantLabel = (r: RecipientRow) => r.tenant_name ?? `#${r.tenant_id}`;
 
   const columns: Column<RecipientRow>[] = [
-    { key: "phone", header: t("admin.sendrec.col.phone"), cell: (r) => <span className="font-mono text-sm">{r.phone}</span> },
+    {
+      key: "phone",
+      header: t("admin.sendrec.col.phone"),
+      title: t("admin.sendrec.col.phone"),
+      hideable: false,
+      cell: (r) => <span className="font-mono text-sm">{r.phone}</span>,
+    },
     {
       key: "tenant",
       header: t("admin.sendrec.col.tenant"),
+      title: t("admin.sendrec.col.tenant"),
       cell: (r) => <span className="text-sm text-muted-foreground">{tenantLabel(r)}</span>,
     },
     {
       key: "campaign",
       header: t("admin.sendrec.col.campaign"),
+      title: t("admin.sendrec.col.campaign"),
       cell: (r) => <span className="font-mono text-sm text-muted-foreground">#{r.campaign_id}</span>,
     },
     {
       key: "state",
       header: t("admin.sendrec.col.state"),
+      title: t("admin.sendrec.col.state"),
       cell: (r) => <Badge variant={stateVariant[r.state]}>{r.state}</Badge>,
     },
     {
       key: "last_error",
       header: t("admin.sendrec.col.failReason"),
+      title: t("admin.sendrec.col.failReason"),
       cell: (r) => (
         <span className="block max-w-xs truncate text-xs text-muted-foreground" title={r.last_error ?? undefined}>
           {r.last_error ?? "—"}
@@ -116,6 +126,7 @@ export function AdminSendRecords() {
     {
       key: "updated_at",
       header: t("admin.sendrec.col.updatedAt"),
+      title: t("admin.sendrec.col.updatedAt"),
       cell: (r) => <span className="font-mono text-xs text-muted-foreground">{r.updated_at}</span>,
     },
   ];
@@ -178,6 +189,7 @@ export function AdminSendRecords() {
         error={error}
         columns={columns}
         getRowKey={(r) => r.id}
+        storageKey="admin-send-records"
         emptyState={t("admin.sendrec.emptyState")}
         search={{ placeholder: t("admin.sendrec.searchPlaceholder"), accessor: () => "" }}
         server={{

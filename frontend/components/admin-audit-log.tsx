@@ -50,11 +50,14 @@ export function AdminAuditLog() {
     {
       key: "occurred_at",
       header: t("admin.audit.col.time"),
+      title: t("admin.audit.col.time"),
       cell: (r) => <span className="font-mono text-xs text-muted-foreground">{r.occurred_at}</span>,
     },
     {
       key: "actor",
       header: t("admin.audit.col.actor"),
+      title: t("admin.audit.col.actor"),
+      hideable: false,
       cell: (r) => (
         <span className="text-sm">{r.actor_email ?? (r.actor_id ? `#${r.actor_id}` : t("admin.audit.systemActor"))}</span>
       ),
@@ -62,11 +65,13 @@ export function AdminAuditLog() {
     {
       key: "action",
       header: t("admin.audit.col.action"),
+      title: t("admin.audit.col.action"),
       cell: (r) => <Badge variant={actionVariant(r.action)}>{r.action}</Badge>,
     },
     {
       key: "target",
       header: t("admin.audit.col.target"),
+      title: t("admin.audit.col.target"),
       cell: (r) => (
         <span className="text-sm text-muted-foreground">
           {r.resource_type ? `${r.resource_type}${r.resource_id ? ` #${r.resource_id}` : ""}` : "—"}
@@ -76,6 +81,7 @@ export function AdminAuditLog() {
     {
       key: "tenant",
       header: t("admin.audit.col.tenant"),
+      title: t("admin.audit.col.tenant"),
       cell: (r) => (
         <span className="text-sm text-muted-foreground">{r.tenant_name ?? (r.tenant_id ? `#${r.tenant_id}` : "—")}</span>
       ),
@@ -83,6 +89,7 @@ export function AdminAuditLog() {
     {
       key: "details",
       header: t("admin.audit.col.details"),
+      title: t("admin.audit.col.details"),
       cell: (r) => {
         const s = JSON.stringify(r.details ?? {});
         return <span className="font-mono text-xs text-muted-foreground" title={s}>{s.length > 48 ? s.slice(0, 47) + "…" : s}</span>;
@@ -96,6 +103,7 @@ export function AdminAuditLog() {
       error={error}
       columns={columns}
       getRowKey={(r) => r.id}
+      storageKey="admin-audit-log"
       search={{
         placeholder: t("admin.audit.searchPlaceholder"),
         accessor: (r) => `${r.action} ${r.actor_email ?? ""} ${r.resource_type ?? ""} ${r.tenant_name ?? ""}`,

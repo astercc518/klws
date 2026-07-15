@@ -104,19 +104,31 @@ export function AdminLedger() {
   const tenantLabel = (r: LedgerRow) => r.tenant_name ?? `#${r.tenant_id}`;
 
   const ledgerCols: Column<LedgerRow>[] = [
-    { key: "kind", header: t("admin.ledger.col.kind"), cell: (r) => <Badge variant="outline">{r.kind}</Badge> },
-    { key: "tenant", header: t("admin.ledger.col.tenant"), cell: (r) => <span className="text-sm text-muted-foreground">{tenantLabel(r)}</span> },
-    { key: "delta_balance", header: t("admin.ledger.col.deltaBalance"), align: "right", cell: (r) => <Money cents={r.delta_balance} /> },
-    { key: "delta_frozen", header: t("admin.ledger.col.deltaFrozen"), align: "right", cell: (r) => <span className="font-mono tabular-nums text-muted-foreground">{usd(r.delta_frozen)}</span> },
-    { key: "balance_after", header: t("admin.ledger.col.balanceAfter"), align: "right", cell: (r) => <span className="font-mono tabular-nums">{usd(r.balance_after)}</span> },
-    { key: "created_at", header: t("admin.ledger.col.time"), cell: (r) => <span className="font-mono text-xs text-muted-foreground">{r.created_at}</span> },
+    {
+      key: "kind",
+      header: t("admin.ledger.col.kind"),
+      title: t("admin.ledger.col.kind"),
+      hideable: false,
+      cell: (r) => <Badge variant="outline">{r.kind}</Badge>,
+    },
+    { key: "tenant", header: t("admin.ledger.col.tenant"), title: t("admin.ledger.col.tenant"), cell: (r) => <span className="text-sm text-muted-foreground">{tenantLabel(r)}</span> },
+    { key: "delta_balance", header: t("admin.ledger.col.deltaBalance"), title: t("admin.ledger.col.deltaBalance"), align: "right", cell: (r) => <Money cents={r.delta_balance} /> },
+    { key: "delta_frozen", header: t("admin.ledger.col.deltaFrozen"), title: t("admin.ledger.col.deltaFrozen"), align: "right", cell: (r) => <span className="font-mono tabular-nums text-muted-foreground">{usd(r.delta_frozen)}</span> },
+    { key: "balance_after", header: t("admin.ledger.col.balanceAfter"), title: t("admin.ledger.col.balanceAfter"), align: "right", cell: (r) => <span className="font-mono tabular-nums">{usd(r.balance_after)}</span> },
+    { key: "created_at", header: t("admin.ledger.col.time"), title: t("admin.ledger.col.time"), cell: (r) => <span className="font-mono text-xs text-muted-foreground">{r.created_at}</span> },
   ];
 
   const refundCols: Column<RefundRow>[] = [
-    { key: "tenant", header: t("admin.ledger.col.tenant"), cell: (r) => <span className="text-sm text-muted-foreground">#{r.tenant_id}</span> },
-    { key: "amount", header: t("admin.ledger.col.amount"), align: "right", cell: (r) => <span className="font-mono tabular-nums">{usd(r.amount)}</span> },
-    { key: "reason", header: t("admin.ledger.col.reason"), cell: (r) => <span className="text-sm">{r.reason}</span> },
-    { key: "state", header: t("admin.ledger.col.state"), cell: (r) => <Badge variant={refundStateVariant[r.state] ?? "outline"}>{r.state}</Badge> },
+    {
+      key: "tenant",
+      header: t("admin.ledger.col.tenant"),
+      title: t("admin.ledger.col.tenant"),
+      hideable: false,
+      cell: (r) => <span className="text-sm text-muted-foreground">#{r.tenant_id}</span>,
+    },
+    { key: "amount", header: t("admin.ledger.col.amount"), title: t("admin.ledger.col.amount"), align: "right", cell: (r) => <span className="font-mono tabular-nums">{usd(r.amount)}</span> },
+    { key: "reason", header: t("admin.ledger.col.reason"), title: t("admin.ledger.col.reason"), cell: (r) => <span className="text-sm">{r.reason}</span> },
+    { key: "state", header: t("admin.ledger.col.state"), title: t("admin.ledger.col.state"), cell: (r) => <Badge variant={refundStateVariant[r.state] ?? "outline"}>{r.state}</Badge> },
   ];
 
   return (
@@ -151,6 +163,7 @@ export function AdminLedger() {
           error={error}
           columns={ledgerCols}
           getRowKey={(r) => `l${r.id}`}
+          storageKey="admin-ledger"
           emptyState={t("admin.ledger.emptyLedger")}
           search={{ placeholder: t("admin.ledger.searchPlaceholder"), accessor: () => "" }}
           server={{
@@ -176,6 +189,7 @@ export function AdminLedger() {
           error={error}
           columns={refundCols}
           getRowKey={(r) => `r${r.id}`}
+          storageKey="admin-ledger-refunds"
           search={{ placeholder: t("admin.ledger.refundSearchPlaceholder"), accessor: (r) => `${r.tenant_id} ${r.reason}` }}
           emptyState={t("admin.ledger.emptyRefunds")}
         />

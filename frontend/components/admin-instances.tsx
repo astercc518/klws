@@ -185,6 +185,8 @@ export function AdminInstances() {
     {
       key: "number",
       header: t("admin.instances.col.number"),
+      title: t("admin.instances.col.number"),
+      hideable: false,
       cell: (r) => (
         <div className="flex items-center gap-2.5">
           <RowAvatar icon={Smartphone} accent={STATE_ACCENT[r.state] ?? "neutral"} />
@@ -198,16 +200,19 @@ export function AdminInstances() {
     {
       key: "tenant",
       header: t("admin.instances.col.tenant"),
+      title: t("admin.instances.col.tenant"),
       cell: (r) => <span className="text-sm text-muted-foreground">{tenantLabel(r)}</span>,
     },
     {
       key: "node",
       header: t("admin.instances.col.node"),
+      title: t("admin.instances.col.node"),
       cell: (r) => <span className="font-mono text-xs text-muted-foreground">{r.evo_node}</span>,
     },
     {
       key: "proxy",
       header: t("admin.instances.col.proxy"),
+      title: t("admin.instances.col.proxy"),
       cell: (r) => (
         <span className="font-mono text-xs text-muted-foreground">{r.proxy_id != null ? `#${r.proxy_id}` : "—"}</span>
       ),
@@ -215,6 +220,7 @@ export function AdminInstances() {
     {
       key: "state",
       header: t("admin.instances.col.state"),
+      title: t("admin.instances.col.state"),
       cell: (r) => {
         // r.state comes straight off the webhook and may be a raw Evolution
         // state (open/close/refused/connecting…) that never got mapped into
@@ -228,6 +234,7 @@ export function AdminInstances() {
     {
       key: "updated_at",
       header: t("admin.instances.col.updatedAt"),
+      title: t("admin.instances.col.updatedAt"),
       cell: (r) => <span className="font-mono text-xs text-muted-foreground">{r.updated_at}</span>,
     },
   ];
@@ -306,6 +313,7 @@ export function AdminInstances() {
         error={error}
         columns={columns}
         getRowKey={(r) => r.instance_name}
+        storageKey="admin-instances"
         emptyState={t("admin.instances.emptyState")}
         search={{ placeholder: t("admin.instances.searchPlaceholder"), accessor: () => "" }}
         server={{

@@ -275,6 +275,8 @@ export function AdminDevices() {
     {
       key: "jid",
       header: t("admin.devices.col.jid"),
+      title: t("admin.devices.col.jid"),
+      hideable: false,
       cell: (d) => (
         <div className="flex items-center gap-2.5">
           <RowAvatar icon={Smartphone} accent={TONE_ACCENT[statusBadge(d).tone]} />
@@ -285,21 +287,25 @@ export function AdminDevices() {
     {
       key: "phone",
       header: t("admin.devices.col.phone"),
+      title: t("admin.devices.col.phone"),
       cell: (d) => <span className="font-mono text-xs">{d.phone_number}</span>,
     },
     {
       key: "tenant",
       header: t("admin.devices.col.tenant"),
+      title: t("admin.devices.col.tenant"),
       cell: (d) => <span className="font-mono text-xs text-muted-foreground">#{d.tenant_id}</span>,
     },
     {
       key: "tags",
       header: t("admin.devices.col.tags"),
+      title: t("admin.devices.col.tags"),
       cell: (d) => <TagBadges tags={d.tags} />,
     },
     {
       key: "proxy",
       header: t("admin.devices.col.network"),
+      title: t("admin.devices.col.network"),
       cell: (d) =>
         d.proxy_url ? (
           <span className="inline-flex items-center gap-1.5 font-mono text-xs">
@@ -313,6 +319,7 @@ export function AdminDevices() {
     {
       key: "status",
       header: t("admin.devices.col.status"),
+      title: t("admin.devices.col.status"),
       cell: (d) => {
         const s = statusBadge(d);
         return <StatusBadge tone={s.tone}>{t(s.key)}</StatusBadge>;
@@ -321,6 +328,7 @@ export function AdminDevices() {
     {
       key: "node",
       header: t("admin.devices.col.node"),
+      title: t("admin.devices.col.node"),
       cell: (d) => (
         <span className="font-mono text-xs text-muted-foreground">{d.owner_node ?? "—"}</span>
       ),
@@ -366,6 +374,7 @@ export function AdminDevices() {
         error={error}
         columns={columns}
         getRowKey={(d) => d.id}
+        storageKey="admin-devices"
         server={{
           total,
           page,

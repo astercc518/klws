@@ -199,15 +199,23 @@ export function AdminCampaigns() {
   const tenantLabel = (c: Campaign) => c.tenant_name ?? `#${c.tenant_id}`;
 
   const columns: Column<Campaign>[] = [
-    { key: "id", header: t("admin.campaigns.col.task"), cell: (c) => <span className="font-mono text-sm">#{c.id}</span> },
+    {
+      key: "id",
+      header: t("admin.campaigns.col.task"),
+      title: t("admin.campaigns.col.task"),
+      hideable: false,
+      cell: (c) => <span className="font-mono text-sm">#{c.id}</span>,
+    },
     {
       key: "tenant",
       header: t("admin.campaigns.col.tenant"),
+      title: t("admin.campaigns.col.tenant"),
       cell: (c) => <span className="text-sm text-muted-foreground">{tenantLabel(c)}</span>,
     },
     {
       key: "state",
       header: t("admin.campaigns.col.state"),
+      title: t("admin.campaigns.col.state"),
       cell: (c) => (
         <div className="flex items-center gap-1.5">
           <Badge variant={stateVariant[c.state]}>{c.state}</Badge>
@@ -223,18 +231,21 @@ export function AdminCampaigns() {
     {
       key: "total",
       header: t("admin.campaigns.col.total"),
+      title: t("admin.campaigns.col.total"),
       align: "right",
       cell: (c) => <span className="font-mono tabular-nums text-sm">{nf.format(c.total)}</span>,
     },
     {
       key: "sent",
       header: t("admin.campaigns.col.sent"),
+      title: t("admin.campaigns.col.sent"),
       align: "right",
       cell: (c) => <span className="font-mono tabular-nums text-sm">{nf.format(c.sent)}</span>,
     },
     {
       key: "failed",
       header: t("admin.campaigns.col.failed"),
+      title: t("admin.campaigns.col.failed"),
       align: "right",
       cell: (c) => <span className="font-mono tabular-nums text-sm text-muted-foreground">{nf.format(c.failed)}</span>,
     },
@@ -298,6 +309,7 @@ export function AdminCampaigns() {
         error={error}
         columns={columns}
         getRowKey={(c) => c.id}
+        storageKey="admin-campaigns"
         onRowClick={(c) => setDetailId(c.id)}
         emptyState={t("admin.campaigns.emptyState")}
         search={{ placeholder: t("admin.campaigns.searchPlaceholder"), accessor: () => "" }}

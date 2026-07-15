@@ -73,25 +73,35 @@ export function AdminContacts() {
   }, [load]);
 
   const columns: Column<AdminContactRow>[] = [
-    { key: "phone", header: t("admin.contacts.col.phone"), cell: (r) => <span className="font-mono text-sm">{r.phone}</span> },
+    {
+      key: "phone",
+      header: t("admin.contacts.col.phone"),
+      title: t("admin.contacts.col.phone"),
+      hideable: false,
+      cell: (r) => <span className="font-mono text-sm">{r.phone}</span>,
+    },
     {
       key: "tenant",
       header: t("admin.contacts.col.tenant"),
+      title: t("admin.contacts.col.tenant"),
       cell: (r) => <span className="font-mono text-xs text-muted-foreground">#{r.tenant_id}</span>,
     },
     {
       key: "country",
       header: t("admin.contacts.col.country"),
+      title: t("admin.contacts.col.country"),
       cell: (r) => <span className="text-sm text-muted-foreground">{r.country_code || "—"}</span>,
     },
     {
       key: "status",
       header: t("admin.contacts.col.status"),
+      title: t("admin.contacts.col.status"),
       cell: (r) => <StatusBadge tone={STATUS_TONE[r.status]}>{t(STATUS_LABEL_KEY[r.status])}</StatusBadge>,
     },
     {
       key: "created_at",
       header: t("admin.contacts.col.createdAt"),
+      title: t("admin.contacts.col.createdAt"),
       cell: (r) => <span className="font-mono text-xs text-muted-foreground">{r.created_at}</span>,
     },
   ];
@@ -102,6 +112,7 @@ export function AdminContacts() {
       error={error}
       columns={columns}
       getRowKey={(r) => r.id}
+      storageKey="admin-contacts"
       emptyState={t("admin.contacts.emptyState")}
       search={{ placeholder: t("admin.contacts.searchPlaceholder"), accessor: () => "" }}
       server={{

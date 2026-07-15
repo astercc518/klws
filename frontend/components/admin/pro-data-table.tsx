@@ -184,7 +184,9 @@ export function ProDataTable<T>({
     [columns, hidden, storageKey],
   );
 
-  const colSpan = visibleColumns.length + (rowActions ? 1 : 0) + (selection ? 1 : 0);
+  // Math.max(1, ...) guards against colSpan=0 (invalid HTML) when every
+  // hideable column has been hidden via the storageKey column-visibility menu.
+  const colSpan = Math.max(1, visibleColumns.length + (rowActions ? 1 : 0) + (selection ? 1 : 0));
 
   // Current-page selection state (rows are the current page's rows).
   const pageKeys = rows.map((r) => getRowKey(r));

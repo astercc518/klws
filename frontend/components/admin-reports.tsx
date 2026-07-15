@@ -218,11 +218,14 @@ export function AdminReports() {
     {
       key: "tenant",
       header: t("admin.reports.consumption.col.tenant"),
+      title: t("admin.reports.consumption.col.tenant"),
+      hideable: false,
       cell: (row) => <span className="text-sm">{row.tenant_name || `#${row.tenant_id}`}</span>,
     },
     {
       key: "consumption",
       header: t("admin.reports.consumption.col.consumption"),
+      title: t("admin.reports.consumption.col.consumption"),
       align: "right",
       cell: (row) => <span className="font-mono tabular-nums">{usd(row.consumption)}</span>,
     },
@@ -290,6 +293,7 @@ export function AdminReports() {
           error={consumptionError}
           columns={consumptionCols}
           getRowKey={(row) => row.tenant_id}
+          storageKey="admin-reports"
           emptyState={t("admin.reports.consumption.emptyState")}
           server={{
             total,

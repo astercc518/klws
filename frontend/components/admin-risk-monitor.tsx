@@ -204,16 +204,20 @@ export function AdminRiskMonitor() {
     {
       key: "jid",
       header: t("admin.risk.monitor.table.col.jid"),
+      title: t("admin.risk.monitor.table.col.jid"),
+      hideable: false,
       cell: (r) => <span className="font-mono text-xs">{r.jid || "—"}</span>,
     },
     {
       key: "tenant",
       header: t("admin.risk.monitor.table.col.tenant"),
+      title: t("admin.risk.monitor.table.col.tenant"),
       cell: (r) => <span className="text-sm text-muted-foreground">{tenantLabel(r)}</span>,
     },
     {
       key: "ban_status",
       header: t("admin.risk.monitor.table.col.banStatus"),
+      title: t("admin.risk.monitor.table.col.banStatus"),
       cell: (r) => {
         const labelKey = BAN_STATUS_LABEL_KEY[r.ban_status];
         return (
@@ -226,11 +230,13 @@ export function AdminRiskMonitor() {
     {
       key: "health_score",
       header: t("admin.risk.monitor.table.col.healthScore"),
+      title: t("admin.risk.monitor.table.col.healthScore"),
       cell: (r) => <span className="font-mono text-xs tabular-nums">{r.health_score}</span>,
     },
     {
       key: "quarantined_until",
       header: t("admin.risk.monitor.table.col.quarantinedUntil"),
+      title: t("admin.risk.monitor.table.col.quarantinedUntil"),
       cell: (r) => (
         <span className="font-mono text-xs text-muted-foreground">{r.quarantined_until ?? "—"}</span>
       ),
@@ -238,6 +244,7 @@ export function AdminRiskMonitor() {
     {
       key: "reason",
       header: t("admin.risk.monitor.table.col.reason"),
+      title: t("admin.risk.monitor.table.col.reason"),
       cell: (r) => {
         const labelKey = REASON_LABEL_KEY[r.reason];
         return (
@@ -354,6 +361,7 @@ export function AdminRiskMonitor() {
         error={tableError}
         columns={columns}
         getRowKey={(r) => r.jid}
+        storageKey="admin-risk-monitor"
         emptyState={t("admin.risk.monitor.table.emptyState")}
         search={{ placeholder: t("admin.risk.monitor.table.searchPlaceholder"), accessor: () => "" }}
         server={{

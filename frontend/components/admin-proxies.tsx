@@ -142,6 +142,8 @@ export function AdminProxies() {
     {
       key: "url",
       header: t("admin.proxies.col.address"),
+      title: t("admin.proxies.col.address"),
+      hideable: false,
       cell: (p) => (
         <div className="flex items-center gap-2.5">
           <RowAvatar icon={Globe} accent={p.is_alive ? "emerald" : "rose"} />
@@ -152,16 +154,19 @@ export function AdminProxies() {
     {
       key: "type",
       header: t("admin.proxies.col.type"),
+      title: t("admin.proxies.col.type"),
       cell: (p) => <span className="font-mono text-xs uppercase">{p.proxy_type}</span>,
     },
     {
       key: "country",
       header: t("admin.proxies.col.country"),
+      title: t("admin.proxies.col.country"),
       cell: (p) => <span className="font-mono text-xs">{p.country_code}</span>,
     },
     {
       key: "status",
       header: t("admin.proxies.col.status"),
+      title: t("admin.proxies.col.status"),
       cell: (p) => (
         <StatusBadge tone={p.is_alive ? "positive" : "negative"}>
           {p.is_alive ? t("admin.proxies.status.online") : t("admin.proxies.status.invalid")}
@@ -171,6 +176,7 @@ export function AdminProxies() {
     {
       key: "bindings",
       header: t("admin.proxies.col.bindings"),
+      title: t("admin.proxies.col.bindings"),
       align: "right",
       cell: (p) => (
         <span className="font-mono text-sm tabular-nums">
@@ -181,6 +187,7 @@ export function AdminProxies() {
     {
       key: "failures",
       header: t("admin.proxies.col.failures"),
+      title: t("admin.proxies.col.failures"),
       align: "right",
       cell: (p) => (
         <span className="font-mono text-sm tabular-nums text-muted-foreground">
@@ -229,6 +236,7 @@ export function AdminProxies() {
         error={error}
         columns={columns}
         getRowKey={(p) => p.id}
+        storageKey="admin-proxies"
         emptyState={t("admin.proxies.emptyState")}
         server={{
           total,

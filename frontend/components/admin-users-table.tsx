@@ -286,15 +286,23 @@ export function AdminUsersTable() {
   const salesUsers = users.filter((u) => u.role === "sales");
 
   const columns: Column<User>[] = [
-    { key: "account", header: t("admin.users.accountLabel"), cell: (u) => <span className="font-mono text-sm">{u.email}</span> },
+    {
+      key: "account",
+      header: t("admin.users.accountLabel"),
+      title: t("admin.users.accountLabel"),
+      hideable: false,
+      cell: (u) => <span className="font-mono text-sm">{u.email}</span>,
+    },
     {
       key: "role",
       header: t("admin.users.roleLabel"),
+      title: t("admin.users.roleLabel"),
       cell: (u) => <Badge variant={roleVariant[u.role]}>{u.role}</Badge>,
     },
     {
       key: "scale",
       header: t("admin.users.col.affiliationScale"),
+      title: t("admin.users.col.affiliationScale"),
       cell: (u) => {
         const tenant = u.tenant_id != null ? tenantMap.get(u.tenant_id) : undefined;
         const commission = commissionMap.get(u.id);
@@ -317,6 +325,7 @@ export function AdminUsersTable() {
     {
       key: "balance",
       header: t("admin.users.col.balanceCommission"),
+      title: t("admin.users.col.balanceCommission"),
       cell: (u) => {
         const tenant = u.tenant_id != null ? tenantMap.get(u.tenant_id) : undefined;
         const commission = commissionMap.get(u.id);
@@ -334,6 +343,7 @@ export function AdminUsersTable() {
     {
       key: "status",
       header: t("admin.users.col.status"),
+      title: t("admin.users.col.status"),
       cell: (u) => {
         const tenant = u.tenant_id != null ? tenantMap.get(u.tenant_id) : undefined;
         return (
@@ -495,6 +505,7 @@ export function AdminUsersTable() {
         columns={columns}
         getRowKey={(u) => u.id}
         pageSize={50}
+        storageKey="admin-users-table"
         rowActions={renderRowActions}
         selection={{
           selected: sel,
