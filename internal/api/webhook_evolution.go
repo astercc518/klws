@@ -10,6 +10,7 @@ import (
 	"github.com/gin-gonic/gin"
 
 	"github.com/acme/wadist/internal/receipt"
+	"github.com/acme/wadist/internal/warmup"
 )
 
 // receiptSink records delivery/read milestones (satisfied by *receipt.Recorder).
@@ -43,6 +44,12 @@ type qrSink interface {
 	Set(instance, base64 string)
 }
 
+// warmupEnroller folds a freshly-connected account into the warmup pool.
+// Optional: nil skips the warmup path (dev/tests without warmup wiring).
+type warmupEnroller interface {
+	Enroll(ctx context.Context, jid string, tenantID int64, lane warmup.Lane) error
+}
+
 // EvolutionWebhook receives Evolution API callbacks: authenticates via the
 // Authorization header Evolution echoes back (configured as webhook.headers.
 // authorization at instance-create time — Evolution v2 does NOT sign payloads),
@@ -54,10 +61,24 @@ type EvolutionWebhook struct {
 	inst   instanceStore
 	health healthSink
 	qr     qrSink
+	warmup warmupEnroller
 }
 
 func NewEvolutionWebhook(secret string, rec receiptSink, inst instanceStore, health healthSink, qr qrSink) *EvolutionWebhook {
 	return &EvolutionWebhook{secret: secret, rec: rec, inst: inst, health: health, qr: qr}
+}
+
+// WithWarmup wires the warmup enroller (called post-EnrollDeviceForInstance on
+// connection.update). Separate from the constructor to keep NewEvolutionWebhook's
+// signature stable for existing callers/tests. Takes the CONCRETE *warmup.Service
+// (not the warmupEnroller interface) and nil-guards: assigning a nil
+// *warmup.Service to an interface field would yield a non-nil interface holding
+// a nil pointer, making h.warmup != nil true and panicking on Enroll.
+func (h *EvolutionWebhook) WithWarmup(w *warmup.Service) *EvolutionWebhook {
+	if w != nil {
+		h.warmup = w
+	}
+	return h
 }
 
 func (h *EvolutionWebhook) Register(r gin.IRouter) {
@@ -85,6 +106,13 @@ func (h *EvolutionWebhook) handle(c *gin.Context) {
 			// here just leaves the account unsendable until the next
 			// connection.update retries it, it does not corrupt routing state.
 			_ = h.inst.EnrollDeviceForInstance(ctx, w.Instance, jid)
+			// 折进养号池(best-effort,和 device 入池同理由:失败不阻塞 200,
+			// 下次 connection.update 重试)。lane 默认 STANDARD;租户从路由行解析,
+			// 解析不到用 0(仅影响展示列,不影响养号逻辑)。
+			if h.warmup != nil {
+				tenantID := h.tenantForInstance(ctx, w.Instance)
+				_ = h.warmup.Enroll(ctx, jid, tenantID, warmup.LaneStandard)
+			}
 		}
 		if w.Data.State != "" {
 			_ = h.inst.SetInstanceState(ctx, w.Instance, w.Data.State)
@@ -119,6 +147,13 @@ func (h *EvolutionWebhook) handle(c *gin.Context) {
 		}
 	}
 	c.Status(http.StatusOK)
+}
+
+// tenantForInstance best-effort 解析实例所属租户;取不到返回 0。instanceStore
+// 当前不暴露 tenant 解析;保留 0,展示列由 admin 列表 join account_instances 时
+// 补全。避免为此扩接口。
+func (h *EvolutionWebhook) tenantForInstance(ctx context.Context, instance string) int64 {
+	return 0
 }
 
 // isDownState reports whether a connection.update state means the socket dropped

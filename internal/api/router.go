@@ -23,6 +23,7 @@ import (
 	"github.com/acme/wadist/internal/pricing"
 	"github.com/acme/wadist/internal/receipt"
 	"github.com/acme/wadist/internal/store"
+	"github.com/acme/wadist/internal/warmup"
 )
 
 // Deps bundles the shared, red-line-safe dependencies the API handlers need.
@@ -75,6 +76,11 @@ type Deps struct {
 	// Server{deps: Deps{...}} without setting this still compile and run,
 	// just without a live QR cache.
 	QRCache *qrCache
+
+	// Warmup is the account warmup service (webhook auto-enroll on
+	// connection.update + admin API). nil is safe — WithWarmup no-ops on a nil
+	// *warmup.Service, so tests/deploys that haven't wired warmup yet still work.
+	Warmup *warmup.Service
 }
 
 // Server holds the injected deps plus a readiness flag (mirrors console.Server
@@ -130,7 +136,9 @@ func (s *Server) Router() *gin.Engine {
 
 	// Evolution 数据面回调（HMAC 鉴权，非用户鉴权）。E0 log-only。
 	// health sink (sendgate) deferred: E6-followup wires console sendgate
-	NewEvolutionWebhook(s.deps.EvolutionWebhookSecret, s.deps.Receipt, s.deps.Mgr, nil, s.deps.QRCache).Register(v1)
+	NewEvolutionWebhook(s.deps.EvolutionWebhookSecret, s.deps.Receipt, s.deps.Mgr, nil, s.deps.QRCache).
+		WithWarmup(s.deps.Warmup). // nil 安全
+		Register(v1)
 
 	// --- Auth controller ---
 	// login is public; logout/me require a valid token.
