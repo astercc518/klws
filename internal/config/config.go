@@ -237,6 +237,11 @@ func Load() (*Config, error) {
 		}
 	}
 	cfg.MetricsRetentionDays = intEnv("WADIST_METRICS_RETENTION_DAYS", 90)
+	if cfg.MetricsRetentionDays < 1 {
+		// A 0/negative value would push Prune's olderThan cutoff into the
+		// future, deleting every metric_snapshots row on the very next tick.
+		cfg.MetricsRetentionDays = 90
+	}
 
 	mk, err := decodeKey32("WADIST_MASTER_KEY")
 	if err != nil {

@@ -236,6 +236,57 @@ func TestSnapshotTrendBucketUsesShanghaiTZ(t *testing.T) {
 	}
 }
 
+func TestSnapshotTrendSkipsAllNullBucket(t *testing.T) {
+	if testing.Short() {
+		t.Skip("integration")
+	}
+	pool, ctx := pgPool(t)
+	applyMigrations(t, ctx, pool)
+
+	store := NewStore(pool)
+
+	// Day 1: both samples fall in a silent sampling window -> avg_delivery_ms
+	// NULL for every row, so avg(avg_delivery_ms) over the whole bucket is
+	// SQL NULL. Day 2: samples carry a real avg_delivery_ms.
+	day1a := time.Date(2026, 7, 10, 1, 0, 0, 0, time.UTC)
+	day1b := time.Date(2026, 7, 10, 9, 0, 0, 0, time.UTC)
+	day2a := time.Date(2026, 7, 11, 1, 0, 0, 0, time.UTC)
+	day2b := time.Date(2026, 7, 11, 9, 0, 0, 0, time.UTC)
+
+	if err := store.Insert(ctx, Snapshot{CapturedAt: day1a, AccountsTotal: 1, AvgDeliveryMs: nil}); err != nil {
+		t.Fatalf("seed day1a: %v", err)
+	}
+	if err := store.Insert(ctx, Snapshot{CapturedAt: day1b, AccountsTotal: 1, AvgDeliveryMs: nil}); err != nil {
+		t.Fatalf("seed day1b: %v", err)
+	}
+	if err := store.Insert(ctx, Snapshot{CapturedAt: day2a, AccountsTotal: 1, AvgDeliveryMs: intPtr(1000)}); err != nil {
+		t.Fatalf("seed day2a: %v", err)
+	}
+	if err := store.Insert(ctx, Snapshot{CapturedAt: day2b, AccountsTotal: 1, AvgDeliveryMs: intPtr(2000)}); err != nil {
+		t.Fatalf("seed day2b: %v", err)
+	}
+
+	from := time.Date(2026, 7, 9, 0, 0, 0, 0, time.UTC)
+	to := time.Date(2026, 7, 12, 0, 0, 0, 0, time.UTC)
+
+	// Must not error (no "cannot scan NULL into *float64") and must skip the
+	// all-NULL day-1 bucket entirely rather than emitting a zeroed point.
+	points, err := store.Trend(ctx, "avg_delivery_ms", "day", from, to)
+	if err != nil {
+		t.Fatalf("Trend: %v", err)
+	}
+	if len(points) != 1 {
+		t.Fatalf("expected 1 bucket (day1 NULL bucket skipped), got %d: %+v", len(points), points)
+	}
+	if points[0].Value != 1500 {
+		t.Fatalf("day2 avg: expected 1500, got %v", points[0].Value)
+	}
+	wantDay := time.Date(2026, 7, 11, 0, 0, 0, 0, time.UTC)
+	if !points[0].Bucket.Equal(wantDay) {
+		t.Fatalf("bucket: expected day2 (%v), got %v", wantDay, points[0].Bucket)
+	}
+}
+
 func TestSnapshotTrendRejectsUnknownMetric(t *testing.T) {
 	if testing.Short() {
 		t.Skip("integration")

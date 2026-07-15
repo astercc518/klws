@@ -141,7 +141,7 @@ func (s *Store) Trend(ctx context.Context, metric, bucket string, from, to time.
 	query := fmt.Sprintf(`
 SELECT date_trunc($1, captured_at AT TIME ZONE 'Asia/Shanghai') AS b, avg(%s)::float8 AS v
 FROM metric_snapshots
-WHERE captured_at BETWEEN $2 AND $3
+WHERE captured_at >= $2 AND captured_at < $3
 GROUP BY b
 ORDER BY b`, col)
 
@@ -153,11 +153,18 @@ ORDER BY b`, col)
 
 	var points []TrendPoint
 	for rows.Next() {
-		var p TrendPoint
-		if err := rows.Scan(&p.Bucket, &p.Value); err != nil {
+		var b time.Time
+		var v *float64 // avg() over an all-NULL bucket (e.g. avg_delivery_ms
+		// during a silent sampling window) returns SQL NULL, not 0 — scanning
+		// straight into a non-pointer float64 panics/errors. Skip buckets with
+		// no value instead of producing a point for them.
+		if err := rows.Scan(&b, &v); err != nil {
 			return nil, fmt.Errorf("metrics: trend scan: %w", err)
 		}
-		points = append(points, p)
+		if v == nil {
+			continue
+		}
+		points = append(points, TrendPoint{Bucket: b, Value: *v})
 	}
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("metrics: trend rows: %w", err)
