@@ -32,6 +32,7 @@ import (
 	"github.com/acme/wadist/internal/riskbreaker"
 	"github.com/acme/wadist/internal/sendgate"
 	"github.com/acme/wadist/internal/store"
+	"github.com/acme/wadist/internal/warmup"
 )
 
 // takeoverConcurrency is the asynq worker concurrency for the (low-throughput)
@@ -51,6 +52,48 @@ type evoSendFn func(ctx context.Context, instance, phone, body string) (string, 
 
 func (f evoSendFn) SendText(ctx context.Context, instance, phone, body string) (string, error) {
 	return f(ctx, instance, phone, body)
+}
+
+// warmupSender bridges *cluster.EvoCluster to warmup.Sender's error-only,
+// composing-bool signature (see internal/warmup/pair.go's doc comment on
+// Sender). It routes instance -> node -> per-node EvoClient exactly like
+// evoSendAdapter above, just for the warmup pool-pairing path instead of the
+// business send chain.
+type warmupSender struct {
+	cl  *cluster.EvoCluster
+	mgr *store.Manager
+}
+
+func (w warmupSender) route(ctx context.Context, instance string) (*cluster.EvoClient, error) {
+	node, ok, err := w.mgr.NodeForInstance(ctx, instance)
+	if err != nil {
+		return nil, err
+	}
+	if !ok {
+		return nil, fmt.Errorf("warmup: no node for instance %s", instance)
+	}
+	cl, ok := w.cl.For(node)
+	if !ok {
+		return nil, fmt.Errorf("warmup: no client for node %s", node)
+	}
+	return cl, nil
+}
+
+func (w warmupSender) SendText(ctx context.Context, instance, to, text string) error {
+	cl, err := w.route(ctx, instance)
+	if err != nil {
+		return err
+	}
+	_, err = cl.SendText(ctx, instance, to, text)
+	return err
+}
+
+func (w warmupSender) SendTyping(ctx context.Context, instance, to string, composing bool) error {
+	cl, err := w.route(ctx, instance)
+	if err != nil {
+		return err
+	}
+	return cl.SendTyping(ctx, instance, to, composing)
 }
 
 // priceFor returns a basic per-country price in minor units.
@@ -531,6 +574,23 @@ func run(ctx context.Context, cfg *config.Config) (*metrics.Server, func(), erro
 		return sampler.RunLoop(lctx)
 	})
 	log.Printf("metrics sampler on (interval=%s retentionDays=%d)", cfg.MetricsSampleInterval, cfg.MetricsRetentionDays)
+
+	// Warmup engine (P5b): periodic promote-scan + pool pairing tick.
+	// SystemPool (BYPASSRLS) — warmup_profiles/warmup_policies/warmup_scripts
+	// REVOKE app_tenant (see migrations/0024_warmup.sql), same reasoning as
+	// the metrics sampler above. Routes through evoCluster via NodeForInstance
+	// exactly like evoSendAdapter. cfg.WarmupGate itself is not consumed here —
+	// it only gates the business-send MATURE check added in Task 16; this tick
+	// runs unconditionally so pool accounts keep warming regardless.
+	warmupStore := warmup.NewStore(mgr.SystemPool())
+	warmupSvc := warmup.NewService(warmupStore, func() time.Time { return time.Now() }).
+		WithSender(warmupSender{cl: evoCluster, mgr: mgr}).
+		WithAccounts(warmup.NewDBLookup(warmupStore))
+	warmupRng := rand.New(rand.NewSource(time.Now().UnixNano()))
+	sup.Go(func(lctx context.Context) error {
+		return warmupSvc.RunLoop(lctx, cfg.WarmupInterval, warmupRng)
+	})
+	log.Printf("warmup engine on (interval=%s gate=%v)", cfg.WarmupInterval, cfg.WarmupGate)
 
 	sup.Go(func(lctx context.Context) error {
 		return orch.RunHeartbeat(lctx, cfg.HeartbeatInterval)

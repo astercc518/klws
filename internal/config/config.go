@@ -111,6 +111,11 @@ type Config struct {
 	// Metrics sampler (P3): periodic DB-aggregate → metric_snapshots.
 	MetricsSampleInterval time.Duration // WADIST_METRICS_SAMPLE_INTERVAL default 15m
 	MetricsRetentionDays  int           // WADIST_METRICS_RETENTION_DAYS default 90
+	// Warmup engine (P5b/c): periodic promote-scan + pool pairing tick.
+	WarmupInterval time.Duration // WADIST_WARMUP_INTERVAL_MS default 300000ms (5m); <=0 disables the loop
+	// WarmupGate toggles the P5c MATURE-only business-send gate (Task 16); the
+	// tick wired here (Task 15) runs unconditionally regardless of this flag.
+	WarmupGate bool // WADIST_WARMUP_GATE default "off"; "on"/"true" enables
 }
 
 // Load reads configuration from the environment. PostgresDSN is required;
@@ -242,6 +247,10 @@ func Load() (*Config, error) {
 		// future, deleting every metric_snapshots row on the very next tick.
 		cfg.MetricsRetentionDays = 90
 	}
+
+	cfg.WarmupInterval = msEnv("WADIST_WARMUP_INTERVAL_MS", 300000)
+	gate := getenv("WADIST_WARMUP_GATE", "off")
+	cfg.WarmupGate = gate == "on" || gate == "true"
 
 	mk, err := decodeKey32("WADIST_MASTER_KEY")
 	if err != nil {
