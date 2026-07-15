@@ -85,6 +85,9 @@ func (s *Service) PairAndWarm(ctx context.Context, batch int, rng *rand.Rand, sl
 
 	pairs, messages := 0, 0
 	for i := 0; i+1 < len(pool); i += 2 {
+		if ctx.Err() != nil {
+			return pairs, messages, nil // 被取消(shutdown/SIGTERM):返回已完成的部分,不报错
+		}
 		a, b := pool[i], pool[i+1]
 		scripts, err := s.store.LoadScripts(ctx, a.acc.Lang)
 		if err != nil || len(scripts) == 0 {
@@ -95,6 +98,9 @@ func (s *Service) PairAndWarm(ctx context.Context, batch int, rng *rand.Rand, sl
 			continue
 		}
 		for _, turn := range sc.Turns {
+			if ctx.Err() != nil {
+				return pairs, messages, nil // 轮次内也检查:别在死 ctx 上继续发送
+			}
 			var fromAcc, toAcc Account
 			if turn.From == "A" {
 				fromAcc, toAcc = a.acc, b.acc
@@ -109,21 +115,17 @@ func (s *Service) PairAndWarm(ctx context.Context, batch int, rng *rand.Rand, sl
 			}
 			messages++
 		}
-		s.bumpSent(ctx, a.p, today, now)
-		s.bumpSent(ctx, b.p, today, now)
+		s.bumpSent(ctx, a.p.AccountJID, today)
+		s.bumpSent(ctx, b.p.AccountJID, today)
 		pairs++
 	}
 	return pairs, messages, nil
 }
 
-// bumpSent 累加养号发送计数(warmup_messages_sent + 当日 warmup_sent_today)。
-func (s *Service) bumpSent(ctx context.Context, p Profile, today, now time.Time) {
-	if p.WarmupSentDate == nil || !p.WarmupSentDate.Equal(today) {
-		p.WarmupSentToday = 0
-	}
-	p.WarmupMessagesSent++
-	p.WarmupSentToday++
-	d := today
-	p.WarmupSentDate = &d
-	_ = s.store.Save(ctx, p, now)
+// bumpSent 原子累加养号发送计数(warmup_messages_sent + 当日
+// warmup_sent_today,跨日自动清零)。走 Store.BumpWarmupSent —— 仅动这两三
+// 列的条件 UPDATE,不再靠内存里的 Profile 快照整行 Save,避免踩掉同一账号
+// 上并发发生的 RecordReply/SetPaused 等其它列写入。
+func (s *Service) bumpSent(ctx context.Context, jid string, today time.Time) {
+	_ = s.store.BumpWarmupSent(ctx, jid, today)
 }

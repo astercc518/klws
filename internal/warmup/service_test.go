@@ -71,3 +71,26 @@ func TestServiceDemoteMissingIsNoop(t *testing.T) {
 		t.Fatalf("demote on missing profile must be no-op, got %v", err)
 	}
 }
+
+// TestServiceSetLaneInvalid pins Fix #3: SetLane must reject anything other
+// than FAST/STANDARD before writing, so the action=lane admin API can't
+// strand an account in a lane PolicyFor will never find (which would wedge
+// EvaluateAndPromote/PairAndWarm on that account forever with ErrNotFound).
+func TestServiceSetLaneInvalid(t *testing.T) {
+	pool, ctx := pgPool(t)
+	st := NewStore(pool)
+	now := time.Now().UTC()
+	jid := "badlane@s.whatsapp.net"
+	if err := st.EnrollIfAbsent(ctx, jid, 1, LaneStandard, now); err != nil {
+		t.Fatalf("enroll: %v", err)
+	}
+	svc := NewService(st, fixedClock(now))
+
+	if err := svc.SetLane(ctx, jid, Lane("BOGUS")); err == nil {
+		t.Fatalf("want error for invalid lane, got nil")
+	}
+	p, _ := st.Get(ctx, jid)
+	if p.Lane != LaneStandard {
+		t.Fatalf("lane must be unchanged after rejected SetLane, got %s", p.Lane)
+	}
+}

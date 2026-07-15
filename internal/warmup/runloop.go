@@ -43,12 +43,21 @@ func (s *Service) RunLoop(ctx context.Context, interval time.Duration, rng *rand
 	}
 	t := time.NewTicker(interval)
 	defer t.Stop()
+	// sleeper 是 ctx-aware 的抖动等待:cancel 时立即返回而不是傻等 time.Sleep
+	// 的全量 duration,这样 SIGTERM 能让一个正在进行的 tick(PairAndWarm 内部
+	// 逐句间的 jitter 等待)尽快退出,而不是拖到本轮抖动全部睡完。
+	sleeper := func(d time.Duration) {
+		select {
+		case <-time.After(d):
+		case <-ctx.Done():
+		}
+	}
 	for {
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
 		case <-t.C:
-			if err := s.TickOnce(ctx, rng, time.Sleep); err != nil {
+			if err := s.TickOnce(ctx, rng, sleeper); err != nil {
 				log.Printf("warmup tick: %v", err)
 			}
 		}
