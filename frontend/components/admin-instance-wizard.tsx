@@ -99,6 +99,12 @@ export function AdminInstanceWizard({
   // branch fire exactly once even if two overlapping ticks both see "open".
   const inFlightRef = useRef(false);
   const succeededRef = useRef(false);
+  // Tracks the current QR image for the poll interval's closure. The QR arrives
+  // asynchronously via Evolution's qrcode.updated webhook (the backend caches it
+  // and GET /qr reads the cache), so the first GET /qr right after create is
+  // almost always empty — the poll keeps re-fetching /qr until the cached QR
+  // shows up, instead of failing on that first empty read.
+  const qrImageRef = useRef<string | null>(null);
 
   const clearTimers = useCallback(() => {
     if (pollRef.current) {
@@ -124,6 +130,7 @@ export function AdminInstanceWizard({
     clearTimers();
     succeededRef.current = false;
     inFlightRef.current = false;
+    qrImageRef.current = null;
     setStep("form");
     setTenantId("");
     setCountryCode("US");
@@ -174,6 +181,10 @@ export function AdminInstanceWizard({
     [clearTimers, onOpenChange, onSuccess, resetState, t],
   );
 
+  // Kick off the QR fetch. The QR arrives via webhook so the first read is
+  // usually empty — that is NOT an error here; startPolling keeps re-fetching
+  // /qr until the cached QR appears (or POLL_TIMEOUT_MS elapses). Only a hard
+  // HTTP failure (e.g. the instance row is gone) surfaces immediately.
   const fetchQr = useCallback(
     async (name: string) => {
       setQrLoading(true);
@@ -182,30 +193,18 @@ export function AdminInstanceWizard({
         const r = await api.get<{ base64: string }>(`/admin/instances/${name}/qr`);
         const uri = toDataUri(r.base64);
         if (uri) {
+          qrImageRef.current = uri;
           setQrImage(uri);
-        } else {
-          // Empty base64: Evolution returns "" from ConnectInstance when the
-          // instance is already connected. Don't render a broken <img> —
-          // probe state once; if paired, jump straight to the success state.
-          setQrImage(null);
-          try {
-            const s = await api.get<{ state: string }>(`/admin/instances/${name}/state`);
-            if (CONNECTED_STATES.has(s.state)) {
-              markConnected(name);
-            } else {
-              setQrError(t("admin.instances.wizard.qrFailed"));
-            }
-          } catch {
-            setQrError(t("admin.instances.wizard.qrFailed"));
-          }
         }
+        // Empty base64 → the webhook hasn't delivered the QR yet. Leave qrImage
+        // null (render shows a "waiting for QR" state) and let the poll retry.
       } catch (e) {
         setQrError(e instanceof ApiError ? e.message : t("admin.instances.wizard.qrFailed"));
       } finally {
         setQrLoading(false);
       }
     },
-    [markConnected, t],
+    [t],
   );
 
   const startPolling = useCallback(
@@ -215,11 +214,24 @@ export function AdminInstanceWizard({
       inFlightRef.current = false;
       setTimedOut(false);
       pollRef.current = setInterval(async () => {
-        // In-flight guard: if the previous GET /state is slower than the
-        // interval, skip this tick rather than stacking overlapping requests.
+        // In-flight guard: if the previous tick's requests are slower than the
+        // interval, skip this one rather than stacking overlapping requests.
         if (inFlightRef.current || succeededRef.current) return;
         inFlightRef.current = true;
         try {
+          // Still waiting on the QR? Re-fetch /qr — the backend re-triggers
+          // Evolution's connect (which keeps pushing qrcode.updated webhooks)
+          // and returns the freshest cached QR. Clears any stale error once it
+          // lands so the "waiting" state flips to the image.
+          if (!qrImageRef.current) {
+            const q = await api.get<{ base64: string }>(`/admin/instances/${name}/qr`);
+            const uri = toDataUri(q.base64);
+            if (uri) {
+              qrImageRef.current = uri;
+              setQrImage(uri);
+              setQrError(null);
+            }
+          }
           const r = await api.get<{ state: string }>(`/admin/instances/${name}/state`);
           if (CONNECTED_STATES.has(r.state)) {
             markConnected(name);
@@ -234,9 +246,13 @@ export function AdminInstanceWizard({
       giveUpRef.current = setTimeout(() => {
         clearTimers();
         setTimedOut(true);
+        // Timed out with no QR ever shown and no pairing — surface the failure.
+        if (!qrImageRef.current && !succeededRef.current) {
+          setQrError(t("admin.instances.wizard.qrFailed"));
+        }
       }, POLL_TIMEOUT_MS);
     },
-    [clearTimers, markConnected],
+    [clearTimers, markConnected, t],
   );
 
   async function handleCreate() {
@@ -350,9 +366,16 @@ export function AdminInstanceWizard({
                   <CheckCircle2 className="size-10 text-emerald-500" />
                   <p className="text-sm font-medium">{t("admin.instances.wizard.connectedTitle")}</p>
                 </div>
-              ) : qrLoading && !qrImage ? (
-                <div className="flex h-56 w-56 items-center justify-center rounded-xl border bg-muted/40">
+              ) : !qrImage && !qrError && !timedOut ? (
+                // Waiting for the QR: either the initial fetch is in flight, or
+                // it returned empty and the poll is re-fetching /qr until the
+                // webhook delivers the QR into the backend cache. Show a spinner
+                // (not a broken image, not an error) the whole time.
+                <div className="flex h-56 w-56 flex-col items-center justify-center gap-2 rounded-xl border bg-muted/40">
                   <Loader2 className="size-6 animate-spin text-muted-foreground" />
+                  <span className="text-[11px] text-muted-foreground">
+                    {t("admin.instances.wizard.qrWaiting")}
+                  </span>
                 </div>
               ) : qrError ? (
                 <div className="flex h-56 w-56 flex-col items-center justify-center gap-2 rounded-xl border border-destructive/40 bg-destructive/5 p-4 text-center text-sm text-destructive">
